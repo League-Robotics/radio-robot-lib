@@ -167,27 +167,38 @@ Nothing about the law. Specifically:
 3. **The standalone-build check comes with them** — compile with an include
    path of exactly the package directory.
 
-### 5.1 The dual-maintenance hazard, stated plainly
+### 5.1 This copy is authoritative
 
-`radio-robot-elite` still contains its own copy at `src/firm/control/` **and**
-the extracted package at `src/firm/diffdrive/`. Until a consumer actually cuts
-over, a fix has to land in every live copy or they silently diverge. This repo
-adds a third.
+**Decision (stakeholder, 2026-08-20): `radio-robot-lib` is the authoritative
+source for the control law.** The prior locations are deprecated.
 
-The fidelity suite is what keeps them honest, and it only works if it is
-actually run. This is the single largest maintenance risk the repo takes on,
-and it should be closed by making one copy authoritative as soon as an
-environment consumes this library — not left to discipline.
+`radio-robot-elite` currently holds two copies — the original at
+`src/firm/control/differential_drive.{h,cpp}` and the extracted package at
+`src/firm/diffdrive/`. Both are now downstream of this repo, and both are
+slated for removal once a consumer cuts over.
+
+What that settles, and what it does not:
+
+- **Fixes land here first.** A change made in elite and not here is a
+  regression waiting to be re-applied, not a fix.
+- **The divergence window is still real until elite actually cuts over.** Three
+  copies exist today and the fidelity gate is what keeps them honest — but only
+  when it is run. Shortening that window is worth doing early; it is not this
+  library's blocker, but it is elite's.
+- **Provenance stays documented, not assumed.** The gate holds this code
+  duty-for-duty against `golden_ref_drive`, which is the only reason we can
+  claim this is the same law that drives the robot rather than a plausible
+  descendant of it.
 
 ---
 
-## 6. Open question for review
+## 6. Configuration
 
-**Which copy becomes authoritative, and when?** The options are to treat
-radio-robot-lib as the source of truth immediately (elite consumes it as a
-subtree/submodule and deletes its copies), or to keep elite authoritative until
-a MicroPython or JavaScript environment ships against this library. The first
-closes the divergence risk now and costs a change to elite's build; the second
-defers both.
+`DifferentialDrive::Config` plus the fluent setters **are** this library's
+configuration, and they are all of it — gains, limits, latch thresholds, cycle
+period. There is no config store, no field table, and no wire schema here; per
+the 2026-08-20 decision, configuration storage is out of scope for both
+libraries in this repo. See [protocol.md](protocol.md) §6.
 
-Nothing else in this document is uncertain — the code exists and is gated.
+Note what is *not* in `Config`: any millimetre, any track width, any wheel
+radius. Geometry belongs to the caller (§1.1).

@@ -37,10 +37,22 @@ docs/
 checked against the thing it descends from without a second checkout. **Nothing
 in `src/archive/` is compiled or imported by the library.**
 
+## Decisions
+
+| | |
+|---|---|
+| **Language** | C++ for both libraries, exercised from Python through a `ctypes` shim |
+| **Test structure** | two **independent** harnesses — protocol, and diffdrive — before anything is linked |
+| **Configuration** | no storage in either library; each carries only its own configuration type. A config system may come later, separately |
+| **Control law** | this repo is authoritative; `radio-robot-elite`'s two copies are deprecated |
+
 ## Status
 
-Greenfield. `src/archive/` and `docs/` are populated; no library code is
-written yet. The design documents are up for review before implementation
-starts — see [docs/plan.md](docs/plan.md) for the sequence and
-[docs/design/protocol.md](docs/design/protocol.md) §7 for the open questions
-that need answering first.
+Greenfield. `src/archive/` and `docs/` are populated; **no library code is
+written yet.** [docs/plan.md](docs/plan.md) has the four-step sequence.
+
+One design question is still open —
+[docs/design/protocol.md](docs/design/protocol.md) §8, whether `WHEELS` emits
+`done:` on lease expiry. It decides whether the handler is a pure function of
+its input bytes or a thing with a clock and pending state, so it is worth
+settling before step 3. It does not block steps 1 or 2.

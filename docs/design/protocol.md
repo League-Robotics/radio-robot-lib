@@ -247,58 +247,109 @@ is exactly what a first test wants.
 
 ---
 
-## 6. Testing
+## 6. Configuration — the library stores none
 
-**The golden-vector fixture is the primary gate**, per spec §11.3: ASCII line
-vectors, command in → expected line out and the reverse, asserted byte-for-byte
-by every implementation. It is the only thing that will keep a C++ handler and
-a MicroPython or JavaScript one from quietly drifting apart, and it is what
-makes a second implementation verifiable at all.
+**Decision (stakeholder, 2026-08-20): neither the handler nor the kernel
+implements configuration storage.** A configuration system may come later, as
+its own thing; it is not core work and it is not in this library.
 
-Three layers, cheapest first:
+What that means concretely:
 
-1. **Handler unit tests, no machine.** A mock adapter that records calls, and a
-   `Sink` that records bytes. Covers arity, unknown verbs, the split-block and
-   over-long-line cases from §2.1, and the lowercase-is-not-a-command rule.
-2. **Adapter tests against a fake motor.** DiffDrive with a simple simulated
-   `Motor`/`Clock`/`Sleeper`, driven by `step()` rather than a fiber, so it is
-   deterministic. Covers the mm→counts conversion, the twist sign, and lease
-   expiry actually stopping the wheels.
-3. **End-to-end through bytes.** Feed `WHEELS:100:100:1000:5` in as a byte
-   block; assert `ok:5` comes out, encoder counts climb in the telemetry, and
-   the wheels stop when the lease expires.
-
-Layer 3 is the acceptance the whole repo is for.
+- **The 80-row v6 config table does not come across.** It stays in
+  `src/archive/protocol-v6/` as reference. Carrying rows for subsystems this
+  library does not contain is exactly the orphan-field problem the project's
+  configuration-discipline rule says to delete rather than wire.
+- **`GET`/`SET` are pure delegation.** The handler parses the line, decodes the
+  value, calls `onGet`/`onSet`, and formats the reply. It holds no field table,
+  no bounds, no storage. Which names are valid is entirely the adapter's
+  business, and an unknown name is just `err:<id>:1` coming back from the
+  adapter.
+- **Each library carries only the configuration it needs, as its own type.**
+  DiffDrive already has this: `DifferentialDrive::Config` plus the fluent
+  setters, holding gains, limits, and the cycle period. The handler's own
+  configuration is nearly nothing — the line-buffer ceiling and the default
+  telemetry mode.
+- **The robot's geometry is not in either library.** `countsPerLength` (§4)
+  belongs to the adapter, because it is a property of a particular robot and
+  neither a wheel control law nor a line parser is.
 
 ---
 
-## 7. Open questions — these need answering before implementation
+## 7. Testing — two independent C++ libraries, driven from Python by ctypes
 
-1. **What language is the library written in?** The deployment targets are
-   MicroPython and JavaScript, but DiffDrive is C++ and MakeCode/PXT compiles
-   C++ underneath its JavaScript. **My recommendation: C++ is the reference
-   implementation for both the kernel and the handler**, since both targets can
-   bind C++ (MicroPython via a C module, PXT via C++ shims), with a small pure
-   Python implementation of the handler for host-side testing and the golden
-   vectors binding them. The alternative — writing the handler natively per
-   language from the spec — is what §11.1 says is only ~150 lines each, and
-   would avoid a binding layer entirely. This choice changes the repo's whole
-   build story, so it should be settled first.
+**Decision (stakeholder, 2026-08-20).** Each library compiles to C++ and is
+exercised from Python through a `ctypes` shim. The two are tested
+**independently** — there is no combined harness in the first structure:
 
-2. **Does the adapter own config storage, or does the library?** The v6 field
-   table exists already (`src/archive/protocol-v6/wire_v6_config_fields.h`, 80
-   rows with pre-resolved bounds). Either the library ships a config store keyed
-   by that table, or the adapter implements `onGet`/`onSet` against its own.
-   The former is more code here but makes `GET`/`SET` work identically in every
-   environment; the latter keeps the library smaller.
+| harness | loads | exercises |
+|---|---|---|
+| **protocol** | the handler + a mock adapter | parsing, dispatch, reply formatting — no kernel, no motors |
+| **diffdrive** | the kernel + fake ports | the control law, wired up and stepped — no protocol, no wire |
 
-3. **How much of the 80-row config table does this library need?** Testing
-   DiffDrive needs the `wheel_control.*` block and little else. Carrying all 80
-   rows means carrying fields for subsystems this library does not contain —
-   which is exactly the orphan-field problem the configuration-discipline rule
-   says to delete rather than wire.
+Independence is the point. A parsing bug and a control-law bug should never be
+able to present as each other, and neither harness should be able to fail
+because of the other's code.
 
-4. **Is `done:` in scope?** `WHEELS` has a duration, not a stop condition, so
-   "finished" is lease expiry. Whether that emits `done:<id>:timeout` or nothing
-   is a real semantic choice, and the spec's `done` is written with `MOVE` in
-   mind.
+### 7.1 Each harness needs a small `extern "C"` shim
+
+`ctypes` cannot call C++ methods, so each library gets a thin C surface —
+create, call, destroy, and enough accessors for a test to observe results. The
+shim is test scaffolding, not library API: it lives beside the tests, and
+nothing in the library knows it exists.
+
+For the protocol harness that means roughly: construct a handler over a
+recording sink and a mock adapter; `feed()` a byte block; read back what the
+sink captured and which adapter methods fired with which arguments.
+
+For the diffdrive harness: construct a kernel over fake `Motor`/`Clock`/
+`Sleeper`; `drive()`; `step()`; read the `Output` snapshot out field by field.
+
+### 7.2 The golden-vector fixture still binds implementations
+
+Spec §11.3's ASCII line vectors — command in → expected line out, and the
+reverse — remain the primary conformance gate for the protocol harness. They
+are what will keep this C++ handler and any later MicroPython or JavaScript one
+from drifting apart, and they are worth writing alongside the parser rather
+than after it.
+
+### 7.3 Two tests that must exist by name
+
+Both failures are silent, and both have cost this project real time:
+
+- **twist sign** — a test that fails if the two wheels are swapped (§4).
+- **lease expiry** — commanded motion actually stops when the duration runs
+  out, measured at the fake motor, not inferred from the kernel's own flags.
+
+---
+
+## 8. The one open question: should `WHEELS` emit `done:`?
+
+This was badly explained last time, so here it is properly.
+
+v6 has three outcome replies (spec §8.1): `ok:<id>` means *accepted*,
+`err:<id>:<code>` means *rejected*, and `done:<id>:<reason>` means *the thing
+you enqueued has now finished*, where `reason` is `stop` (its stop condition was
+met) or `timeout` (its backstop fired).
+
+`done` was designed for `MOVE`, which has a real stop condition — "drive until
+400 mm of travel" genuinely finishes. **`WHEELS` has no stop condition.** It
+holds a wheel speed for `duration` ms and then the lease expires. So "finished"
+means only "the lease ran out", and the question is whether that is worth a
+reply at all:
+
+- **Emit `done:<id>:timeout`** — the host can await completion instead of
+  timing the wheels itself, and `WHEELS` behaves like every other bounded
+  command.
+- **Emit nothing; `ok` is the whole story** — the host already knows the
+  duration it asked for, so the reply carries no information it lacks.
+
+**The reason this is a design question and not a preference:** emitting `done`
+means the handler must remember outstanding ids and emit a reply *later, on its
+own*, which means it needs a periodic entry point and a notion of time. Without
+`done`, the handler is a pure function of the bytes fed to it — `feed()` in,
+replies out, no state between calls beyond a partial line, nothing to tick.
+
+That is a real difference in what the class *is*, and it is much cheaper to
+decide now than to retrofit. **My recommendation: no `done` for `WHEELS`** —
+keep the handler stateless and pure for the first library, and let `done` arrive
+with `MOVE`, which is the verb that actually needs it.
