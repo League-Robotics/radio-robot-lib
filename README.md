@@ -48,11 +48,34 @@ in `src/archive/` is compiled or imported by the library.**
 
 ## Status
 
-Greenfield. `src/archive/` and `docs/` are populated; **no library code is
-written yet.** [docs/plan.md](docs/plan.md) has the four-step sequence.
+**All four steps of [docs/plan.md](docs/plan.md) are done. 43 tests pass.**
 
-One design question is still open —
-[docs/design/protocol.md](docs/design/protocol.md) §8, whether `WHEELS` emits
-`done:` on lease expiry. It decides whether the handler is a pure function of
-its input bytes or a thing with a clock and pending state, so it is worth
-settling before step 3. It does not block steps 1 or 2.
+```
+uv run python -m pytest -q      ->  43 passed
+```
+
+| step | what | tests |
+|---|---|---|
+| 1 | DiffDrive lifted with its fidelity gate | 3 |
+| 2 | diffdrive harness -- fake ports + ctypes | 3 |
+| 3 | protocol harness -- handler, mock adapter, golden vectors | 30 |
+| 4 | the link -- `DiffDriveAdapter`, end to end through bytes | 7 |
+
+The acceptance runs with no robot and no serial port:
+
+```
+feed("WHEELS:100:100:1000:5\n")  ->  ok:5
+step the kernel                   ->  t: frames, counts climbing
+step past 1000 ms                 ->  wheels at zero, lease expired
+feed("ESTOP\n")                   ->  latched zero, no ack
+```
+
+The control law is **byte-identical** to what was lifted -- verified against
+`src/archive/diffdrive/`, and held duty-for-duty against `golden_ref_drive` by
+the fidelity gate.
+
+`done:` for `WHEELS` was settled: **no**. The handler stays a pure function of
+the bytes fed to it -- no clock, no pending-id table, no state between calls
+beyond a partial line.
+
+Known gaps are in [docs/design/protocol.md](docs/design/protocol.md) §9.

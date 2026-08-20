@@ -1,9 +1,10 @@
 # Protocol handler — v6 line grammar, handler + adapter
 
-**Status:** new design, for review. Unlike [diffdrive.md](diffdrive.md), none of
-this code exists yet. The *wire format* is settled — see
-[protocol-v6-spec.md](../protocol-v6-spec.md) — but the object model below is
-new, and §7 lists what needs deciding before implementation starts.
+**Status:** built. §1–§7 are the design as implemented; §8's question was
+settled (**no `done:` for `WHEELS`**, 2026-08-20); **§9 is what the
+implementation actually found** — resolved spec ambiguities, one deliberate
+omission, and the gaps this work exposed. Read §9 before extending any of it.
+The wire format itself is [protocol-v6-spec.md](../protocol-v6-spec.md).
 
 ---
 
@@ -353,3 +354,68 @@ That is a real difference in what the class *is*, and it is much cheaper to
 decide now than to retrofit. **My recommendation: no `done` for `WHEELS`** —
 keep the handler stateless and pure for the first library, and let `done` arrive
 with `MOVE`, which is the verb that actually needs it.
+
+---
+
+## 9. As built — resolved ambiguities and known gaps
+
+Everything above is design. This section is what the implementation actually
+found, and it is the part to read before extending any of it.
+
+### 9.1 Spec ambiguities resolved (not silently picked)
+
+**The optional trailing `id` on `SET`/`WHEELS`.** Spec §7.1's worked example
+shows `SET:wheel_control.pid_kp:0.03` → `ok:0` — an *omitted* id still acked
+with id 0. But §8.2 says "id 0 means no ack wanted", which read literally
+predicts no reply at all. Resolved by treating the two as different: **id
+omitted → acked as id 0** (§7.1's literal text); **id written as literal `0` →
+no ack** (§8.2's literal text). Applied only where the id is genuinely
+optional; `STOP`'s id is required and is always acked.
+
+**`GET` with an unknown field name.** `GET` never carries an id, so there is no
+wire channel to carry an `err` on. Resolved as **fully silent** — no reply, and
+not counted malformed.
+
+**`WHEELS`'s 5000 ms ceiling** (§5.2) is prose at the verb level with no stated
+owner. The handler holds no bounds table, so **the adapter enforces it** and
+returns `kRange` above it.
+
+### 9.2 Deliberately not implemented
+
+**The 3× reply repeat.** Spec §8.1 says `ok`/`err`/`done` are each sent three
+times on consecutive cycles, so an outcome survives the measured ~5% radio
+frame loss without a ring or an eviction policy. This handler does **not** do
+that, because "on consecutive cycles" needs a periodic entry point and pending
+state — exactly what the no-`done`-for-`WHEELS` decision keeps out.
+
+That is a real gap, not a rounding error: **v6's loss tolerance is currently
+unimplemented.** It belongs at the app or transport layer that owns a loop, or
+it comes back into the handler when `MOVE` and `done` do. Worth deciding
+deliberately rather than discovering on a lossy link.
+
+### 9.3 Gaps this step exposed
+
+**Three `Config` fields the kernel needs to `begin()` have no wire home.**
+`maxDuty`, `fullDutyVelocity` and `cyclePeriod` are required to start the
+kernel but do not appear in spec §7.3's 15-row `wheel_control` group. They are
+currently wire-unreachable, armed only by the test shim. A real robot boot path
+needs *something* — a config system, or app-level defaults — and these
+documents do not say what. This is the most likely thing to bite first.
+
+**The `TLM` projection is reduced, not spec §6.3/§6.4's columns.** Those need
+world-frame `x`/`y`/`h` fused from OTOS and encoder odometry, neither of which
+this library owns (§5 defers odometry). The adapter emits a smaller, documented
+column set. It deliberately does **not** reuse the spec's column names for
+different data.
+
+**The `flags` word uses a local bit layout**, not spec §6.5's numbers, for the
+same reason — §6.5's bits are OTOS/line/colour/planner, none of which exist
+here. Reusing those bit *numbers* for different meanings would actively
+mislead anyone cross-referencing the spec.
+
+### 9.4 Where the adapter lives, and why
+
+`src/adapter/` — its own package, not inside `src/protocol/` or
+`src/diffdrive/`. It is the one component required to depend on both, and each
+of those two has a standalone-build gate ("compiles with an include path of
+exactly its own directory") that a cross-dependency would break.
