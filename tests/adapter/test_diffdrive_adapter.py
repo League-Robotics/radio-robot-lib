@@ -137,8 +137,13 @@ def _new_handle(lib, counts_per_length=_COUNTS_PER_LENGTH, max_duty=100.0,
                  pid_max=300.0, cycle_period=24):
     """Create + configure + begin() a handle bundling the kernel, its
     fakes, the adapter, and the protocol handler. maxDuty/fullDutyVelocity/
-    cyclePeriod are armed directly (not through the wire) -- see
-    diffdrive_adapter.h for why those three are not GET/SET-reachable."""
+    cyclePeriod are armed directly here too (not through the wire) -- see
+    diffdrive_adapter.h for why those three are not GET/SET-reachable.
+    Since DiffDriveAdapter's own constructor now hard-codes those same
+    three values (docs/design/protocol.md §9.3), this call is redundant
+    with the adapter's own arming rather than load-bearing for it --
+    test_begin_succeeds_with_no_external_configure_step below is what
+    actually exercises the adapter-only path."""
     handle = lib.paCreate(ctypes.c_float(counts_per_length))
     lib.paConfigureBasic(handle, max_duty, full_duty_velocity, kp, ki, i_max,
                          pid_max, cycle_period)
@@ -382,5 +387,32 @@ def test_identity_and_status_have_plausible_values(tmp_path):
         _feed(lib, handle, b"STATUS\n")
         text = _sink_text(lib, handle)
         assert text.startswith("status:ready=1:active=0:connL=1:connR=1:")
+    finally:
+        lib.paDestroy(handle)
+
+
+# ---------------------------------------------------------------------------
+# 4. Adapter self-arms maxDuty/fullDutyVelocity/cyclePeriod -- no external
+#    configure step required (docs/design/protocol.md §9.3, stakeholder
+#    decision 2026-08-20: "you can just hard code them")
+# ---------------------------------------------------------------------------
+#
+# Every other test in this file calls paConfigureBasic() before paBegin(),
+# matching _new_handle()'s docstring above -- but that call is now
+# redundant with what DiffDriveAdapter's own constructor already does.
+# This test proves the redundancy claim by skipping paConfigureBasic()
+# entirely: begin() must still succeed off the adapter's hard-coded
+# values alone. kp/ki/iMax/pidMax stay at Config's own zero defaults here
+# (they are unrelated to this change -- still GET/SET-reachable
+# wheel_control fields, not hard-coded), which is fine: begin() only
+# gates on maxDuty (differential_drive.cpp's begin()).
+
+def test_begin_succeeds_with_no_external_configure_step(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.paCreate(ctypes.c_float(_COUNTS_PER_LENGTH))
+    try:
+        status = lib.paBegin(handle)
+        assert status == STATUS_OK, (
+            f"begin() refused with no external configure step: status={status}")
     finally:
         lib.paDestroy(handle)

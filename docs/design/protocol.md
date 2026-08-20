@@ -395,12 +395,23 @@ deliberately rather than discovering on a lossy link.
 
 ### 9.3 Gaps this step exposed
 
-**Three `Config` fields the kernel needs to `begin()` have no wire home.**
-`maxDuty`, `fullDutyVelocity` and `cyclePeriod` are required to start the
-kernel but do not appear in spec §7.3's 15-row `wheel_control` group. They are
-currently wire-unreachable, armed only by the test shim. A real robot boot path
-needs *something* — a config system, or app-level defaults — and these
-documents do not say what. This is the most likely thing to bite first.
+**Three `Config` fields the kernel needs to `begin()` — resolved: hard-coded,
+not wired.** `maxDuty`, `fullDutyVelocity` and `cyclePeriod` are required to
+start the kernel but do not appear in spec §7.3's 15-row `wheel_control`
+group. This used to be an open gap ("wire-unreachable, armed only by the test
+shim, and these documents do not say what a real boot path does"). Stakeholder
+decision, 2026-08-20: "I don't see that max duty, full duty velocity, and
+cycle period need to be configurable, so you can just hard code them." They
+are now build-time constants on `Protocol::DiffDriveAdapter`
+(`kMaxDuty`/`kFullDutyVelocity`/`kCyclePeriod`, `src/adapter/
+diffdrive_adapter.h`), applied to the kernel at adapter construction — so
+building a `DiffDriveAdapter` alone is sufficient for `begin()` to succeed,
+with no external arming step and no per-robot variation. `countsPerLength`
+remains the one field of real per-robot geometry, unaffected by this
+decision, still a constructor parameter (§4 point 2). If a later robot
+genuinely needs one of these three to vary, that is new work, not a bug fix:
+it means giving the field a real wire home — a config system, or a new
+spec row — the same way any other configurable value would need one.
 
 **The `TLM` projection is reduced, not spec §6.3/§6.4's columns.** Those need
 world-frame `x`/`y`/`h` fused from OTOS and encoder odometry, neither of which

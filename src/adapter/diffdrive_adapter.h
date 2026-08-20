@@ -21,14 +21,15 @@
 // onto DifferentialDrive::Config's plain-float members (kFieldTable in
 // the .cpp). `maxDuty`, `fullDutyVelocity` and `cyclePeriod` are NOT in
 // that spec group and are NOT wire-reachable here — they are the
-// kernel's authority/calibration/cadence, armed once by whoever
-// composes this adapter (a bench harness, an application), the same
-// way tests/diffdrive/diffdrive_shim.cpp's ddConfigureBasic() already
-// arms them out-of-band for the diffdrive-only harness. Wiring them
-// onto the 15-row wheel_control group would be inventing a table this
-// step's design doc does not define; leaving that gap for a real
-// config system to fill later is deliberate, not an oversight — see
-// this repo's report-back notes for the sprint that added this file.
+// kernel's authority/calibration/cadence, and per stakeholder decision
+// (2026-08-20, docs/design/protocol.md §9.3) they are hard-coded build
+// constants on THIS class (`kMaxDuty`/`kFullDutyVelocity`/
+// `kCyclePeriod` below), applied to the kernel at construction. Nobody
+// composing this adapter has to arm them separately. Wiring them onto
+// the 15-row wheel_control group would be inventing a table this step's
+// design doc does not define; if a future robot needs one of them to
+// vary, that is new work — giving it a real wire home — not a bug in
+// this adapter.
 //
 // ---- Telemetry: a REDUCED projection, not a literal spec §6.3/§6.4 ----
 //
@@ -72,6 +73,35 @@ class DiffDriveAdapter : public Adapter {
   // ("the handler holds no bounds table") and hands the job to whichever
   // adapter is wired in. This is that enforcement.
   static constexpr uint32_t kWheelsDurationCeiling = 5000;  // [ms]
+
+  // ---- Hard-coded kernel bring-up parameters (stakeholder decision,
+  // 2026-08-20) ----
+  //
+  // docs/design/protocol.md §9.3 used to record these three Config
+  // fields as wire-unreachable gaps: DifferentialDrive::begin() needs
+  // maxDuty > 0 to leave its fail-closed default, and a working
+  // VELOCITY-mode drive() needs fullDutyVelocity too, but neither one
+  // is in spec §7.3's 15-row wheel_control group, and cyclePeriod isn't
+  // either. The stakeholder's call: "I don't see that max duty, full
+  // duty velocity, and cycle period need to be configurable, so you can
+  // just hard code them." So this adapter arms all three itself, at
+  // construction (see the .cpp) — constructing a DiffDriveAdapter is
+  // now sufficient for the wrapped kernel's begin() to succeed, with no
+  // external caller (test shim, application boot path) required to
+  // configure them out-of-band first. If a future robot genuinely needs
+  // one of these to vary, that means giving it a real wire home (a
+  // config system, or a new spec row) — not just moving the constant.
+  //
+  // Values match what every existing test already assumed before this
+  // change: tests/adapter/diffdrive_protocol_shim.cpp's paConfigureBasic()
+  // and tests/diffdrive/diffdrive_shim.cpp's ddConfigureBasic() are both
+  // called, from their respective Python harnesses' default arguments
+  // (test_diffdrive_adapter.py's _new_handle(), test_diffdrive_harness.py's
+  // _new_kernel()), with these same three numbers — the two shims agree.
+  static constexpr float kMaxDuty = 100.0f;  // [%] full authority rail
+  static constexpr float kFullDutyVelocity =
+      1000.0f;  // [counts/s] wheel rate at 100% duty
+  static constexpr uint32_t kCyclePeriod = 24;  // [ms] fiber cadence
 
   // `drive` is borrowed and must outlive this adapter. `countsPerLength`
   // [counts/mm] is the one piece of robot geometry this whole path needs

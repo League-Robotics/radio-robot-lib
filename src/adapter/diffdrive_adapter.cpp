@@ -130,6 +130,17 @@ DiffDriveAdapter::DiffDriveAdapter(DiffDrive::DifferentialDrive& drive,
       countsPerLength_(countsPerLength > 0.0f ? countsPerLength : 1.0f),
       identity_(identity) {
   snapshot_ = Snapshot{columns_, 0};
+  // Hard-code the kernel's bring-up parameters (see kMaxDuty's doc comment
+  // in the header) so constructing this adapter alone is enough for the
+  // wrapped kernel's begin() to succeed -- no external caller has to arm
+  // maxDuty/fullDutyVelocity/cyclePeriod out-of-band first. This runs
+  // before the caller's own begin() call, and DifferentialDrive's setters
+  // are live pre-begin, so ordering relative to any other config the
+  // caller pushes (e.g. via onSet(), or its own direct kernel access)
+  // does not matter.
+  drive_.setMaxDuty(kMaxDuty)
+      .setFullDutyVelocity(kFullDutyVelocity)
+      .setCyclePeriod(kCyclePeriod);
 }
 
 void DiffDriveAdapter::setCountsPerLength(float countsPerLength) {
