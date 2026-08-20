@@ -1,0 +1,15 @@
+# build output
+build/
+*.o
+*.so
+*.dylib
+*.a
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# editor / os
+.DS_Store
