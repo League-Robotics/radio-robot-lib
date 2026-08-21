@@ -138,7 +138,11 @@ id     ::= '#' [0-9]+        (a field in trailing position — §8.2)
   increment the malformed counter (`flags` bit 9). If the line's last token
   is a well-formed nonzero `#id`, reply `err #<id> <code>` — the self-marking
   id is trustworthy even on a line that otherwise failed to parse; otherwise
-  no reply.
+  no reply. **The one exception is `ESTOP`, which never emits a reply under
+  any circumstance, including this one**: a malformed `ESTOP` line (stray
+  field, stray `#id`) is dropped and counted, silently. The panic stop must
+  never queue behind an outbound reply (§5.4/§8.2), and that rule outranks
+  this recovery rule wherever the two meet.
 
 ### 2.1 Direction is carried by CASE, and that is load-bearing
 
@@ -589,7 +593,10 @@ completion ack whose `err` was always 0. It is a word now.
 - An id is spelled **`#<n>`** and is always the **last token** of its line —
   commands and replies alike. (Restores the pre-v5 `#` correlation-id
   spelling — stakeholder, 2026-08-20.)
-- Host-assigned, `1..999999`, **unique for the session**.
+- Host-assigned, `1..999999`, **unique for the session**. The digits are
+  bare and unsigned: `#+5`, `#-5`, and `# 5` are all malformed. §2.2's
+  "optionally signed" applies to data fields, not to the id — parse it with
+  a dedicated digits-only parser, not a general signed-integer one.
 - Because the id announces itself, it never shifts position when an optional
   field is omitted — `CAL #9` needs no placeholder — and it is recoverable
   even from a line that otherwise fails to parse (§2's `err` rule).
@@ -603,7 +610,8 @@ completion ack whose `err` was always 0. It is a word now.
   was acked `err=0` and then **silently dropped** — a real, recorded footgun.
   v6 refuses it out loud.
 - `ESTOP` never carries an id and is never acked — it must not queue behind
-  anything, including an ack.
+  anything, including an ack. This covers the malformed case too: `ESTOP #5`
+  gets no `err`, overriding §2's recovery rule (stated there as well).
 
 ### 8.3 Error codes
 
