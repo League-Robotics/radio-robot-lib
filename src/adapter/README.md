@@ -6,11 +6,11 @@ One class, two files:
 
 `Protocol::DiffDriveAdapter` is the concrete `Protocol::Adapter`
 (`src/protocol/adapter.h`) that drives a `DiffDrive::DifferentialDrive`
-(`src/diffdrive/differential_drive.h`) — the class docs/plan.md Step 4
-exists to build. Unlike `src/diffdrive/` and `src/protocol/`, this
-package is NOT meant to be portable/standalone: its whole job is to
-depend on both of the others and hold the one thing neither of them is
-allowed to know — a millimetre.
+(`src/diffdrive/differential_drive.h`) — the seam this whole repo exists
+to build. Unlike `src/diffdrive/` and `src/protocol/`, this package is
+NOT meant to be portable/standalone: its whole job is to depend on both
+of the others and hold the one thing neither of them is allowed to know
+— a millimetre.
 
 ## What it does
 
@@ -21,32 +21,36 @@ allowed to know — a millimetre.
   ceiling itself (`ERR_RANGE` above it) — the handler holds no bounds
   table, so this is the adapter's job (see `protocol_handler.h`'s own
   ambiguity note #3).
-- **`STOP`** → `neutral()`. **`ESTOP`** → `estop()`, never acked.
-- **`GET`/`SET`** → the 15 `wheel_control.*` fields spec §7.3 names,
-  mapped 1:1 onto `DifferentialDrive::Config`'s plain-float members.
-  Pure delegation: no field table lives here beyond a name→member-offset
-  map, and no value is cached — every read/write goes straight through
+- **`STOP`** → `neutral()`, immediate, no queue (there is none). **`ESTOP`**
+  → `estop()`, latched, never acked. Neither ramps — see
+  `docs/design/protocol.md` §5.1 for why they are not "smooth vs instant"
+  and diffdrive.md §3.2 for the kernel-level detail.
+- **`GET`/`SET`** → 15 `wheel_control.*` fields, mapped 1:1 onto
+  `DifferentialDrive::Config`'s plain-float members. Pure delegation: no
+  field table lives here beyond a name→member-offset map, and no value
+  is cached — every read/write goes straight through
   `DifferentialDrive::config()`/`setConfig()`.
 - **`TLM`** → projects `DifferentialDrive::output()` into the wire's
   `Column`/`Snapshot` shape. This is a REDUCED projection, not a literal
-  implementation of spec §6.3/§6.4's POSE/FULL columns — see
-  `diffdrive_adapter.h`'s file header for exactly what differs and why
-  (this library has no odometry, no OTOS, no line/colour sensors, so a
-  literal `x`/`y`/`h` world pose is not producible here).
+  world-frame pose — see `diffdrive_adapter.h`'s file header for exactly
+  what differs and why (this library has no odometry, no OTOS, no
+  line/colour sensors, so a literal `x`/`y`/`h` world pose is not
+  producible here).
 
 ## What is NOT wire-reachable
 
 `maxDuty`, `fullDutyVelocity`, and `cyclePeriod` are `Config` fields but
-are not in spec §7.3's `wheel_control` group and are not exposed through
-`GET`/`SET` here — they are the kernel's authority/calibration/cadence,
-armed once by whoever composes this adapter, the same way
+are not exposed through `GET`/`SET` here — they are the kernel's
+authority/calibration/cadence, hard-coded on this class per stakeholder
+decision (2026-08-20, see `docs/design/protocol.md` §7) and armed once
+at construction, the same way
 `tests/diffdrive/diffdrive_shim.cpp`'s `ddConfigureBasic()` already arms
 them out-of-band for the diffdrive-only harness.
 
 `countsPerLength` itself is a constructor argument (with a
 `setCountsPerLength()` escape hatch), never a `GET`/`SET` field — it is
 robot geometry, not a control-law gain, and per docs/design/protocol.md
-§6 this repo stores no configuration anywhere.
+§7 this repo stores no configuration anywhere.
 
 ## Testing
 
@@ -60,6 +64,6 @@ own flag).
 
 ## Provenance
 
-New code, docs/plan.md Step 4 (2026-08-20). Nothing here is extracted
-from an existing implementation — `src/diffdrive/` and `src/protocol/`
-are both prior steps this file links together for the first time.
+New code (2026-08-20). Nothing here is extracted from an existing
+implementation — `src/diffdrive/` and `src/protocol/` are both prior
+work this file links together for the first time.

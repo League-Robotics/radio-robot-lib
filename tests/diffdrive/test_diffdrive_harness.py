@@ -1,5 +1,5 @@
 """tests/diffdrive/test_diffdrive_harness.py -- the DiffDrive host test
-harness (docs/plan.md Step 2).
+harness (Step 2).
 
 Deterministic fakes for the kernel's four ports (Motor/Clock/Sleeper --
 FiberLauncher is DECLINED, see fake_ports.h) live in fake_ports.h.

@@ -1,17 +1,17 @@
-// protocol_handler.h — Protocol::ProtocolHandler: the v6 ASCII line-
-// grammar codec (docs/protocol-v6-spec.md §2-§8) behind the Sink/Adapter
-// seams docs/design/protocol.md §1-§2 defines. This is the ONLY class in
-// this library that ever touches a wire byte: feed() reassembles
-// arbitrary byte blocks into '\n'-terminated lines, tokenizes each line
-// in place on runs of ' ' (spec §2/§11.1/§11.2 — no allocation, no
-// std::string, no exceptions), dispatches to the Adapter, and formats
-// the reply — once, per verb, so the Adapter can neither forget a reply
-// nor invent a shape for one.
+// protocol_handler.h — Protocol::ProtocolHandler: the ASCII line-grammar
+// codec (docs/design/protocol.md §2-§6) behind the Sink/Adapter seams
+// that same document's §1/§3 defines. This is the ONLY class in this
+// library that ever touches a wire byte: feed() reassembles arbitrary
+// byte blocks into '\n'-terminated lines, tokenizes each line in place
+// on runs of ' ' (§2/§3.2 — no allocation, no std::string, no
+// exceptions), dispatches to the Adapter, and formats the reply — once,
+// per verb, so the Adapter can neither forget a reply nor invent a
+// shape for one.
 //
 // No kernel, no motors, no config storage, no transport: bytes in via
-// feed(), bytes out via Sink. See docs/plan.md Step 3.
+// feed(), bytes out via Sink.
 //
-// ---- The grammar (spec §2), in one line ----
+// ---- The grammar (docs/design/protocol.md §2), in one line ----
 //
 //   line   ::= sp? verb ( sp field )* sp? '\n'
 //   sp     ::= ' '+
@@ -23,19 +23,17 @@
 // line is ignored; a blank or all-whitespace line is ignored SILENTLY
 // (not malformed). The `id`, where a verb carries one, is always the
 // LAST token of the line — self-marking, so an omitted optional field
-// never shifts it into a data position (`CAL #9` needs no placeholder —
-// not that this library implements CAL, but SET/WHEELS work the same
-// way). This was a colon-delimited, positional grammar before the
-// 2026-08-20 stakeholder decision (commit 5a5b6da); this file is the
-// post-cutover rewrite. See docs/spec-defects.md for the resolution
-// history of the ambiguities the colon-era file below used to carry.
+// never shifts it into a data position. This was a colon-delimited,
+// positional grammar before the 2026-08-20 stakeholder decision (commit
+// 5a5b6da); this file is the post-cutover rewrite. See
+// docs/design/protocol.md §9.1/§9.6 for the resolution history.
 //
-// ---- Resolved-by-the-new-grammar (no longer this file's own call) ----
+// ---- Resolved by the grammar itself (no longer this file's own call) ----
 //
 // The colon grammar's ambiguity between an OMITTED id and an id
-// EXPLICITLY WRITTEN AS "0" (spec-defects.md D1) is gone by
-// CONSTRUCTION under the space grammar, not by a rule this file
-// invented: omitted and `#0` are visibly different wire forms.
+// EXPLICITLY WRITTEN AS "0" is gone by CONSTRUCTION under the space
+// grammar, not by a rule this file invented: omitted and `#0` are
+// visibly different wire forms.
 // - id OMITTED (verb whose id is optional, and the trailing token is
 //   not present at all): the command still executes, and its `ok`/`err`
 //   is sent once, BARE — no `#id` token in the reply at all (`ok`,
@@ -43,24 +41,21 @@
 //   inventing an id.
 // - id explicitly `#0`: executes SILENTLY, no reply of any kind — the
 //   ack-suppression spelling for a lossy link that doesn't want an ack
-//   for every line (spec §8.2). Legal only where the id is optional
-//   (SET, WHEELS in this library's scope); on STOP, whose id is
-//   REQUIRED, `#0` is itself malformed (spec §8.2's literal words:
-//   "`#0` is legal only where the id is optional; on MOVE/GOTO/STOP it
-//   is malformed" — this library implements STOP only, not MOVE/GOTO,
-//   but the same rule applies to it).
+//   for every line (docs/design/protocol.md §2.2). Legal only where the
+//   id is optional (SET, WHEELS in this library's scope); on STOP,
+//   whose id is REQUIRED, `#0` is itself malformed.
 //
-// GET's unknown-field-name silence (spec-defects.md D2) is now stated
-// directly in spec §7.1 ("`GET` with an unknown name is silent — no
-// reply, and not counted malformed"), so it is spec text this file
-// implements, not an ambiguity this file resolves on its own.
+// GET's unknown-field-name silence is stated directly in
+// docs/design/protocol.md §6 ("unknown name → silent, no reply, not
+// counted malformed"), so it is design text this file implements, not
+// an ambiguity this file resolves on its own.
 //
 // ---- Ambiguities/design calls this file DOES still have to make ----
 //
-// 1. WHEELS's documented "ceiling 5000" (spec §5.2) is stated in prose
-//    at the verb-definition level, not in the Adapter interface
-//    (docs/design/protocol.md §3) or anywhere this handler owns a
-//    bounds table for. Per §6's "the handler holds no field table, no
+// 1. WHEELS's documented "ceiling 5000" is stated in prose at the
+//    verb-definition level, not in the Adapter interface
+//    (docs/design/protocol.md §4) or anywhere this handler owns a
+//    bounds table for. Per §7's "the handler holds no field table, no
 //    bounds, no storage" — generalized here from config bounds to
 //    motion bounds for consistency — this handler does NOT enforce the
 //    ceiling itself; it passes `duration` through unchecked and leaves
@@ -68,41 +63,37 @@
 //    `onWheels` can return kRange). Flagged, not silently assumed.
 //    Unaffected by the grammar migration; carried forward verbatim.
 //
-// 2. Spec §2's generic malformed-line recovery — "if the line's last
-//    token is a well-formed nonzero `#id`, reply `err #<id> <code>`;
-//    otherwise no reply" — is written with NO carve-out for a verb
-//    whose own grammar has no id concept at all (HELLO, PING, ID, VER,
-//    STATUS, HELP, GET, TLM in this library's scope: none of their rows
-//    in spec §3.1 have an id column). Read literally, and confirmed by
-//    the spec's own "including unknown verbs" framing, this rule is
-//    verb-agnostic: it fires on ANY malformed line (unknown verb, wrong
-//    arity, or an unparseable field) whenever the line's raw last token
-//    happens to parse as `#[0-9]+` and is nonzero — regardless of
-//    whether the matched verb's own grammar would ever have consumed
-//    that token as an id. This file implements it that way (see
-//    rejectMalformed()/findLastFieldToken() in the .cpp), with exactly
-//    ONE deliberate exception: ESTOP. Spec §5.4 and §8.2 both state,
-//    independently and in stronger/more specific language than §2's
-//    general rule ("ESTOP never carries an id and is never acked — it
-//    must not queue behind anything, including an ack"), that ESTOP is
-//    UNCONDITIONALLY silent. This file treats that as the more specific
-//    rule winning over the generic recovery mechanism: a malformed
-//    ESTOP line (e.g. `ESTOP #5`, wrong arity) increments the malformed
-//    counter and replies with NOTHING, even though `#5` would otherwise
-//    be a perfectly good recoverable id. Flagged here because the spec
-//    itself never states this interaction explicitly — it is this
-//    file's own resolution of a tension between §2's general rule and
-//    §5.4/§8.2's specific one, not something spec text spells out in
-//    one place.
+// 2. The generic malformed-line recovery (docs/design/protocol.md §2.3)
+//    — "if the line's last token is a well-formed nonzero `#id`, reply
+//    `err #<id> <code>`; otherwise no reply" — is written with NO
+//    carve-out for a verb whose own grammar has no id concept at all
+//    (HELLO, PING, ID, VER, STATUS, HELP, GET, TLM in this library's
+//    scope: none of their rows in §6 have an id column). Read
+//    literally, and confirmed by "including unknown verbs" in §2.3,
+//    this rule is verb-agnostic: it fires on ANY malformed line
+//    (unknown verb, wrong arity, or an unparseable field) whenever the
+//    line's raw last token happens to parse as `#[0-9]+` and is
+//    nonzero — regardless of whether the matched verb's own grammar
+//    would ever have consumed that token as an id. This file
+//    implements it that way (see rejectMalformed()/findLastFieldToken()
+//    in the .cpp), with exactly ONE deliberate exception: ESTOP,
+//    treated as the more specific rule (§2.3) winning over the generic
+//    recovery mechanism — a malformed ESTOP line (e.g. `ESTOP #5`,
+//    wrong arity) increments the malformed counter and replies with
+//    NOTHING, even though `#5` would otherwise be a perfectly good
+//    recoverable id. This is this file's own resolution of a tension
+//    between the general rule and ESTOP's own stronger one; §2.3
+//    states the resolution but the collision itself is not spelled out
+//    anywhere else.
 //
 // 3. The id's own numeric grammar (`id ::= '#' [0-9]+`) is STRICTER
-//    than spec §2.2's general "every wire value is a base-10 ASCII
-//    integer, optionally signed" rule for ordinary integer fields
-//    (WHEELS's `duration`, etc.): the id grammar allows ONLY decimal
-//    digits after the `#`, no sign at all — not even a leading `+`,
-//    which C's strtoul() would otherwise accept as valid syntax. This
-//    file parses ids with a dedicated digit-only scan (parseIdDigits()
-//    in the .cpp) rather than reusing the general unsigned-field parser,
+//    than the general "every wire value is a base-10 ASCII integer,
+//    optionally signed" rule for ordinary integer fields (WHEELS's
+//    `duration`, etc.): the id grammar allows ONLY decimal digits after
+//    the `#`, no sign at all — not even a leading `+`, which C's
+//    strtoul() would otherwise accept as valid syntax. This file parses
+//    ids with a dedicated digit-only scan (parseIdDigits() in the .cpp)
+//    rather than reusing the general unsigned-field parser,
 //    specifically so `#+5` is rejected as not-an-id (falls through to
 //    "ordinary malformed field", not "id 5").
 #pragma once

@@ -105,7 +105,7 @@ Every motion command carries a `lease` — a **duration in `[ms]` from now**,
 clamped to `kLeaseMax`. When it expires the kernel stops. A dead caller cannot
 mean a runaway.
 
-This lines up exactly with protocol v6's `WHEELS:<left>:<right>:<duration>`,
+This lines up exactly with the wire's `WHEELS <left> <right> <duration>`,
 where `duration` is a required `[ms]` field with a 5000 ceiling for precisely
 the same reason. **`duration` becomes `lease` with no reinterpretation** — the
 one place where the wire and the kernel already agree on a concept without
@@ -114,21 +114,38 @@ anyone having designed it that way.
 That agreement is why `WHEELS` is the right verb to build the first end-to-end
 test around, rather than `MOVE`.
 
-### 3.2 `neutral()` and `estop()` are not synonyms
+### 3.2 `neutral()` and `estop()` are not synonyms — but not for the reason a full robot's numbers suggest
 
-`neutral()` is a commanded stop through the full stop path. `estop()` latches
-zero immediately and holds until `estopClear()`. The protocol keeps the same
-distinction (`STOP` vs `ESTOP`), and the project has measured the difference on
-hardware: a planned stop let a robot travel a full 400 mm leg, an estop stopped
-it in 29 mm.
+`neutral()` writes a neutral command to the mailbox; `controlStep()` zeroes
+duty demand for it **immediately**, no ramp (`stageStop()` is a bare
+`stageDuty(0, 0)`). `estop()` sets a latch that forces that same immediate-zero
+path from the next cycle onward, **regardless of the mailbox's state**, and
+additionally refuses every new motion command until `estopClear()`.
 
-Any halt path — a test harness's Ctrl-C included — calls `estop()`.
+**Both are immediate at the duty level.** The distinction is persistence and
+guarantee, not speed of stopping: `neutral()`'s zero is an ordinary mailbox
+write the very next `drive()` call overrides; `estop()`'s zero is
+latched — effective even if the command handshake is wedged — and it blocks
+new motion rather than merely commanding a stop.
+
+A robot with a motion *planner* on top of this kernel can measure a much
+bigger contrast between its own planned-stop verb and its own estop verb — a
+planned stop that *queues* behind an active move can let the robot travel the
+rest of that move before it even begins decelerating, while an estop
+interrupts immediately. That is a property of the *queue*, not of this
+kernel's `neutral()` vs `estop()`, and this kernel has no queue: don't cite a
+queued-stop measurement here, because it does not describe what this class
+does. See [protocol.md](protocol.md) §5.1.
+
+Any halt path — a test harness's Ctrl-C included — calls `estop()`, because it
+is the one that latches and refuses new commands, not because it decelerates
+differently.
 
 ---
 
 ## 4. The `Output` snapshot is the telemetry source
 
-`output()` returns a seq-consistent snapshot with everything a `t:` telemetry
+`output()` returns a seq-consistent snapshot with everything a `t` telemetry
 frame needs, already measured:
 
 - **timing** — `now [ms]`, `nowFine [us]`, `cycleCount`, `cyclePeriodMeasured [us]`, `cycleBusy [us]`, `cycleOverrunCount`
@@ -139,9 +156,10 @@ frame needs, already measured:
   `sat`/`stall`/`wedge`/`wedgeSuspect`/`deficit`/`connected`
 - **sticky diagnostics** — `leaseExpiryCount`, `i2cFaultCount`
 
-`cycleBusy` is worth calling out: it is the number protocol v6 §11.2 wants
-measured before the ASCII formatting cost can be trusted. The kernel already
-publishes it, so the measurement is a subtraction, not a new instrument.
+`cycleBusy` is worth calling out: it is the number to measure before an ASCII
+telemetry-formatting cost can be trusted (the wire's own `snprintf`-per-column
+concern). The kernel already publishes it, so the measurement is a
+subtraction, not a new instrument.
 
 ### 4.1 Age math
 

@@ -2,8 +2,7 @@
 // Protocol::Adapter (src/protocol/adapter.h) that closes the seam this
 // whole repo exists for — WHEELS/STOP/ESTOP/GET/SET/TLM over a
 // DiffDrive::DifferentialDrive (src/diffdrive/differential_drive.h).
-// docs/plan.md Step 4; docs/design/protocol.md §4 is the spec this file
-// implements literally.
+// docs/design/protocol.md §5 is the spec this file implements literally.
 //
 // This is the ONLY place in either library that knows a millimetre.
 // DiffDrive speaks counts; the wire speaks mm/mm-per-second; this file

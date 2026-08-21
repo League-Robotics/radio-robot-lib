@@ -1,6 +1,6 @@
 """tests/protocol/test_protocol_package.py -- the protocol package's
 standalone-build gate, mirroring tests/diffdrive/test_diffdrive_package.py
-(docs/plan.md Step 2's own pattern, applied to Step 3).
+(Step 2's own pattern, applied to Step 3).
 
 ``src/protocol/`` is meant to be as portable as ``src/diffdrive/``: no
 kernel, no motors, no transport, no include beyond the C++ standard

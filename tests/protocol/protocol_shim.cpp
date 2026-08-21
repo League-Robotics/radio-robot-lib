@@ -1,5 +1,5 @@
 // protocol_shim.cpp -- extern "C" ctypes surface for the protocol host
-// test harness (docs/plan.md Step 3). Test scaffolding only: nothing in
+// test harness (Step 3). Test scaffolding only: nothing in
 // src/ knows this file exists, and it is compiled only into this
 // test's own throwaway shared library (see test_protocol_harness.py).
 //

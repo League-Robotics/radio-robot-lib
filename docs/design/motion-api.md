@@ -4,8 +4,12 @@
 robot, and the ways those calls can be executed. It is the source the user
 documentation will be written from.
 
-**What this is not.** The protocol. [`protocol-v6-spec.md`](../protocol-v6-spec.md)
-stays the wire authority; §9 here proposes a change to it and nothing more.
+**What this is not.** The protocol. [`protocol.md`](protocol.md) stays the wire
+authority for the grammar (spaces, `#id`, case-as-direction, the outcome
+model) and for every verb this library already implements; §9 here proposes
+six *new* verbs that follow those same conventions, not a change to any
+shipped one — `wheels_x`/`move_x`/`move_v`/`go_to_r`/`go_to_w` have no prior
+wire form at all.
 
 **Where it sits.** Above the wheel kernel, which is unchanged:
 
@@ -363,9 +367,10 @@ the loop afterwards.
 - **A fiber is running → the fiber drives it**, and the object you get back is
   for observing.
 
-The object reports `done` and a `reason`. The reasons are the wire's own
-(`done #<id> <reason>` — [`protocol-v6-spec.md`](../protocol-v6-spec.md) §8.1),
-plus two that only exist locally:
+The object reports `done` and a `reason`. The reasons follow the outcome model
+[`protocol.md`](protocol.md) §6.1 establishes (`ok`/`err` today; `done #<id>
+<reason>` is specified there but not yet emitted by any verb — §8), plus two
+that only exist locally:
 
 | reason | meaning |
 |---|---|
@@ -419,14 +424,17 @@ assumed everywhere else.
   by exception. Catch-and-`estop`-and-re-raise, rather than a bare `finally`:
   a normal exit has already stopped, and estopping it anyway latches the robot
   for no reason.
-- **A stop that queues behind the active motion is not a stop.** Measured on a
-  400 mm leg with the halt sent 0.5 s in: a *queued* stop let the robot travel
-  the entire 39.8 cm and took 5.9 s to go inactive, because it waited for the
-  leg to finish first; `estop` travelled 2.9 cm and cleared in 0.10 s. That
-  measurement is why `stop()` in this API acts on the current motion rather
-  than enqueueing behind it — a program that says "stop" when it sees the line
-  must not drive the rest of the leg first. It is also why the number cannot be
-  read as "smooth stops are slow": it measured queueing, not deceleration.
+- **A stop that queues behind the active motion is not a stop.** Measured
+  elsewhere, on a robot with a motion planner, on a 400 mm leg with the halt
+  sent 0.5 s in: a *queued* stop let the robot travel the entire 39.8 cm and
+  took 5.9 s to go inactive, because it waited for the leg to finish first;
+  `estop` travelled 2.9 cm and cleared in 0.10 s. That measurement is why
+  `stop()` in this API acts on the current motion rather than enqueueing
+  behind it — a program that says "stop" when it sees the line must not drive
+  the rest of the leg first. It is also why the number cannot be read as
+  "smooth stops are slow": it measured queueing, not deceleration — and it is
+  consistent with this library's own `STOP`, which was never queued to begin
+  with ([`protocol.md`](protocol.md) §5.1).
 - **One `estop` is not proof of a stop.** The motor brick latches its last
   commanded speed and does not reset when the microcontroller does. A single
   `estop` failed 5 of 6 attempts in measurement, and one issued by a
@@ -576,39 +584,54 @@ argument does not apply here: `kind`/`stop`/`frame` had to go because they made
 combination to make — both values are meaningful for the same argument list.
 The optional token sits safely before the id because the id is self-marking.
 
-Two semantic changes ride along, both deliberate:
+`STOP` acting on the current motion is **not a change from anything shipped**
+— it matches what this library's own `STOP` already does. There is no queue
+in `DiffDriveAdapter`: `onStop()` calls `neutral()` directly and it takes
+effect that same cycle ([`protocol.md`](protocol.md) §5.1). The "a queued
+stop can let the robot finish the rest of its leg first" hazard (§6) is a
+property of a *planner's* queue, which neither this library nor this proposal
+has; `stop(immediate=True)`/`STOP now` is new capability this API adds — a
+second deceleration choice where the wire previously had only one.
 
-- **`STOP` acts on the current motion** instead of enqueueing behind it (§6).
-- **`STOP` carries a deceleration choice.** The current wire has only the
-  jerk-limited form.
+### 9.2 Six verbs, not one discriminated verb
 
-### 9.2 The verb split, proposed
+`WHEELS` is the one motion verb this library actually implements, and it
+already has no discriminator to remove — `left right duration [#id]`, one
+shape, mapping straight onto `drive()`. This section is not a migration away
+from a shipped design; it is a decision about the shape of the six *new*
+verbs this API needs, made explicit because the alternative was seriously
+considered and rejected.
 
-Today's wire has three motion verbs plus four discriminator fields — `kind`,
-`stop`, `limit` and `frame`. Under this API those four disappear into the verb
-name, and six verbs replace three:
+**The alternative:** one `MOVE` verb carrying a `kind` field (twist vs
+wheels) and a `stop` field (time vs distance vs angle), the shape an earlier,
+never-implemented draft of this protocol sketched. **Rejected**, because a
+discriminator field makes invalid combinations spellable — `MOVE w 100 -100
+0 a 1571 4000 #8` would mean "wheels-kind command with an angular stop
+condition," a combination nothing should ever construct. Six verbs make every
+invalid combination unspellable instead of merely discouraged — the same
+argument this protocol already made twice, for case carrying direction and
+for the self-marking `#id`: **put the discriminator in the verb, where it
+cannot be mismatched.**
 
 ```
-                      before                                    after
-MOVE <kind> <a> <b> <c> <stop> <limit> <timeout> #<id>    MOVE_X / MOVE_V
-WHEELS <left> <right> <duration> [#<id>]                  WHEELS_X / WHEELS_V
-GOTO <x> <y> <frame> <speed> <arrive> <timeout> #<id>     GO_TO_R / GO_TO_W
+WHEELS_X <left> <right> <cruise> <timeout> #<id>
+WHEELS_V <left> <right> <duration> #<id>
+MOVE_X   <distance> <rotation> <cruise> <timeout> #<id>
+MOVE_V   <v_x> <omega> <duration> #<id>
+GO_TO_R  <x> <y> <speed> <arrive> <timeout> #<id>
+GO_TO_W  <x> <y> <speed> <arrive> <timeout> #<id>
 ```
 
-The argument is the one this protocol has already made twice — for case carrying
-direction, and for the self-marking `#id`: **put the discriminator in the verb,
-where it cannot be mismatched.** `MOVE w 100 -100 0 a 1571 4000 #8` is spellable
-today and means something odd — a wheels-kind command with an angular stop
-condition. After the split, every invalid combination is unspellable rather than
-merely discouraged.
+It also closes two gaps that are not stylistic. `wheels_x` **has no prior wire
+form at all** — even the rejected discriminated-`MOVE` draft couldn't express
+a pure wheel-distance command outside a body-frame `kind`. And a single-`stop`
+`MOVE` cannot express `move_x`: a command that is a distance *and* a rotation
+needs two stop conditions satisfied together, and a `stop` field names one.
 
-It also closes two gaps that are not stylistic. `wheels_x` **has no wire form at
-all** today. And `move_x` cannot be expressed: `MOVE` carries one stop condition,
-so a command that is a distance *and* a rotation has nowhere to go.
-
-The adapter seam moves with it — `Protocol::Adapter`'s single `onWheels` becomes
-six methods, one per verb, each receiving decoded typed arguments and returning
-a `Result` exactly as today ([`protocol.md`](protocol.md) §3).
+The adapter seam extends the same way `Protocol::Adapter` is already
+structured — one method per verb, decoded typed arguments in, a `Result`
+out ([`protocol.md`](protocol.md) §4) — six new methods alongside `onWheels`,
+not a replacement for it.
 
 ### 9.3 Decisions worth naming
 
@@ -620,9 +643,9 @@ Stated here so they are easy to reverse rather than buried in prose.
 3. **`go_to_w`'s pose source is pluggable** rather than assuming an OTOS is
    fitted (§3.6).
 4. **No `v_y` argument** on `move_v` until a holonomic base exists (§3.4).
-5. **`stop()` acts on the current motion and takes a deceleration choice**
-   (§3.7, §9.1), which changes `STOP`'s wire semantics from planned-and-queued
-   to immediate-and-profiled. `estop()` stays exactly what it was.
+5. **`stop()` acts on the current motion**, matching `STOP`'s existing
+   behavior (§3.7, §9.1) — and additionally **takes a deceleration choice**,
+   new capability the current wire does not have. `estop()` is unchanged.
 
 ---
 

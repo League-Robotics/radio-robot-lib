@@ -1,5 +1,5 @@
 // mock_adapter.h -- Protocol::Adapter test double for the protocol host
-// test harness (docs/plan.md Step 3). Records which methods fired and
+// test harness (Step 3). Records which methods fired and
 // with what arguments so a ctypes shim can read them back; canned
 // return values are plain public fields a test sets before feed()ing a
 // line. Test scaffolding only: nothing under src/ knows this file

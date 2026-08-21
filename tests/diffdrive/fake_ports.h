@@ -1,5 +1,5 @@
 // fake_ports.h -- deterministic Motor/Clock/Sleeper/FiberLauncher fakes for
-// the DiffDrive host test harness (docs/plan.md Step 2). Test scaffolding
+// the DiffDrive host test harness (Step 2). Test scaffolding
 // only: nothing in src/ knows this file exists, and it is never linked
 // into anything but this test's own shared library.
 //
@@ -20,7 +20,7 @@
 // ---------------------------------------------------------------------------
 // A deliberately trivial, deterministic plant: first-order lag toward
 // (duty * ceiling), integrated. Same shape as fidelity_harness.cpp's own
-// Plant class -- reused rather than reinvented, per docs/plan.md Step 2.
+// Plant class -- reused rather than reinvented, per Step 2.
 // Counts-native throughout: unlike the fidelity gate, this harness has no
 // mm/counts bridge to maintain, because nothing outside this file ever
 // sees millimetres.

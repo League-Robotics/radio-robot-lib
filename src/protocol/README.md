@@ -11,19 +11,18 @@ wire byte: `feed()` reassembles arbitrary byte blocks into `\n`-terminated
 lines, tokenizes each line in place on runs of `' '` (no allocation, no
 `std::string`, no exceptions), dispatches to an `Adapter`, and formats
 the reply -- exactly once per verb, so the adapter can neither forget a
-reply nor invent a shape for one. See `docs/protocol-v6-spec.md` for the
-wire format and `docs/design/protocol.md` for the object model.
+reply nor invent a shape for one. See `docs/design/protocol.md` for the
+wire format and the object model -- both live in that one document now.
 
 **Grammar note (2026-08-20):** this package was rewritten wholesale from
 an earlier colon-delimited, positional-id grammar to the space/`#id`
-grammar (`line ::= sp? verb (sp field)* sp? '\n'`, spec S2, commit
-5a5b6da) -- a run of spaces is one separator, a blank/all-whitespace
-line is ignored silently, and the correlation id is a trailing,
-self-marking `#<n>` field rather than a positional one. See
-`protocol_handler.h`'s own file header for the full resolution history
-of what changed and why.
+grammar (`line ::= sp? verb (sp field)* sp? '\n'`, commit 5a5b6da) -- a
+run of spaces is one separator, a blank/all-whitespace line is ignored
+silently, and the correlation id is a trailing, self-marking `#<n>`
+field rather than a positional one. See `protocol_handler.h`'s own file
+header for the full resolution history of what changed and why.
 
-## Scope (docs/plan.md Step 3)
+## Scope
 
 In: `HELLO PING ID VER STATUS HELP GET SET TLM WHEELS STOP ESTOP`, and
 their replies. No kernel, no motors, no config storage, no transport --
@@ -38,10 +37,10 @@ odometry this library does not own.
 - **standalone build** (`test_protocol_package.py`) -- the package
   compiles with an include path of exactly its own directory.
 - **golden vectors** (`golden_vectors.txt`, driven by
-  `test_protocol_harness.py::test_golden_vectors`) -- the spec S11.3
-  cross-language conformance fixture: literal wire examples from the
-  spec text plus every `Result`/error-code combination the handler can
-  emit, asserted byte-for-byte through a mock adapter. Also covers the
+  `test_protocol_harness.py::test_golden_vectors`) -- the cross-language
+  conformance fixture: literal wire examples plus every `Result`/error-code
+  combination the handler can emit, asserted byte-for-byte through a mock
+  adapter. Also covers the
   new grammar's own rules: space-run collapsing, the bare vs id-carrying
   `ok`/`err` reply shapes, and the malformed-line `#id` recovery rule.
 - **feed()'s byte-block contract, case-as-direction, arity, blank/
@@ -69,7 +68,7 @@ odometry this library does not own.
   `formatConfigValue()`) and a characterization test for one
   deliberately-not-fixed C-string quirk
   (`test_embedded_nul_immediately_after_verb_matches_bare_verb`) -- see
-  that file's own module docstring, and `docs/design/protocol.md` S9.4,
+  that file's own module docstring, and `docs/design/protocol.md` §9.4,
   for the full story.
 
 Read `protocol_handler.h`'s file header for the numbered list of wire
@@ -80,10 +79,9 @@ own stricter no-sign numeric grammar).
 
 ## Provenance
 
-New code, sprint per `docs/plan.md` Step 3 (2026-08-20) -- unlike
-`src/diffdrive/`, nothing here is extracted from an existing
-implementation. `src/archive/protocol-v6/wire_v6_verbs.h` is reference
-only (verb-name/arity cross-check); nothing in this package includes
-or depends on it. Migrated from the colon grammar to the space/`#id`
-grammar the same day, following the stakeholder's separator/id decision
-recorded in `docs/protocol-v6-spec.md` S2 (commit 5a5b6da).
+New code (2026-08-20) -- unlike `src/diffdrive/`, nothing here is
+extracted from an existing implementation. `src/archive/protocol-v6/
+wire_v6_verbs.h` is reference only (verb-name/arity cross-check);
+nothing in this package includes or depends on it. Migrated from the
+colon grammar to the space/`#id` grammar the same day, per
+`docs/design/protocol.md` §9.6 (commit 5a5b6da).

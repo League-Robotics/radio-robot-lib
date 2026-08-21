@@ -1,5 +1,5 @@
 """tests/adapter/test_diffdrive_adapter.py -- the DiffDriveAdapter
-acceptance harness (docs/plan.md Step 4).
+acceptance harness (Step 4).
 
 This is the one test that links all three pieces built so far:
 ProtocolHandler (src/protocol/), DifferentialDrive (src/diffdrive/), and
@@ -10,7 +10,7 @@ fake ports (tests/diffdrive/fake_ports.h) unmodified.
 
 Three things this file exists to prove, each with its own test:
 
-1. **The end-to-end acceptance** (docs/plan.md Step 4): WHEELS in as
+1. **The end-to-end acceptance** (Step 4): WHEELS in as
    bytes, encoder counts climb in t: frames, the lease expiry stops the
    wheels, ESTOP latches with no ack.
 
@@ -23,7 +23,7 @@ Three things this file exists to prove, each with its own test:
    actually go red with the wheels swapped.
 
 3. **Lease expiry, measured at the fake motor** -- not inferred from the
-   kernel's own `leaseExpired` flag, matching docs/plan.md Step 2's own
+   kernel's own `leaseExpired` flag, matching Step 2's own
    standard for the same claim.
 
 Run with::
@@ -164,7 +164,7 @@ def _sink_text(lib, handle) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. End-to-end acceptance (docs/plan.md Step 4)
+# 1. End-to-end acceptance (Step 4)
 # ---------------------------------------------------------------------------
 
 def test_acceptance_wheels_to_lease_expiry_to_estop(tmp_path):

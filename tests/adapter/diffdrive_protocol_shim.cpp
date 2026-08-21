@@ -1,5 +1,5 @@
 // diffdrive_protocol_shim.cpp -- extern "C" ctypes surface for the
-// combined DiffDriveAdapter acceptance harness (docs/plan.md Step 4).
+// combined DiffDriveAdapter acceptance harness (Step 4).
 // Test scaffolding only: nothing in src/ knows this file exists, and it
 // is compiled only into this test's own throwaway shared library (see
 // test_diffdrive_adapter.py).
@@ -9,7 +9,7 @@
 // ProtocolHandler over a recording sink (the same small Sink shape
 // protocol_shim.cpp already uses), and the DiffDriveAdapter
 // (src/adapter/diffdrive_adapter.{h,cpp}) wiring the two together --
-// exactly the seam docs/plan.md Step 4 exists to close.
+// exactly the seam Step 4 exists to close.
 #include <cstdint>
 #include <cstring>
 #include <string>

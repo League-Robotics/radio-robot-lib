@@ -1,12 +1,12 @@
 """tests/protocol/test_protocol_harness.py -- the protocol handler host
-test harness (docs/plan.md Step 3).
+test harness.
 
 Protocol::ProtocolHandler (src/protocol/protocol_handler.{h,cpp}) is
 exercised entirely through a MockAdapter + RecordingSink
 (tests/protocol/mock_adapter.h, protocol_shim.cpp) -- no kernel, no
-motors, no transport, matching docs/design/protocol.md Step 3's scope.
+motors, no transport, matching docs/design/protocol.md's own scope.
 
-The wire grammar is the SPACE/`#id` grammar (docs/protocol-v6-spec.md
+The wire grammar is the SPACE/`#id` grammar (docs/design/protocol.md
 S2, stakeholder decision 2026-08-20, commit 5a5b6da) -- this file was
 rewritten wholesale from an earlier colon-delimited, positional-id
 grammar; see protocol_handler.h's own file header for the resolution
@@ -15,8 +15,9 @@ history of what changed and why.
 Two kinds of coverage:
 
 1. test_golden_vectors drives every scenario in golden_vectors.txt
-   (spec S11.3's cross-language conformance fixture) through the
-   handler and asserts the sink's captured output byte-for-byte.
+   (docs/design/protocol.md S9.4's cross-language conformance fixture)
+   through the handler and asserts the sink's captured output
+   byte-for-byte.
 
 2. The individual test_* functions below cover what a tidy golden
    vector never exercises: feed()'s byte-block-boundary contract

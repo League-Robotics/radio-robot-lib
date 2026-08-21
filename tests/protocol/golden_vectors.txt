@@ -1,22 +1,20 @@
-# golden_vectors.txt -- protocol v6 cross-language conformance fixture
-# (docs/protocol-v6-spec.md S11.3), for the C++ handler under
-# tests/protocol/test_protocol_harness.py::test_golden_vectors.
+# golden_vectors.txt -- cross-language conformance fixture (see
+# docs/design/protocol.md S9.4's "archetype" framing), for the C++
+# handler under tests/protocol/test_protocol_harness.py::test_golden_vectors.
 #
-# Rewritten 2026-08-20 for the space/`#id` grammar (spec commit 5a5b6da)
-# -- every vector's SHAPE changed, not just its separator: the old
-# `ok:0` id-less arm is now a BARE `ok` (no id token at all), and a
-# supplied id is spelled `#<n>` in TRAILING position rather than a
-# positional `:<id>` field.
+# Rewritten 2026-08-20 for the space/`#id` grammar (commit 5a5b6da) --
+# every vector's SHAPE changed, not just its separator: the old `ok:0`
+# id-less arm is now a BARE `ok` (no id token at all), and a supplied
+# id is spelled `#<n>` in TRAILING position rather than a positional
+# `:<id>` field.
 #
-# Every vector below is either a LITERAL example already written
-# somewhere in the spec text (or docs/plan.md's own WHEELS acceptance
-# criterion), or a mechanical instance of a format the spec states
-# generically (e.g. "ok #<id>") -- written alongside the handler, per
-# docs/plan.md Step 3, not authored afterward to match its output.
-# Each vector cites its source in a comment.
+# Every vector below is either a literal example written alongside the
+# handler as it was built, or a mechanical instance of a format the
+# design states generically (e.g. "ok #<id>") -- not authored
+# afterward to match the implementation's output. Each vector cites its
+# source in a comment.
 #
-# ---- format (this fixture file's own, invented for this harness --
-# spec S11.3 does not prescribe one) ----
+# ---- format (this fixture file's own, invented for this harness) ----
 #
 # Blocks are separated by one or more blank lines. Comment lines start
 # with '#'. Each block is, in order:
@@ -166,7 +164,7 @@ IN SET wheel_control.pid_kp 0.03 #9
 OUT err #9 11
 
 # ---- 8.3 Error-code coverage: every code Result can produce
-# (adapter.h; docs/protocol-v6-spec.md S8.3) now has at least one wire
+# (adapter.h; docs/design/protocol.md S6.1) now has at least one wire
 # vector IN THIS FIXTURE -- codes 3 and 11 already had one each above
 # (S7.1's and S8.2's own literal examples); this block adds the
 # remaining six (1, 2, 4, 6, 8, 10) so a port author working from
@@ -217,9 +215,8 @@ OUT err #9 10
 
 # ---- 5. Motion ----
 
-# docs/plan.md Step 4's own acceptance criterion, run one step early
-# because the handler alone is enough to prove it (updated for the
-# space/#id grammar):
+# The end-to-end acceptance criterion this whole repo exists to prove,
+# run one step early because the handler alone is enough to show it:
 #   feed("WHEELS 100 100 1000 #5\n") -> sink contains "ok #5"
 SETUP wheelsresult 0
 IN WHEELS 100 100 1000 #5
