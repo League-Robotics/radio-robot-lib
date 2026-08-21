@@ -23,7 +23,7 @@ one-line-at-a-time tests do not:
    handler that wedges after one bad frame is useless on a lossy radio
    link. Every adversarial case below is followed by an explicit line
    terminator (flushing any pending partial/overflowing line) and then
-   `PING\n`, and the test asserts the reply `pong:0\n` is the last thing
+   `PING\n`, and the test asserts the reply `pong 0\n` is the last thing
    the sink produced. (Sending the recovery command WITHOUT first
    flushing the garbage line would be testing a different, stricter
    property -- whether a well-formed command survives being
@@ -32,26 +32,52 @@ one-line-at-a-time tests do not:
    the garbage line first, the way a real next line from a real host
    would arrive.)
 
-3. **Two genuine parser bugs this sweep found, both fixed in
-   protocol_handler.cpp** (see that file's own comments at the fix
-   site for the full story) -- this file's
+3. **Grammar migration, 2026-08-20 (spec commit 5a5b6da).** This file
+   was rewritten from a colon-delimited, positional-id grammar to the
+   space/`#id` grammar (protocol_handler.h's own file header has the
+   full resolution history). Every adversarial case below was
+   translated to the new separator, and several are NEW -- specific to
+   hazards the space grammar introduces that the colon grammar never
+   had (a self-marking `#id` token, whitespace bytes other than ' '
+   remaining legal-but-hazardous field content, huge space runs, a
+   blank/all-whitespace line as its own first-class case). See each
+   case's own comment for which.
+
+4. **Three genuine parser bugs found during the original (colon-era)
+   hardening sweep, all still fixed in protocol_handler.cpp, carried
+   forward through the grammar migration** (see that file's own
+   comments at the fix site for the full story) -- this file's
    test_hex_float_no_longer_bypasses_no_exponents_rule and
    test_leading_whitespace_no_longer_silently_accepted are their
    regression tests:
 
-   - `SET:name:0x1.8p3` (C99 hex-float syntax) used to be silently
+   - `SET name 0x1.8p3` (C99 hex-float syntax) used to be silently
      ACCEPTED as 12.0, bypassing the "no exponents" rule (spec S2.2)
      entirely, because the exponent check only looked for 'e'/'E', not
      a hex float's 'x'/'p'. Neither Python's `float()` nor
      JavaScript's `Number()`/`parseFloat()` accepts this syntax, so
      this was a C++-only divergence a straight port would NOT
-     reproduce -- an archetype-relevant finding on its own.
-   - A leading-whitespace numeric field (`WHEELS: 100:100:1000`, note
-     the space after the first ':') used to be silently ACCEPTED,
+     reproduce -- an archetype-relevant finding on its own. Entirely a
+     property of strtof() parsing an already-extracted field's own
+     content, so unaffected by the colon-to-space migration.
+   - A leading-whitespace numeric field used to be silently ACCEPTED,
      because strtol/strtoul/strtof all skip leading whitespace per the
      C standard -- contradicting this file's own "strict, whole field
      consumed" doc comment, which only actually held for TRAILING
-     whitespace.
+     whitespace. Under the OLD colon grammar this was reachable via a
+     literal leading SPACE right after a ':' separator (e.g.
+     "WHEELS: 100:100:1000"). Under the NEW space grammar that exact
+     shape is now STRUCTURALLY IMPOSSIBLE: the tokenizer collapses
+     every run of ' ' into one separator, so a token can never begin
+     with ' ' -- but the guard is NOT dead code, because spec S2's
+     field grammar (`field ::= any bytes except ' ' and '\n'`) still
+     allows '\t', '\v', '\f', and '\r' as ordinary, legal field bytes,
+     and strtol/strtoul/strtof would silently skip any of THOSE too.
+     This file's regression tests were rewritten to use a leading TAB
+     (or another non-space whitespace byte) instead of a leading space,
+     since that is the hazard that actually survives the migration --
+     see protocol_handler.cpp's isWireSpace() comment for the same
+     reachability analysis at the fix site.
 
    A third bug (formatConfigValue() casting a NaN adapter value to
    uint32_t -- real undefined behavior, confirmed live by UBSan) is
@@ -60,7 +86,8 @@ one-line-at-a-time tests do not:
    only through the Adapter seam (a NaN can never arrive over the wire
    -- parseFloatField already rejects it on input), not through feed()
    directly, so it gets its own tiny driver rather than living in the
-   generic fuzz list.
+   generic fuzz list. Pure value formatting, unaffected by the grammar
+   migration.
 
 Run with::
 
@@ -169,7 +196,8 @@ def _assert_survived(result, context):
 
 
 # ---------------------------------------------------------------------------
-# Adversarial cases (spec grammar: line ::= verb (':' field)* '\n', verb
+# Adversarial cases (spec grammar: line ::= verb (' ' field)* '\n', a run
+# of spaces is ONE separator, id is a trailing '#'-prefixed field, verb
 # case is direction, max line 240 bytes including the terminator). Each
 # entry is (name, [chunk, ...]) -- one or more feed() calls' worth of
 # raw bytes, deliberately NOT closed with a clean terminator in some
@@ -181,50 +209,74 @@ ADVERSARIAL_CASES = [
     # ---- embedded NUL bytes mid-line ----
     ("embedded_nul_mid_verb", [b"PI\x00NG\n"]),
     ("embedded_nul_after_verb", [b"PING\x00extra\n"]),
-    ("embedded_nul_in_set_name", [b"SET:foo\x00bar:1.0\n"]),
-    ("embedded_nul_in_set_value", [b"SET:group.alpha:1\x002:9\n"]),
-    ("embedded_nul_in_wheels_field", [b"WHEELS:1\x0000:100:1000\n"]),
-    ("embedded_nul_in_get_name", [b"GET:foo\x00bar\n"]),
+    ("embedded_nul_in_set_name", [b"SET foo\x00bar 1.0\n"]),
+    ("embedded_nul_in_set_value", [b"SET group.alpha 1\x002 #9\n"]),
+    ("embedded_nul_in_wheels_field", [b"WHEELS 1\x0000 100 1000\n"]),
+    ("embedded_nul_in_get_name", [b"GET foo\x00bar\n"]),
+    ("embedded_nul_in_id", [b"STOP #1\x002\n"]),
 
     # ---- 8-bit / high-ASCII and UTF-8 sequences ----
     ("high_ascii_full_line", [bytes(range(0x80, 0x100)) + b"\n"]),
     ("high_ascii_verb", [bytes([0xC0, 0xC1, 0xFE, 0xFF]) + b"\n"]),
     ("utf8_verb", ["日本語".encode("utf-8") + b"\n"]),
     ("utf8_in_set_value",
-     [b"SET:" + "日本語".encode("utf-8") + b":1.0\n"]),
+     [b"SET " + "日本語".encode("utf-8") + b" 1.0\n"]),
     ("utf8_in_get_name",
-     [b"GET:" + "éèê\U0001F600".encode("utf-8") + b"\n"]),
+     [b"GET " + "éèê\U0001F600".encode("utf-8") + b"\n"]),
 
     # ---- other control characters ----
     ("c0_control_chars_full_line",
      [bytes(b for b in range(1, 32) if b not in (0x0A,)) + b"\n"]),
     ("del_byte_full_line", [b"\x7f\n"]),
-    ("del_byte_in_set_value", [b"SET:group.alpha:1\x7f0\n"]),
+    ("del_byte_in_set_value", [b"SET group.alpha 1\x7f0\n"]),
     ("bell_and_escape_in_verb", [b"P\x07I\x1bNG\n"]),
 
-    # ---- very long runs of ':' / colon-only lines / trailing colons ----
-    ("very_long_colon_run", [b":" * 300 + b"\n"]),
-    ("line_only_colons_short", [b":::\n"]),
-    ("line_only_colons_long", [b":" * 238 + b"\n"]),
-    ("verb_with_trailing_colons", [b"PING" + b":" * 50 + b"\n"]),
-    ("known_verb_many_trailing_colons", [b"STOP" + b":" * 100 + b"\n"]),
+    # ---- very long runs of '#' / hash-only lines / trailing hashes --
+    # the new grammar's own special byte, replacing the old colon-flood
+    # cases (a run of ':' meant nothing special under the space grammar,
+    # so those cases are retired in favor of the byte that now IS
+    # special: '#', the id marker) ----
+    ("very_long_hash_run", [b"#" * 300 + b"\n"]),
+    ("line_only_hashes_short", [b"###\n"]),
+    ("line_only_hashes_long", [b"#" * 238 + b"\n"]),
+    ("verb_directly_followed_by_hashes_no_space",
+     [b"PING" + b"#" * 50 + b"\n"]),
+    ("known_verb_directly_followed_by_hashes_no_space",
+     [b"STOP" + b"#" * 100 + b"\n"]),
+    ("known_verb_space_then_long_non_digit_hash_field",
+     [b"STOP " + b"#" * 100 + b"\n"]),
+    ("bare_hash_as_id_no_digits", [b"STOP #\n"]),
+    ("hash_then_non_digit", [b"STOP #x\n"]),
+    ("hash_with_leading_plus", [b"STOP #+5\n"]),
+    ("hash_with_leading_minus", [b"STOP #-5\n"]),
+    ("multiple_hash_tokens_last_one_wins",
+     [b"STOP #5 #7\n"]),  # wrong arity (2 fields); #7 IS the recoverable
+                           # last token even though #5 looks id-shaped too
+    ("huge_digit_run_after_hash_overflows_uint32",
+     [b"STOP #" + b"9" * 300 + b"\n"]),
 
-    # ---- empty fields everywhere ----
-    ("empty_fields_set", [b"SET::::::\n"]),
-    ("empty_fields_wheels", [b"WHEELS::::\n"]),
-    ("empty_fields_get", [b"GET:\n"]),
-    ("empty_fields_tlm", [b"TLM:\n"]),
-    ("empty_fields_stop", [b"STOP:\n"]),
+    # ---- space-run stress: the new grammar's own separator, hammered --
+    ("huge_space_run_between_fields",
+     [b"WHEELS 100" + b" " * 200 + b"100 1000\n"]),
+    ("many_spaces_then_nothing_is_blank",
+     [b" " * 239 + b"\n"]),  # all-whitespace line, near the 240-byte cap
+    ("verb_alone_no_trailing_content", [b"WHEELS\n"]),
+    ("verb_then_trailing_spaces_only", [b"WHEELS" + b" " * 50 + b"\n"]),
+    ("stop_alone_no_id", [b"STOP\n"]),
+    ("stop_then_trailing_spaces_only", [b"STOP" + b" " * 50 + b"\n"]),
 
-    # ---- empty lines / blank-line runs ----
+    # ---- empty lines / blank-line runs (spec S2: silently ignored, NOT
+    # malformed -- this changed from the colon grammar, where an empty
+    # line dispatched as an unknown zero-length verb) ----
     ("empty_line", [b"\n"]),
     ("three_empty_lines", [b"\n\n\n"]),
     ("many_empty_lines", [b"\n" * 20]),
+    ("mixed_blank_and_whitespace_lines", [b"\n   \n\t\n \n"]),
 
     # ---- \r handling: lone \r, \r\n, \n\r ----
     ("crlf", [b"\r\n"]),
     ("lfcr", [b"\n\r"]),
-    ("cr_mid_field_not_at_terminator", [b"WHEELS:\r100:100:1000\n"]),
+    ("cr_mid_field_not_at_terminator", [b"WHEELS \r100 100 1000\n"]),
     ("multiple_lone_cr_mid_line", [b"PING\r\r\r\n"]),
 
     # ---- lines at 239 / 240 / 241 bytes, and further over ----
@@ -235,28 +287,39 @@ ADVERSARIAL_CASES = [
 
     # ---- unterminated: partial lines, huge no-terminator blobs,
     # spread across MULTIPLE feed() calls ----
-    ("unterminated_short_fragment", [b"WHEELS:100:100"]),
+    ("unterminated_short_fragment", [b"WHEELS 100 100"]),
     ("unterminated_lone_cr", [b"\r"]),
     ("unterminated_4kb_single_call", [b"A" * 4096]),
     ("unterminated_plausible_prefix_then_huge_continuation",
-     [b"WHEELS:100:100:1000", b"B" * 5000]),
+     [b"WHEELS 100 100 1000", b"B" * 5000]),
     ("unterminated_split_across_many_small_calls",
-     [b"W", b"H", b"E", b"E", b"L", b"S", b":", b"1" * 300]),
+     [b"W", b"H", b"E", b"E", b"L", b"S", b" ", b"1" * 300]),
 
     # ---- mixed-case / case-as-direction edge cases (spec S2.1) ----
     ("all_lowercase_verb_dropped", [b"ping\n"]),
-    ("mixed_case_verb_unknown", [b"Wheels:100:100:1000\n"]),
-    ("lowercase_verb_with_colons_and_high_bytes",
-     [b"dbg:" + bytes(range(0x80, 0x90)) + b"\n"]),
+    ("mixed_case_verb_unknown", [b"Wheels 100 100 1000\n"]),
+    ("lowercase_verb_with_spaces_and_high_bytes",
+     [b"dbg " + bytes(range(0x80, 0x90)) + b"\n"]),
 
     # ---- numeric-field adversarial spellings ----
-    ("wheels_field_all_pluses", [b"WHEELS:+100:+100:+1000\n"]),
-    ("wheels_field_leading_zeros", [b"WHEELS:000100:00100:0001000\n"]),
-    ("set_value_only_a_sign", [b"SET:group.alpha:-\n"]),
-    ("set_value_only_a_dot", [b"SET:group.alpha:.\n"]),
-    ("set_value_many_dots", [b"SET:group.alpha:1.2.3.4\n"]),
+    ("wheels_field_all_pluses", [b"WHEELS +100 +100 +1000\n"]),
+    ("wheels_field_leading_zeros", [b"WHEELS 000100 00100 0001000\n"]),
+    ("set_value_only_a_sign", [b"SET group.alpha -\n"]),
+    ("set_value_only_a_dot", [b"SET group.alpha .\n"]),
+    ("set_value_many_dots", [b"SET group.alpha 1.2.3.4\n"]),
     ("wheels_duration_huge_digit_run",
-     [b"WHEELS:100:100:" + b"9" * 40 + b"\n"]),
+     [b"WHEELS 100 100 " + b"9" * 40 + b"\n"]),
+
+    # ---- non-space whitespace bytes as a field's LEADING byte -- the
+    # hazard that survives the grammar migration (a literal leading ' '
+    # is now structurally impossible; '\t'/'\v'/'\f'/'\r' remain legal,
+    # ordinary field bytes per spec S2's field grammar, and are exactly
+    # what isWireSpace() in protocol_handler.cpp still guards against) --
+    ("tab_leading_wheels_field", [b"WHEELS \t100 100 1000\n"]),
+    ("vtab_leading_set_value", [b"SET group.alpha \v1.0\n"]),
+    ("formfeed_leading_wheels_duration", [b"WHEELS 100 100 \f1000\n"]),
+    ("cr_leading_set_value_not_at_terminator",
+     [b"SET group.alpha \r1.0\n"]),
 ]
 
 
@@ -278,7 +341,7 @@ def test_recovers_after_adversarial_input(fuzz_driver, name, chunks):
     # dodge the harder case.
     result = _run(fuzz_driver, list(chunks) + [b"\n", b"PING\n"])
     _assert_survived(result, f"case {name!r}")
-    assert result.stdout.endswith(b"pong:0\n"), (
+    assert result.stdout.endswith(b"pong 0\n"), (
         f"case {name!r}: PING after the garbage did not produce the "
         f"expected reply -- handler did not recover\n"
         f"stdout: {result.stdout!r}")
@@ -298,7 +361,7 @@ def test_recovers_after_every_adversarial_input_in_one_session(fuzz_driver):
         chunks.append(b"PING\n")
     result = _run(fuzz_driver, chunks, timeout=30)
     _assert_survived(result, "combined adversarial session")
-    pong_count = result.stdout.count(b"pong:0\n")
+    pong_count = result.stdout.count(b"pong 0\n")
     # +1, not exactly len(ADVERSARIAL_CASES): the "embedded_nul_after_verb"
     # case (b"PING\x00extra\n") is itself indistinguishable from a bare
     # "PING\n" to this parser -- see
@@ -317,10 +380,11 @@ def test_recovers_after_every_adversarial_input_in_one_session(fuzz_driver):
 
 def test_random_byte_fuzz_survives_and_recovers(fuzz_driver):
     """Broad-spectrum fuzzing beyond the hand-picked cases above:
-    uniformly random byte strings (any value 0-255, including '\\n' and
-    ':' at random positions, so a single blob can contain several
-    "lines" of pure noise), FIXED seed so a failure reproduces exactly.
-    Each trial is followed by the same flush + PING recovery check."""
+    uniformly random byte strings (any value 0-255, including '\\n',
+    ' ', and '#' at random positions, so a single blob can contain
+    several "lines" of pure noise, and can spuriously look like a
+    well-formed id), FIXED seed so a failure reproduces exactly. Each
+    trial is followed by the same flush + PING recovery check."""
     rng = random.Random(20260820)
     trial_count = 40
     for trial in range(trial_count):
@@ -328,24 +392,30 @@ def test_random_byte_fuzz_survives_and_recovers(fuzz_driver):
         blob = bytes(rng.randrange(256) for _ in range(length))
         result = _run(fuzz_driver, [blob, b"\n", b"PING\n"])
         _assert_survived(result, f"random fuzz trial {trial} (len={length})")
-        assert result.stdout.endswith(b"pong:0\n"), (
+        assert result.stdout.endswith(b"pong 0\n"), (
             f"random fuzz trial {trial} (len={length}): did not recover\n"
             f"blob: {blob!r}\nstdout: {result.stdout!r}")
 
 
 def test_embedded_nul_immediately_after_verb_matches_bare_verb(fuzz_driver):
-    """NOT a crash, and not something this pass fixes -- a
+    """NOT a crash, and not something either hardening pass fixes -- a
     characterization test that PINS a real divergence for the
     "archetype" question, so it cannot silently change later without a
-    test noticing.
+    test noticing. Re-verified (not just carried forward) after the
+    2026-08-20 grammar migration: the ROOT CAUSE is the same, but the
+    MECHANISM shifted, so this needed an actual re-check, not a blind
+    port.
 
-    Every wire-touching comparison in this handler (dispatch()'s
-    strcmp() verb lookup, and every field decode) operates on
-    NUL-terminated C strings, per protocol_handler.h's own documented
-    "no allocation, no std::string" constraint. strcmp() stops
-    comparing at the first NUL byte in EITHER operand -- so
-    "PING\x00extra" and "PING" compare EQUAL, because both have a NUL
-    at index 4. The result: `PING\x00extra\n` dispatches exactly like
+    Under the OLD colon grammar, the truncation happened via strchr()
+    (find the verb-terminating ':') and strcmp() both stopping at the
+    first NUL in a C string. Under the NEW space grammar there is no
+    strchr() at all -- but tokenizeLine()'s own forward scan
+    (`while (*p != '\\0' && *p != ' ') ++p;`, protocol_handler.cpp) is
+    itself written against NUL-terminated C strings, per this file's
+    own documented "no allocation, no std::string" constraint (spec
+    S2.2), so it ALSO stops at the first embedded NUL and treats it
+    exactly like the true end of the line. The observable result is
+    identical either way: `PING\x00extra\n` dispatches exactly like
     `PING\n`, silently discarding "extra" (and anything else up to the
     real '\n') with no malformed-count increment and no sign anything
     was dropped.
@@ -358,7 +428,7 @@ def test_embedded_nul_immediately_after_verb_matches_bare_verb(fuzz_driver):
     This is exactly the kind of thing a MicroPython or JavaScript port
     would NOT reproduce: `bytes`/`str` equality in Python, and string
     equality in JavaScript, compare the FULL length, embedded NUL bytes
-    included -- `b"PING\x00extra" == b"PING"` is False. A port that
+    included -- `b"PING\x00extra" == b"PING"` is `False`. A port that
     otherwise faithfully mirrors this C++ handler's logic would treat
     this exact input as an unknown verb (or a malformed one), not as
     PING, and that divergence would only surface as a conformance-suite
@@ -366,13 +436,12 @@ def test_embedded_nul_immediately_after_verb_matches_bare_verb(fuzz_driver):
     is written down here."""
     result = _run(fuzz_driver, [b"PING\x00extra\n"])
     _assert_survived(result, "embedded NUL immediately after a verb name")
-    assert result.stdout == b"pong:0\n", (
+    assert result.stdout == b"pong 0\n", (
         f"expected this to (surprisingly) dispatch as PING, got: "
         f"{result.stdout!r} -- if this now differs, the C-string "
         f"dispatch behavior changed and this module's docstring / "
         f"test_recovers_after_every_adversarial_input_in_one_session's "
         f"pong-count math both need updating")
-
 
 
 # ---------------------------------------------------------------------------
@@ -381,15 +450,15 @@ def test_embedded_nul_immediately_after_verb_matches_bare_verb(fuzz_driver):
 # ---------------------------------------------------------------------------
 
 def test_hex_float_no_longer_bypasses_no_exponents_rule(fuzz_driver):
-    """`SET:name:0x1.8p3` is C99 hex-float syntax -- strtof() parses it
+    """`SET name 0x1.8p3` is C99 hex-float syntax -- strtof() parses it
     to 12.0 unconditionally, and the old exponent guard only checked
     for 'e'/'E', never 'x'/'X', so this slipped through as if it were
     an ordinary decimal literal. Must now be rejected as malformed
     (err code 2, ERR_BADARG), the same as any other unparseable value,
     and must NOT have reached the adapter's onSet()."""
-    result = _run(fuzz_driver, [b"SET:group.alpha:0x1.8p3\n"])
+    result = _run(fuzz_driver, [b"SET group.alpha 0x1.8p3\n"])
     _assert_survived(result, "hex float SET")
-    assert result.stdout == b"err:0:2\n", (
+    assert result.stdout == b"err 2\n", (
         f"hex-float value was not rejected: {result.stdout!r}")
 
 
@@ -397,54 +466,66 @@ def test_hex_float_no_longer_bypasses_no_exponents_rule(fuzz_driver):
     b"0x1p0", b"0X1P1", b"0x1.8p3", b"0xAp0", b"0x0p0",
 ])
 def test_hex_float_rejected_for_several_spellings(fuzz_driver, spelling):
-    result = _run(fuzz_driver, [b"SET:group.alpha:" + spelling + b"\n"])
+    result = _run(fuzz_driver, [b"SET group.alpha " + spelling + b"\n"])
     _assert_survived(result, f"hex float spelling {spelling!r}")
-    assert result.stdout == b"err:0:2\n", (
+    assert result.stdout == b"err 2\n", (
         f"hex-float spelling {spelling!r} was not rejected: "
         f"{result.stdout!r}")
 
 
 def test_leading_whitespace_no_longer_silently_accepted(fuzz_driver):
-    """A leading space (or tab, or a stray '\\r' that has drifted
-    mid-field rather than sitting immediately before the terminator) in
-    a numeric field used to sail through strtol/strtoul/strtof, which
-    all skip leading whitespace per the C standard -- silently
-    accepting "WHEELS: 100:100:1000" as left=100. Must now be rejected
-    as malformed (ERR_BADARG), matching this file's own "strict, whole
-    field consumed" contract."""
-    result = _run(fuzz_driver, [b"WHEELS: 100:100:1000\n"])
-    _assert_survived(result, "leading-space WHEELS field")
-    assert result.stdout == b"err:0:2\n", (
+    """A leading TAB in a numeric field used to sail through
+    strtol/strtoul/strtof, which all skip leading whitespace per the C
+    standard -- silently accepting "WHEELS \\t100 100 1000" as left=100.
+    Must now be rejected as malformed (ERR_BADARG), matching this
+    file's own "strict, whole field consumed" contract.
+
+    This is deliberately a TAB, not a leading SPACE: under the space
+    grammar a leading space can never reach a field decoder at all (the
+    tokenizer consumes it as the separator itself), so a test using a
+    literal space here would not exercise this guard -- see this
+    module's own docstring point 4 and protocol_handler.cpp's
+    isWireSpace() comment for the full reachability analysis."""
+    result = _run(fuzz_driver, [b"WHEELS \t100 100 1000\n"])
+    _assert_survived(result, "leading-tab WHEELS field")
+    assert result.stdout == b"err 2\n", (
         f"leading-whitespace numeric field was not rejected: "
         f"{result.stdout!r}")
 
 
 @pytest.mark.parametrize("line", [
-    b"WHEELS:\t100:100:1000\n",
-    b"SET:group.alpha: 1.0\n",
+    b"WHEELS 100 \v100 1000\n",
+    b"SET group.alpha \f1.0\n",
+    b"WHEELS 100 100 \r1000\n",
 ])
 def test_leading_whitespace_rejected_across_verbs(fuzz_driver, line):
     result = _run(fuzz_driver, [line])
     _assert_survived(result, f"leading-whitespace line {line!r}")
-    assert result.stdout == b"err:0:2\n", (
+    assert result.stdout == b"err 2\n", (
         f"leading-whitespace field in {line!r} was not rejected: "
         f"{result.stdout!r}")
 
 
-def test_leading_whitespace_rejected_in_stop_id_no_reply(fuzz_driver):
-    """STOP's id is REQUIRED, not optional (spec S3.1's `STOP | id`, no
-    brackets) -- handleStop() decodes it directly with parseUint32() and
-    has no id-present/absent resolution step to fall back to, so when
-    the id itself fails to parse there is nothing trustworthy to echo
-    an err reply against. This matches the EXISTING no-reply-on-
-    unparseable-id behavior (e.g. "STOP:notanumber") -- a leading-space
-    id ("STOP: 5") is rejected the same way, silently, not with
-    "err:0:2" like SET/WHEELS's optional-id fields."""
-    result = _run(fuzz_driver, [b"STOP: 5\n"])
-    _assert_survived(result, "leading-whitespace STOP id")
+def test_stop_id_with_non_digit_byte_is_malformed_no_reply(fuzz_driver):
+    """STOP's id is decoded by a DIFFERENT, stricter parser than
+    WHEELS/SET's ordinary numeric fields (parseIdDigits() in
+    protocol_handler.cpp): spec S8.2's id grammar is exactly
+    `'#' [0-9]+`, so this file pre-scans every byte after the '#' and
+    rejects on the FIRST non-digit -- it never calls strtoul() at all
+    for a string that fails that scan, so the "leading whitespace" hazard
+    the tests above target does not even apply to ids the same way (a
+    stray tab right after '#' is rejected by the manual digit-only
+    pre-check, not because strtoul happened to skip it). This test pins
+    that a whitespace byte in the id position is still correctly
+    rejected -- STOP's id is REQUIRED, so a malformed id means the
+    whole line is malformed with NO reply (there is no other candidate
+    id token to recover against, since the malformed one IS the id
+    slot)."""
+    result = _run(fuzz_driver, [b"STOP #\t5\n"])
+    _assert_survived(result, "whitespace byte inside STOP's id")
     assert result.stdout == b"", (
-        f"STOP with an unparseable id must produce NO reply (no id can "
-        f"be trusted to echo), got: {result.stdout!r}")
+        f"STOP with a non-digit byte in its id must produce NO reply "
+        f"(no id can be trusted to echo), got: {result.stdout!r}")
 
 
 def test_nan_inf_get_reply_formatting_is_safe(nan_driver):
@@ -461,15 +542,18 @@ def test_nan_inf_get_reply_formatting_is_safe(nan_driver):
 
     Also re-checks the historical GET reply-buffer bug (a 235-byte
     field name, the near-cap legal maximum per spec S2's 240-byte line
-    cap) on the same buffer, non-regression only."""
+    cap) on the same buffer, non-regression only. Pure value-formatting
+    logic, unaffected by the colon-to-space grammar migration -- only
+    the wire syntax the driver feeds ("GET <name>" instead of
+    "GET:<name>") changed."""
     result = subprocess.run(
         [str(nan_driver)], capture_output=True, timeout=10,
         env={**__import__("os").environ, **_SANITIZER_ENV_EXTRA})
     _assert_survived(result, "NaN/Inf/long-name GET regression driver")
     lines = result.stdout.splitlines()
     assert lines == [
-        b"get:nan.field:0.000000",
-        b"get:posinf.field:4294.967040",
-        b"get:neginf.field:-4294.967040",
-        b"get:" + b"n" * 235 + b":1.500000",
+        b"get nan.field 0.000000",
+        b"get posinf.field 4294.967040",
+        b"get neginf.field -4294.967040",
+        b"get " + b"n" * 235 + b" 1.500000",
     ], f"unexpected output: {result.stdout!r}"

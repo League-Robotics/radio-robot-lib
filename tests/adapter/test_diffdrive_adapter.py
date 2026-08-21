@@ -171,13 +171,13 @@ def test_acceptance_wheels_to_lease_expiry_to_estop(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        # feed("WHEELS:100:100:1000:5\n")  ->  sink contains "ok:5"
-        _feed(lib, handle, b"WHEELS:100:100:1000:5\n")
-        assert _sink_text(lib, handle) == "ok:5\n"
+        # feed("WHEELS 100 100 1000 #5\n")  ->  sink contains "ok #5"
+        _feed(lib, handle, b"WHEELS 100 100 1000 #5\n")
+        assert _sink_text(lib, handle) == "ok #5\n"
         lib.paSinkClear(handle)
 
         # Subscribe telemetry so subsequent steps produce t: frames.
-        _feed(lib, handle, b"TLM:POSE\n")
+        _feed(lib, handle, b"TLM POSE\n")
         lib.paSinkClear(handle)
 
         # step the kernel  ->  t: frames show counts (posl/posr) climbing
@@ -188,8 +188,8 @@ def test_acceptance_wheels_to_lease_expiry_to_estop(tmp_path):
             assert emitted == 1
             positions.append(lib.paPositionLeft(handle))
         text = _sink_text(lib, handle)
-        assert text.startswith("thdr:seq:now:flags:posl:posr:vell:velr\n")
-        assert text.count("t:") == 10
+        assert text.startswith("thdr seq now flags posl posr vell velr\n")
+        assert text.count("\nt ") == 10
         assert positions == sorted(positions), "position never climbed"
         assert positions[-1] > positions[0], "position never climbed"
         lib.paSinkClear(handle)
@@ -243,8 +243,8 @@ def test_twist_sign_left_and_right_are_not_swapped(tmp_path):
         # PHYSICAL motorLeft port would receive the commanded RIGHT
         # speed (and vice versa) -- backwards, not just off by a sign
         # convention footnote.
-        _feed(lib, handle, b"WHEELS:150:-150:1000:1\n")
-        assert _sink_text(lib, handle) == "ok:1\n"
+        _feed(lib, handle, b"WHEELS 150 -150 1000 #1\n")
+        assert _sink_text(lib, handle) == "ok #1\n"
 
         for _ in range(40):
             lib.paStep(handle)
@@ -278,8 +278,8 @@ def test_lease_expiry_stops_the_wheels_measured_at_the_motor(tmp_path):
     handle = _new_handle(lib)
     try:
         lease_ms = 200
-        _feed(lib, handle, f"WHEELS:200:200:{lease_ms}:1\n".encode("ascii"))
-        assert _sink_text(lib, handle) == "ok:1\n"
+        _feed(lib, handle, f"WHEELS 200 200 {lease_ms} #1\n".encode("ascii"))
+        assert _sink_text(lib, handle) == "ok #1\n"
 
         # Well inside the lease: driving, not expired.
         for _ in range(5):
@@ -318,14 +318,14 @@ def test_stop_calls_neutral_and_acks(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        _feed(lib, handle, b"WHEELS:200:200:5000:1\n")
+        _feed(lib, handle, b"WHEELS 200 200 5000 #1\n")
         lib.paSinkClear(handle)
         for _ in range(5):
             lib.paStep(handle)
         assert lib.paMotorAppliedDutyLeft(handle) != 0.0
 
-        _feed(lib, handle, b"STOP:2\n")
-        assert _sink_text(lib, handle) == "ok:2\n"
+        _feed(lib, handle, b"STOP #2\n")
+        assert _sink_text(lib, handle) == "ok #2\n"
         for _ in range(3):
             lib.paStep(handle)
         assert lib.paMotorAppliedDutyLeft(handle) == 0.0
@@ -341,8 +341,8 @@ def test_wheels_duration_over_ceiling_is_rejected(tmp_path):
         # spec S5.2's ceiling is 5000 ms; the handler itself does not
         # enforce it (protocol_handler.h ambiguity note #3) -- this
         # adapter does (diffdrive_adapter.h kWheelsDurationCeiling).
-        _feed(lib, handle, b"WHEELS:100:100:5001:1\n")
-        assert _sink_text(lib, handle) == "err:1:3\n"  # ERR_RANGE
+        _feed(lib, handle, b"WHEELS 100 100 5001 #1\n")
+        assert _sink_text(lib, handle) == "err #1 3\n"  # ERR_RANGE
     finally:
         lib.paDestroy(handle)
 
@@ -351,15 +351,15 @@ def test_get_set_wheel_control_field_round_trips(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        _feed(lib, handle, b"SET:wheel_control.pid_kp:0.030000:9\n")
-        assert _sink_text(lib, handle) == "ok:9\n"
+        _feed(lib, handle, b"SET wheel_control.pid_kp 0.030000 #9\n")
+        assert _sink_text(lib, handle) == "ok #9\n"
         lib.paSinkClear(handle)
 
-        _feed(lib, handle, b"GET:wheel_control.pid_kp\n")
-        assert _sink_text(lib, handle) == "get:wheel_control.pid_kp:0.030000\n"
+        _feed(lib, handle, b"GET wheel_control.pid_kp\n")
+        assert _sink_text(lib, handle) == "get wheel_control.pid_kp 0.030000\n"
         lib.paSinkClear(handle)
 
-        _feed(lib, handle, b"GET:wheel_control.nonexistent\n")
+        _feed(lib, handle, b"GET wheel_control.nonexistent\n")
         assert lib.paSinkLength(handle) == 0, "unknown GET name must be silent"
     finally:
         lib.paDestroy(handle)
@@ -370,11 +370,11 @@ def test_identity_and_status_have_plausible_values(tmp_path):
     handle = _new_handle(lib)
     try:
         _feed(lib, handle, b"ID\n")
-        assert _sink_text(lib, handle) == "id:differential:step4:v6-step4\n"
+        assert _sink_text(lib, handle) == "id differential step4 v6-step4\n"
         lib.paSinkClear(handle)
 
         _feed(lib, handle, b"VER\n")
-        assert _sink_text(lib, handle) == "ver:v6-step4\n"
+        assert _sink_text(lib, handle) == "ver v6-step4\n"
         lib.paSinkClear(handle)
 
         # Output() defaults everything false/0 until the kernel has
@@ -386,7 +386,7 @@ def test_identity_and_status_have_plausible_values(tmp_path):
 
         _feed(lib, handle, b"STATUS\n")
         text = _sink_text(lib, handle)
-        assert text.startswith("status:ready=1:active=0:connL=1:connR=1:")
+        assert text.startswith("status ready=1 active=0 connL=1 connR=1 ")
     finally:
         lib.paDestroy(handle)
 

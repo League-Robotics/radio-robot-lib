@@ -14,7 +14,7 @@ allowed to know — a millimetre.
 
 ## What it does
 
-- **`WHEELS:<left>:<right>:<duration>[:<id>]`** → scales `[mm/s]` by
+- **`WHEELS <left> <right> <duration> [#<id>]`** → scales `[mm/s]` by
   `countsPerLength` `[counts/mm]` to `[counts/s]`, splits into
   `velocity`/`twist` (half-sum / half-difference, `twist` CCW-positive),
   and calls `DifferentialDrive::drive()`. Enforces the wire's 5000 ms

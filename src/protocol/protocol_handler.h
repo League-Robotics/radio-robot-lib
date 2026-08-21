@@ -2,57 +2,109 @@
 // grammar codec (docs/protocol-v6-spec.md §2-§8) behind the Sink/Adapter
 // seams docs/design/protocol.md §1-§2 defines. This is the ONLY class in
 // this library that ever touches a wire byte: feed() reassembles
-// arbitrary byte blocks into '\n'-terminated lines, splits each line in
-// place on ':' (spec §11.1/§11.2 — no allocation, no std::string, no
-// exceptions), dispatches to the Adapter, and formats the reply — once,
-// per verb, so the Adapter can neither forget a reply nor invent a shape
-// for one.
+// arbitrary byte blocks into '\n'-terminated lines, tokenizes each line
+// in place on runs of ' ' (spec §2/§11.1/§11.2 — no allocation, no
+// std::string, no exceptions), dispatches to the Adapter, and formats
+// the reply — once, per verb, so the Adapter can neither forget a reply
+// nor invent a shape for one.
 //
 // No kernel, no motors, no config storage, no transport: bytes in via
 // feed(), bytes out via Sink. See docs/plan.md Step 3.
 //
-// ---- Ambiguities in the wire spec this file had to resolve ----
+// ---- The grammar (spec §2), in one line ----
 //
-// 1. Optional trailing `id` (SET, WHEELS) vs. spec §8.2's "Id 0 means no
-//    ack wanted, legal on any verb with an optional id": §7.1's own
-//    worked example is `SET:wheel_control.pid_kp:0.03 -> ok:0` — an id
-//    field that is ABSENT still gets an ack, with id 0 in the reply. That
-//    directly contradicts a literal reading of §8.2 if "absent" and
-//    "explicit 0" are the same thing. This handler treats them as
-//    DIFFERENT: an absent id field defaults to 0 and IS acked (matching
-//    §7.1's example); an id field EXPLICITLY WRITTEN AS "0" on the wire
-//    means "no ack wanted" and suppresses the reply (matching §8.2's
-//    literal words). See resolveOptionalId() in the .cpp. This rule is
-//    applied only to verbs whose id is genuinely OPTIONAL (SET, WHEELS)
-//    — STOP's id is REQUIRED (spec §3.1's `STOP | id`, no brackets), so
-//    it is always acked regardless of value.
+//   line   ::= sp? verb ( sp field )* sp? '\n'
+//   sp     ::= ' '+
+//   verb   ::= [A-Za-z][A-Za-z0-9_]*
+//   field  ::= any bytes except ' ' and '\n'
+//   id     ::= '#' [0-9]+        (a field in trailing position, §8.2)
 //
-// 2. GET's unknown field name has no wire outcome defined at all: GET
-//    never carries an id (`GET | [name]`, no `[:id]`), so there is no
-//    channel to carry an `err` on even though SET's symmetric case
-//    (`onSet` returning kUnknown) plainly does. This handler treats an
-//    onGet() that returns false as fully silent — no reply, and NOT
-//    counted malformed (the line parsed fine; the name is a semantic
-//    lookup miss, which is exactly the class of thing
-//    docs/design/protocol.md §6 assigns to the adapter, not the line
-//    parser).
+// A run of spaces is ONE separator; leading/trailing whitespace on the
+// line is ignored; a blank or all-whitespace line is ignored SILENTLY
+// (not malformed). The `id`, where a verb carries one, is always the
+// LAST token of the line — self-marking, so an omitted optional field
+// never shifts it into a data position (`CAL #9` needs no placeholder —
+// not that this library implements CAL, but SET/WHEELS work the same
+// way). This was a colon-delimited, positional grammar before the
+// 2026-08-20 stakeholder decision (commit 5a5b6da); this file is the
+// post-cutover rewrite. See docs/spec-defects.md for the resolution
+// history of the ambiguities the colon-era file below used to carry.
 //
-// 3. WHEELS's documented "ceiling 5000" (spec §5.2) is stated in prose at
-//    the verb-definition level, not in the Adapter interface
-//    (docs/design/protocol.md §3) or anywhere this handler owns a bounds
-//    table for. Per §6's "the handler holds no field table, no bounds,
-//    no storage" — generalized here from config bounds to motion bounds
-//    for consistency — this handler does NOT enforce the ceiling itself;
-//    it passes `duration` through unchecked and leaves the ceiling to
-//    whatever adapter a future step supplies (its `onWheels` can return
-//    kRange). Flagged, not silently assumed.
+// ---- Resolved-by-the-new-grammar (no longer this file's own call) ----
 //
-// 4. `Snapshot`/`Column` (adapter.h) are this file's own invention: the
-//    design doc names emitTelemetry(const Snapshot&) but never defines
-//    the type. The shape here — column name/value/hex-flag triples — is
-//    the minimal thing that reproduces spec §6.2's example
-//    (`thdr:seq:now:flags:...` / `t:412:38472:d8:...`) with §6.5's one
-//    hex exception, and nothing more.
+// The colon grammar's ambiguity between an OMITTED id and an id
+// EXPLICITLY WRITTEN AS "0" (spec-defects.md D1) is gone by
+// CONSTRUCTION under the space grammar, not by a rule this file
+// invented: omitted and `#0` are visibly different wire forms.
+// - id OMITTED (verb whose id is optional, and the trailing token is
+//   not present at all): the command still executes, and its `ok`/`err`
+//   is sent once, BARE — no `#id` token in the reply at all (`ok`,
+//   `err 2`), so a human at a terminal gets confirmation without
+//   inventing an id.
+// - id explicitly `#0`: executes SILENTLY, no reply of any kind — the
+//   ack-suppression spelling for a lossy link that doesn't want an ack
+//   for every line (spec §8.2). Legal only where the id is optional
+//   (SET, WHEELS in this library's scope); on STOP, whose id is
+//   REQUIRED, `#0` is itself malformed (spec §8.2's literal words:
+//   "`#0` is legal only where the id is optional; on MOVE/GOTO/STOP it
+//   is malformed" — this library implements STOP only, not MOVE/GOTO,
+//   but the same rule applies to it).
+//
+// GET's unknown-field-name silence (spec-defects.md D2) is now stated
+// directly in spec §7.1 ("`GET` with an unknown name is silent — no
+// reply, and not counted malformed"), so it is spec text this file
+// implements, not an ambiguity this file resolves on its own.
+//
+// ---- Ambiguities/design calls this file DOES still have to make ----
+//
+// 1. WHEELS's documented "ceiling 5000" (spec §5.2) is stated in prose
+//    at the verb-definition level, not in the Adapter interface
+//    (docs/design/protocol.md §3) or anywhere this handler owns a
+//    bounds table for. Per §6's "the handler holds no field table, no
+//    bounds, no storage" — generalized here from config bounds to
+//    motion bounds for consistency — this handler does NOT enforce the
+//    ceiling itself; it passes `duration` through unchecked and leaves
+//    the ceiling to whatever adapter a future step supplies (its
+//    `onWheels` can return kRange). Flagged, not silently assumed.
+//    Unaffected by the grammar migration; carried forward verbatim.
+//
+// 2. Spec §2's generic malformed-line recovery — "if the line's last
+//    token is a well-formed nonzero `#id`, reply `err #<id> <code>`;
+//    otherwise no reply" — is written with NO carve-out for a verb
+//    whose own grammar has no id concept at all (HELLO, PING, ID, VER,
+//    STATUS, HELP, GET, TLM in this library's scope: none of their rows
+//    in spec §3.1 have an id column). Read literally, and confirmed by
+//    the spec's own "including unknown verbs" framing, this rule is
+//    verb-agnostic: it fires on ANY malformed line (unknown verb, wrong
+//    arity, or an unparseable field) whenever the line's raw last token
+//    happens to parse as `#[0-9]+` and is nonzero — regardless of
+//    whether the matched verb's own grammar would ever have consumed
+//    that token as an id. This file implements it that way (see
+//    rejectMalformed()/findLastFieldToken() in the .cpp), with exactly
+//    ONE deliberate exception: ESTOP. Spec §5.4 and §8.2 both state,
+//    independently and in stronger/more specific language than §2's
+//    general rule ("ESTOP never carries an id and is never acked — it
+//    must not queue behind anything, including an ack"), that ESTOP is
+//    UNCONDITIONALLY silent. This file treats that as the more specific
+//    rule winning over the generic recovery mechanism: a malformed
+//    ESTOP line (e.g. `ESTOP #5`, wrong arity) increments the malformed
+//    counter and replies with NOTHING, even though `#5` would otherwise
+//    be a perfectly good recoverable id. Flagged here because the spec
+//    itself never states this interaction explicitly — it is this
+//    file's own resolution of a tension between §2's general rule and
+//    §5.4/§8.2's specific one, not something spec text spells out in
+//    one place.
+//
+// 3. The id's own numeric grammar (`id ::= '#' [0-9]+`) is STRICTER
+//    than spec §2.2's general "every wire value is a base-10 ASCII
+//    integer, optionally signed" rule for ordinary integer fields
+//    (WHEELS's `duration`, etc.): the id grammar allows ONLY decimal
+//    digits after the `#`, no sign at all — not even a leading `+`,
+//    which C's strtoul() would otherwise accept as valid syntax. This
+//    file parses ids with a dedicated digit-only scan (parseIdDigits()
+//    in the .cpp) rather than reusing the general unsigned-field parser,
+//    specifically so `#+5` is rejected as not-an-id (falls through to
+//    "ordinary malformed field", not "id 5").
 #pragma once
 
 #include <cstddef>
@@ -90,13 +142,15 @@ class ProtocolHandler {
   //   - a block that is only a line fragment;
   //   - a lone '\r' immediately before '\n' (stripped; '\r' never
   //     appears anywhere else);
+  //   - a blank or all-whitespace line (ignored silently, spec §2 —
+  //     NOT counted malformed);
   //   - a line longer than the 240-byte maximum: discarded to the next
   //     '\n' and counted malformed — NEVER truncated into a prefix that
   //     might still parse as a command the host never sent.
   void feed(const char* data, size_t length);
 
   // Unsolicited emissions the app drives, not the wire (spec §4).
-  void sendBanner();  // device:NEZHA2:robot:<name>:<serial>
+  void sendBanner();  // device NEZHA2 robot <name> <serial>
   void sendReady();   // ready
 
   // thdr: once, on the first call and again whenever the column set
@@ -107,16 +161,51 @@ class ProtocolHandler {
   // Lines dropped as unknown verb, wrong arity, or an unparseable field
   // (spec §2's malformed counter, flags bit 9). A lowercase-led inbound
   // verb — another robot's reply on a shared channel, spec §2.1 — is
-  // dropped silently and does NOT increment this.
+  // dropped silently and does NOT increment this. Neither does a blank
+  // or all-whitespace line (spec §2).
   uint32_t malformedCount() const { return malformedCount_; }
 
  private:
+  // A per-verb handler receives:
+  //   fields          — pointers to the verb's own field tokens, NOT
+  //                      including a trailing id-shaped token (spec
+  //                      §8.2's self-marking id is stripped from this
+  //                      array by the caller wherever a verb's grammar
+  //                      says the last token IS its id; see dispatch()
+  //                      and each handler's own field-count check).
+  //   fieldCount       — the TRUE number of field tokens the line had
+  //                      after the verb (uncapped — see tokenizeLine()
+  //                      in the .cpp for why an arity check on this is
+  //                      still correct even past the fields[] array's
+  //                      fixed storage cap).
+  //   lastFieldToken   — the line's raw LAST token (nullptr if the line
+  //                      was just the verb, nothing after it),
+  //                      independent of `fields`' own capacity —
+  //                      spec §2's "the line's last token is a
+  //                      well-formed nonzero #id" recovery rule reads
+  //                      THIS, not `fields[fieldCount-1]`, precisely so
+  //                      it stays correct on an adversarial line with
+  //                      more junk fields than `fields` has room to
+  //                      store pointers for.
+  using VerbHandler = void (ProtocolHandler::*)(char** fields,
+                                                 size_t fieldCount,
+                                                 const char* lastFieldToken);
   struct VerbEntry {
     const char* name;
-    void (ProtocolHandler::*handler)(char* rest);
+    VerbHandler handler;
   };
 
   static const VerbEntry kCommandTable[12];
+
+  // Field-token storage cap for one line, verb-exclusive: the largest
+  // arity any in-scope verb declares is WHEELS's 4 (left, right,
+  // duration, optional #id), so this leaves headroom without being a
+  // firmware-unfriendly allocation. A line with MORE real tokens than
+  // this is always wrong-arity for every verb this library knows about
+  // (none has arity >= this cap), so capping storage here never turns
+  // a truly-too-long line into a falsely-accepted one — see
+  // tokenizeLine()'s own comment.
+  static constexpr size_t kMaxFieldTokens = 8;
 
   static constexpr size_t kMaxHeaderColumns = 40;
   static constexpr size_t kMaxHeaderNameBytes = 16;
@@ -133,30 +222,57 @@ class ProtocolHandler {
   void appendByte(char c);
   void onLineComplete();
 
+  // ---- tokenizing (spec §2, §11.1) ----
+  // Splits `line` (already NUL-terminated) into tokens in place on runs
+  // of ' ', collapsing separators and ignoring leading/trailing space.
+  // Returns the TRUE total token count (verb included), which may
+  // exceed `maxTokens` — only the first `maxTokens` pointers are
+  // stored, matching every per-verb arity check's own "count vs a
+  // small legitimate maximum" comparison (see kMaxFieldTokens above).
+  static size_t tokenizeLine(char* line, char** tokens, size_t maxTokens);
+
   // ---- dispatch ----
-  void dispatch(char* verb, char* rest);
-  static size_t splitFields(char* rest, char** fields, size_t maxFields);
-  void replyOk(uint32_t id);
-  void replyErr(uint32_t id, uint8_t code);
+  void dispatch(char* verb, char** fields, size_t fieldCount,
+                const char* lastFieldToken);
+  void replyOk(uint32_t id);      // "ok #<id>\n"
+  void replyOkBare();             // "ok\n"          -- id OMITTED (§8.1)
+  void replyErr(uint32_t id, uint8_t code);  // "err #<id> <code>\n"
+  void replyErrBare(uint8_t code);           // "err <code>\n"
+  // Malformed-line recovery (spec §2 / ambiguity note #2 above): counts
+  // the line malformed, then replies `err #<id> <code>` IF the line's
+  // raw last token is a well-formed nonzero `#id` -- otherwise no
+  // reply. Used for unknown verbs and every handler's own wrong-arity /
+  // unparseable-field rejection EXCEPT ESTOP, which never calls this.
+  void rejectMalformed(const char* lastFieldToken, uint8_t code);
   void writeLine(const char* text);  // one Sink::write() per line
   static uint8_t resultCode(Result result);
 
-  // ---- per-verb handlers. Each receives the mutable remainder of the
-  // line AFTER the verb's own terminating ':' (nullptr if the verb had
-  // no ':' at all — genuinely zero fields), splits it on ':' itself, and
-  // owns that verb's arity check, decode, adapter call, and reply. ----
-  void handleHello(char* rest);
-  void handlePing(char* rest);
-  void handleVer(char* rest);
-  void handleId(char* rest);
-  void handleStatus(char* rest);
-  void handleHelp(char* rest);
-  void handleGet(char* rest);
-  void handleSet(char* rest);
-  void handleTlm(char* rest);
-  void handleWheels(char* rest);
-  void handleStop(char* rest);
-  void handleEstop(char* rest);
+  // ---- per-verb handlers -- see VerbHandler's own comment above for
+  // the (fields, fieldCount, lastFieldToken) contract every one shares.
+  void handleHello(char** fields, size_t fieldCount,
+                   const char* lastFieldToken);
+  void handlePing(char** fields, size_t fieldCount,
+                  const char* lastFieldToken);
+  void handleVer(char** fields, size_t fieldCount,
+                 const char* lastFieldToken);
+  void handleId(char** fields, size_t fieldCount,
+                const char* lastFieldToken);
+  void handleStatus(char** fields, size_t fieldCount,
+                     const char* lastFieldToken);
+  void handleHelp(char** fields, size_t fieldCount,
+                  const char* lastFieldToken);
+  void handleGet(char** fields, size_t fieldCount,
+                 const char* lastFieldToken);
+  void handleSet(char** fields, size_t fieldCount,
+                 const char* lastFieldToken);
+  void handleTlm(char** fields, size_t fieldCount,
+                 const char* lastFieldToken);
+  void handleWheels(char** fields, size_t fieldCount,
+                    const char* lastFieldToken);
+  void handleStop(char** fields, size_t fieldCount,
+                  const char* lastFieldToken);
+  void handleEstop(char** fields, size_t fieldCount,
+                   const char* lastFieldToken);
 
   // ---- telemetry header change detection ----
   bool headerChanged(const Snapshot& snapshot) const;

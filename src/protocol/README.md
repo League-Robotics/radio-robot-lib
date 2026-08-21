@@ -8,11 +8,20 @@ Two files, no dependencies beyond the C++ standard library:
 
 `Protocol::ProtocolHandler` is the only thing here that ever touches a
 wire byte: `feed()` reassembles arbitrary byte blocks into `\n`-terminated
-lines, splits each line in place on `:` (no allocation, no `std::string`,
-no exceptions), dispatches to an `Adapter`, and formats the reply --
-exactly once per verb, so the adapter can neither forget a reply nor
-invent a shape for one. See `docs/protocol-v6-spec.md` for the wire
-format and `docs/design/protocol.md` for the object model.
+lines, tokenizes each line in place on runs of `' '` (no allocation, no
+`std::string`, no exceptions), dispatches to an `Adapter`, and formats
+the reply -- exactly once per verb, so the adapter can neither forget a
+reply nor invent a shape for one. See `docs/protocol-v6-spec.md` for the
+wire format and `docs/design/protocol.md` for the object model.
+
+**Grammar note (2026-08-20):** this package was rewritten wholesale from
+an earlier colon-delimited, positional-id grammar to the space/`#id`
+grammar (`line ::= sp? verb (sp field)* sp? '\n'`, spec S2, commit
+5a5b6da) -- a run of spaces is one separator, a blank/all-whitespace
+line is ignored silently, and the correlation id is a trailing,
+self-marking `#<n>` field rather than a positional one. See
+`protocol_handler.h`'s own file header for the full resolution history
+of what changed and why.
 
 ## Scope (docs/plan.md Step 3)
 
@@ -32,10 +41,15 @@ odometry this library does not own.
   `test_protocol_harness.py::test_golden_vectors`) -- the spec S11.3
   cross-language conformance fixture: literal wire examples from the
   spec text plus every `Result`/error-code combination the handler can
-  emit, asserted byte-for-byte through a mock adapter.
-- **feed()'s byte-block contract, case-as-direction, arity, and
-  ESTOP's no-ack rule** -- individually named tests in
-  `test_protocol_harness.py`; see that file's own module docstring.
+  emit, asserted byte-for-byte through a mock adapter. Also covers the
+  new grammar's own rules: space-run collapsing, the bare vs id-carrying
+  `ok`/`err` reply shapes, and the malformed-line `#id` recovery rule.
+- **feed()'s byte-block contract, case-as-direction, arity, blank/
+  all-whitespace-line silence, the id's three wire behaviors (omitted /
+  `#0` / nonzero), the malformed-line `#id` recovery rule (including
+  unknown verbs), and ESTOP's no-ack-ever rule** -- individually named
+  tests in `test_protocol_harness.py`; see that file's own module
+  docstring.
 - **chunk-split equivalence**
   (`test_protocol_harness.py::test_feed_chunk_split_equivalence_golden_vectors`)
   -- every feed()-driven golden-vector block, fed one-shot,
@@ -44,22 +58,25 @@ odometry this library does not own.
   MicroPython/JavaScript port is most likely to get wrong.
 - **adversarial input + the recovery invariant**
   (`test_protocol_adversarial.py`) -- hostile bytes (embedded NUL,
-  high-ASCII/UTF-8, control characters, colon floods, line-length
-  boundaries, unterminated fragments) run through the REAL handler
-  compiled with AddressSanitizer + UndefinedBehaviorSanitizer, each
-  followed by a check that a subsequent well-formed line still
-  dispatches correctly. Also holds the regression tests for the three
-  real parser bugs this sweep found and fixed (hex-float values,
-  leading-whitespace numeric fields, a NaN reaching `formatConfigValue()`)
-  and a characterization test for one deliberately-not-fixed C-string
-  quirk (`test_embedded_nul_immediately_after_verb_matches_bare_verb`)
-  -- see that file's own module docstring, and
-  `docs/design/protocol.md` S9.4, for the full story.
+  high-ASCII/UTF-8, control characters, `#`/space floods, line-length
+  boundaries, unterminated fragments, non-space whitespace bytes as a
+  field's leading byte) run through the REAL handler compiled with
+  AddressSanitizer + UndefinedBehaviorSanitizer, each followed by a
+  check that a subsequent well-formed line still dispatches correctly.
+  Also holds the regression tests for the three real parser bugs the
+  original (colon-era) hardening sweep found and fixed (hex-float
+  values, leading-whitespace numeric fields, a NaN reaching
+  `formatConfigValue()`) and a characterization test for one
+  deliberately-not-fixed C-string quirk
+  (`test_embedded_nul_immediately_after_verb_matches_bare_verb`) -- see
+  that file's own module docstring, and `docs/design/protocol.md` S9.4,
+  for the full story.
 
 Read `protocol_handler.h`'s file header for the numbered list of wire
-spec ambiguities this implementation had to resolve (the optional
-trailing `id` on `SET`/`WHEELS`, `GET`'s undefined unknown-name
-outcome, and `WHEELS`'s unenforced duration ceiling).
+spec ambiguities/design calls this implementation makes (`WHEELS`'s
+unenforced duration ceiling, the malformed-line `#id` recovery rule's
+interaction with ESTOP's own stronger no-ack guarantee, and the id's
+own stricter no-sign numeric grammar).
 
 ## Provenance
 
@@ -67,4 +84,6 @@ New code, sprint per `docs/plan.md` Step 3 (2026-08-20) -- unlike
 `src/diffdrive/`, nothing here is extracted from an existing
 implementation. `src/archive/protocol-v6/wire_v6_verbs.h` is reference
 only (verb-name/arity cross-check); nothing in this package includes
-or depends on it.
+or depends on it. Migrated from the colon grammar to the space/`#id`
+grammar the same day, following the stakeholder's separator/id decision
+recorded in `docs/protocol-v6-spec.md` S2 (commit 5a5b6da).

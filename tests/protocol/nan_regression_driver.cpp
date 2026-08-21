@@ -56,15 +56,15 @@ int main() {
   // ---- 1. NaN / +Inf / -Inf through GET's reply-formatting path ----
   adapter.overrideName = "nan.field";
   adapter.overrideValue = std::nanf("");
-  feedLine(handler, "GET:nan.field\n");
+  feedLine(handler, "GET nan.field\n");
 
   adapter.overrideName = "posinf.field";
   adapter.overrideValue = std::numeric_limits<float>::infinity();
-  feedLine(handler, "GET:posinf.field\n");
+  feedLine(handler, "GET posinf.field\n");
 
   adapter.overrideName = "neginf.field";
   adapter.overrideValue = -std::numeric_limits<float>::infinity();
-  feedLine(handler, "GET:neginf.field\n");
+  feedLine(handler, "GET neginf.field\n");
 
   // ---- 2. A 235-byte GET field name (spec S2's 240-byte line cap is
   // the only bound on it) through the SAME reply buffer, non-regression
@@ -72,7 +72,7 @@ int main() {
   std::string longName(235, 'n');
   adapter.overrideName = longName.c_str();
   adapter.overrideValue = 1.5f;
-  feedLine(handler, "GET:" + longName + "\n");
+  feedLine(handler, "GET " + longName + "\n");
 
   std::fflush(stdout);
   return 0;
