@@ -48,6 +48,12 @@ Design authority — stakeholder, 2026-08-19:
 > interface will be on a UDP port. It could be on the radio, and then if it's
 > on the serial port, it's probably on a MicroPython REPL."*
 
+Separator and id decisions — stakeholder, 2026-08-20: fields are separated by
+**spaces**, not colons ("I think we don't need strings with spaces in them");
+correlation ids return to their historical **`#`-prefix** spelling; and a few
+verbs (`dbg`, `help` — §2) are allowed to suppress the delimiter and take the
+rest of the line as one field.
+
 ---
 
 ## 1. What v6 is
@@ -55,7 +61,7 @@ Design authority — stakeholder, 2026-08-19:
 **One grammar. ASCII. No framing layer.**
 
 ```
-<VERB>[':'<field>]*'\n'
+<VERB>(' '<field>)*'\n'
 ```
 
 That is the entire wire format, both directions, every message. No COBS, no
@@ -97,23 +103,42 @@ nothing else depends on it.
 ## 2. Line grammar
 
 ```
-line   ::= verb ( ':' field )* '\n'
+line   ::= sp? verb ( sp field )* sp? '\n'
+sp     ::= ' '+
 verb   ::= [A-Za-z][A-Za-z0-9_]*
-field  ::= any bytes except ':' and '\n'
+field  ::= any bytes except ' ' and '\n'
+id     ::= '#' [0-9]+        (a field in trailing position — §8.2)
 ```
 
 - **Terminator is `'\n'` (0x0A).** A lone `'\r'` before it is stripped
   (terminal artifact); `'\r'` appears nowhere else.
-- **The first `':'` ends the verb.** Every later `':'` separates fields.
-- **Fields are positional**, fixed arity per verb. An empty field means "use the
-  default" where a verb documents one. Trailing optional fields are marked
-  `[…]` in the tables.
+- **The first space ends the verb.** One or more spaces separate fields; a run
+  of spaces is ONE separator, and leading/trailing whitespace on the line is
+  ignored. This slack is deliberate — a human at a terminal gets forgiveness
+  for free, and `line.split()` / `strtol`'s own whitespace-skipping implement
+  it with no extra code (§11.1).
+- **A blank or all-whitespace line is ignored silently** — a terminal
+  artifact, not an error; it does not count malformed.
+- **Fields are positional**, fixed arity per verb. Optional fields are
+  trailing only, marked `[…]` in the tables. (The earlier draft's "empty
+  field means use the default" is gone — an empty token cannot exist between
+  spaces. The one middle-skip it enabled, `CAL`, stays expressible because
+  the id is self-marking — §8.2.)
+- **The id, where a verb carries one, is the last token and is spelled
+  `#<n>`** (§8.2). Because it announces itself, omitting an optional field
+  never shifts it into a data position.
+- **Two verbs suppress the delimiter**: `dbg` and `help` take everything
+  after the first space as ONE field, verbatim, spaces included
+  (rest-of-line). They are the only two, both robot→host, and neither
+  carries an id.
 - **Max line: 240 bytes** including the terminator — inside the radio's 247 B
   MTU (§9.2) and inside a safe UDP payload (§9.3), so **no v6 message ever
   fragments on any transport**.
-- **Unknown verb, wrong arity, or unparseable field** → drop the line, increment
-  the malformed counter (`flags` bit 9). If the line carried an id, reply
-  `err`; otherwise no reply.
+- **Unknown verb, wrong arity, or unparseable field** → drop the line,
+  increment the malformed counter (`flags` bit 9). If the line's last token
+  is a well-formed nonzero `#id`, reply `err #<id> <code>` — the self-marking
+  id is trustworthy even on a line that otherwise failed to parse; otherwise
+  no reply.
 
 ### 2.1 Direction is carried by CASE, and that is load-bearing
 
@@ -162,36 +187,37 @@ stays identical so one parser serves both.)
 | `STATUS` | — | 4 |
 | `HELP` | — | 4 |
 | `GET` | `[name]` | 7 |
-| `SET` | `name:value[:id]` | 7 |
+| `SET` | `name value [#id]` | 7 |
 | `TLM` | `mode` | 6 |
-| `MOVE` | `kind:a:b:c:stop:limit:timeout:id` | 5.1 |
-| `WHEELS` | `left:right:duration[:id]` | 5.2 |
-| `GOTO` | `x:y:frame:speed:arrive:timeout:id` | 5.3 |
-| `STOP` | `id` | 5.4 |
+| `MOVE` | `kind a b c stop limit timeout #id` | 5.1 |
+| `WHEELS` | `left right duration [#id]` | 5.2 |
+| `GOTO` | `x y frame speed arrive timeout #id` | 5.3 |
+| `STOP` | `#id` | 5.4 |
 | `ESTOP` | — | 5.4 |
-| `SEED` | `x:y:h[:id]` | 5.5 |
-| `CAL` | `[samples][:id]` | 5.6 |
+| `SEED` | `x y h [#id]` | 5.5 |
+| `CAL` | `[samples] [#id]` | 5.6 |
 
 ### 3.2 Replies (robot → host)
 
 | Verb | Fields | § |
 |---|---|---|
-| `device` | `NEZHA2:robot:<name>:<serial>` | 4 |
+| `device` | `NEZHA2 robot <name> <serial>` | 4 |
 | `ready` | — | 4 |
 | `pong` | `<now>` | 4 |
-| `id` | `<drivetrain>:<profile>:<version>` | 4 |
+| `id` | `<drivetrain> <profile> <version>` | 4 |
 | `ver` | `<version>` | 4 |
-| `status` | `k=v:k=v:…` | 4 |
-| `help` | `<verb> <verb> …` | 4 |
-| `get` | `name:value` | 7 |
-| `ok` | `id` | 8 |
-| `err` | `id:code` | 8 |
-| `done` | `id:reason` | 8 |
-| `thdr` | `col:col:…` | 6.2 |
-| `t` | `val:val:…` | 6.2 |
-| `dbg` | `<free text>` | 4 |
+| `status` | `k=v k=v …` | 4 |
+| `help` | `<rest of line: the verb list>` | 4 |
+| `get` | `name value` | 7 |
+| `ok` | `[#id]` | 8 |
+| `err` | `[#id] code` | 8 |
+| `done` | `#id reason` | 8 |
+| `thdr` | `col col …` | 6.2 |
+| `t` | `val val …` | 6.2 |
+| `dbg` | `<rest of line: free text>` | 4 |
 
-30 verbs, one grammar, no interception order, no per-verb framing decision.
+30 verbs, one grammar, no interception order, and exactly one per-verb
+framing decision — the two rest-of-line replies, `help` and `dbg` (§2).
 Compare v5: 25 verbs across two planes, four cleartext sub-grammars, and a
 `dispatchLine()` whose parse *order* is load-bearing.
 
@@ -201,24 +227,29 @@ Compare v5: 25 verbs across two planes, four cleartext sub-grammars, and a
 
 | Command | Reply | Notes |
 |---|---|---|
-| `HELLO` | `device:NEZHA2:robot:<name>:<serial>` | Also emitted unsolicited at boot, twice (power-on, preamble-done). |
+| `HELLO` | `device NEZHA2 robot <name> <serial>` | Also emitted unsolicited at boot, twice (power-on, preamble-done). |
 | — | `ready` | Unsolicited, once, when the loop will actually accept a `MOVE`. **`pong` is liveness, not readiness** — the board answers `PING` ~5 s before it stops rejecting moves with `ERR_NOT_CONFIGURED` (measured: 5 of 6 fresh connections lost their first move to exactly this). Wait for `ready`. |
-| `PING` | `pong:<now>` | `now` = robot clock `[ms]`. Drives host clock-sync. |
-| `ID` | `id:<drivetrain>:<profile>:<version>` | Configured identity — "am I talking to the robot I think, calibrated how I think". |
-| `VER` | `ver:<version>` | Build identity. |
-| `STATUS` | `status:ready=1:active=0:connL=1:connR=1:otos=1:wedge=0:flags=<hex>:tlm=pose` | Queryable counterpart to `ready`, which a late-connecting host has missed forever. Deliberately extensible: `k=v`, order not guaranteed, unknown keys ignored. |
-| `HELP` | `help:HELLO PING ID VER STATUS HELP GET SET TLM MOVE …` | Generated by walking the verb table at runtime, so it cannot drift from the dispatcher. |
-| — | `dbg:<text>` | Unsolicited firmware→host debug channel; compiled in only under `ROBOT_DEBUG`/`HOST_BUILD`. **Safe on a shared channel under v6** (§2.1). |
+| `PING` | `pong <now>` | `now` = robot clock `[ms]`. Drives host clock-sync. |
+| `ID` | `id <drivetrain> <profile> <version>` | Configured identity — "am I talking to the robot I think, calibrated how I think". |
+| `VER` | `ver <version>` | Build identity. |
+| `STATUS` | `status ready=1 active=0 connL=1 connR=1 otos=1 wedge=0 flags=<hex> tlm=pose` | Queryable counterpart to `ready`, which a late-connecting host has missed forever. Deliberately extensible: `k=v`, order not guaranteed, unknown keys ignored. |
+| `HELP` | `help HELLO PING ID VER STATUS HELP GET SET TLM MOVE …` | Generated by walking the verb table at runtime, so it cannot drift from the dispatcher. Rest-of-line on the reply side (§2). |
+| — | `dbg <text>` | Unsolicited firmware→host debug channel; compiled in only under `ROBOT_DEBUG`/`HOST_BUILD`. Rest-of-line: the text may contain spaces. **Safe on a shared channel under v6** (§2.1). |
 
 ### 4.1 The banner is the one byte-frozen string v6 breaks
 
 v5's banner is `DEVICE:NEZHA2:robot:<name>:<serial>`, byte-frozen and matched by
-host role detection and by the relay. v6 lowercases the verb to `device:`. This
-is a deliberate, called-out break.
+host role detection and by the relay. v6 rewrites it twice over: the verb
+lowercases to `device` AND the separators become spaces —
+`device NEZHA2 robot <name> <serial>`. Nothing about the line is byte-frozen
+any more. This is a deliberate, called-out break.
 
-**Migration:** host role detection matches the verb case-insensitively for one
-release; `mbdeploy`'s ROLE column keys on `NEZHA2`, a *field* not the verb, so
-it is unaffected. Everything after the first `':'` is byte-identical to v5.
+**Migration:** host role detection matches both shapes for one release —
+either verb case, either separator (`^(DEVICE|device)[: ]` then tokenize on
+the matched separator). Detection keys on the `NEZHA2` *token*, which
+survives the rewrite in both spellings; verify at cutover that no matcher
+grips a full byte-frozen prefix (`src/host/robot_radio/io/serial_conn.py`'s
+role detection is the known site).
 
 ---
 
@@ -227,7 +258,7 @@ it is unaffected. Everything after the first `':'` is byte-identical to v5.
 Semantics unchanged from v5. Every motion is **bounded** — a stop condition plus
 a required timeout backstop, so a dead host can never mean a runaway.
 
-### 5.1 `MOVE:<kind>:<a>:<b>:<c>:<stop>:<limit>:<timeout>:<id>`
+### 5.1 `MOVE <kind> <a> <b> <c> <stop> <limit> <timeout> #<id>`
 
 | field | meaning |
 |---|---|
@@ -235,7 +266,7 @@ a required timeout backstop, so a dead host can never mean a runaway.
 | `stop` | `t` elapsed `[ms]` · `d` path length `[mm]` · `a` heading change `[mrad]` |
 | `limit` | stop threshold in `stop`'s unit; `<= 0` → `ERR_BADARG` |
 | `timeout` | `[ms]` REQUIRED backstop; `<= 0` → `ERR_BADARG` |
-| `id` | 1..999999, unique for the session (§8.2) |
+| `id` | `#`-prefixed, 1..999999, unique for the session (§8.2); required here |
 
 `v_y` is accepted and ignored on a differential build — wire-forward for a
 holonomic base. Queue is 1 active + 4 pending; arriving at a full queue is
@@ -249,32 +280,32 @@ Preemption is `ESTOP` then the new `MOVE`: explicit, and already what every
 correct caller did.
 
 ```
-MOVE:t:150:0:0:d:400:5000:7      forward 150 mm/s until 400 mm travelled
-MOVE:w:100:-100:0:a:1571:4000:8  spin in place until 90° of heading change
+MOVE t 150 0 0 d 400 5000 #7      forward 150 mm/s until 400 mm travelled
+MOVE w 100 -100 0 a 1571 4000 #8  spin in place until 90° of heading change
 ```
 
-### 5.2 `WHEELS:<left>:<right>:<duration>[:<id>]`
+### 5.2 `WHEELS <left> <right> <duration> [#<id>]`
 
 Dumb teleop primitive, straight to the wheel controller, no planner.
 `left`/`right` `[mm/s]`; `duration` `[ms]` **required**, ceiling 5000 — a dead
 host cannot mean a runaway.
 
-### 5.3 `GOTO:<x>:<y>:<frame>:<speed>:<arrive>:<timeout>:<id>`
+### 5.3 `GOTO <x> <y> <frame> <speed> <arrive> <timeout> #<id>`
 
 `x`,`y` `[mm]`; `frame` `0`=world (OTOS/`SEED` frame), `1`=robot, resolved once
 at acceptance; `speed` `[mm/s]` cruise, `0`=config default; `arrive` `[mm]`
 tolerance, `0`=config default; `timeout` `[ms]` required.
 
-### 5.4 `STOP:<id>` and `ESTOP`
+### 5.4 `STOP #<id>` and `ESTOP`
 
 **Not synonyms, and the distinction is measured.**
 
 - **`ESTOP`** — halt now. Zeroes wheel targets *and* clears the planner's active
   + pending queue in the same cycle. Discarded entries get **no** `done`. No id,
   no ack — it must never queue behind anything.
-- **`STOP:<id>`** — a *planned* stop: an ordinary queue entry that waits its
-  turn, ramps down at the decel ceiling, completes at rest. `ok:<id>` on
-  enqueue, `done:<id>:stop` when the robot is actually stopped.
+- **`STOP #<id>`** — a *planned* stop: an ordinary queue entry that waits its
+  turn, ramps down at the decel ceiling, completes at rest. `ok #<id>` on
+  enqueue, `done #<id> stop` when the robot is actually stopped.
 
 Measured on a 400 mm leg with the halt sent 0.5 s in: `STOP` travelled the
 entire 39.8 cm and took 5.9 s to go inactive; `ESTOP` travelled 2.9 cm and went
@@ -288,7 +319,7 @@ attempts, and one issued by a then-silent host produced 936 mm of continued
 travel with no decay. **A halt path must confirm the robot actually stopped
 (`flags` bit 2 clear, encoders holding) and re-issue if it did not.**
 
-### 5.5 `SEED:<x>:<y>:<h>[:<id>]`
+### 5.5 `SEED <x> <y> <h> [#<id>]`
 
 Seed world pose from an external fix, normally the overhead camera at run start.
 `x`,`y` `[mm]`, `h` `[mrad]`. Writes **both** pose sources — the OTOS position
@@ -298,13 +329,16 @@ start agreed and their later divergence *is* the drift being measured.
 `h` **must be wrapped to (−π, π]** before sending; an unwrapped heading corrupts
 the position seed by ~91 mm.
 
-Reply `ok:<id>` if an id was given; the applied pose is then visible in the next
-`t:` frame (both sources are pose-mode columns, §6.3).
+Reply `ok #<id>` if an id was given; the applied pose is then visible in the
+next `t` frame (both sources are pose-mode columns, §6.3).
 
-v5's separate `POSE` query verb is **dropped** — `TLM:NOW` returns the same
+v5's separate `POSE` query verb is **dropped** — `TLM NOW` returns the same
 information in the same shape as the periodic frame.
 
-### 5.6 `CAL[:<samples>][:<id>]`
+### 5.6 `CAL [<samples>] [#<id>]`
+
+Both fields optional, and — because the id is self-marking — independently so:
+`CAL #9` is "default samples, ack as 9" with no placeholder needed.
 
 Re-run OTOS gyro bias calibration on demand, robot parked. `ERR_BUSY` unless
 both wheels are encoder-still and nothing commands velocity this cycle;
@@ -320,19 +354,19 @@ reboot).
 
 ## 6. Telemetry
 
-### 6.1 `TLM:<mode>` — telemetry is a subscription
+### 6.1 `TLM <mode>` — telemetry is a subscription
 
 | mode | effect |
 |---|---|
-| `OFF` | no `t:` frames |
+| `OFF` | no `t` frames |
 | `POSE` | **default** — 9 columns, ~38 B/frame (§6.3) |
-| `FULL` | 30 columns, ~160 B/frame (§6.4) |
+| `FULL` | 35 columns, ~160 B/frame (§6.4) |
 | `NOW` | emit one frame immediately in the current mode; does not change mode |
 | `AUTO` | as `POSE`, silent while the robot is parked |
 | `BUFFER` | do not push; accumulate frames for the REPL to drain (§10.4) |
 
 Mode is per-connection, resets at boot (`POSE` on radio/UDP, `BUFFER` on the
-REPL — §10.4). A mode change emits a fresh `thdr:` before the next `t:`.
+REPL — §10.4). A mode change emits a fresh `thdr` before the next `t`.
 
 **This is the change that makes ASCII free.** v5 carried its diagnostic tail
 always; the only consumers of that tail are three bench scripts. Default `POSE`
@@ -342,23 +376,24 @@ tuning benches subscribe to.
 Rate is one frame per control cycle, floor 25 ms (~31 fps). Raising it trades
 against inbound command loss on the half-duplex radio — §9.2.
 
-### 6.2 `thdr:` / `t:` — the frame is self-describing
+### 6.2 `thdr` / `t` — the frame is self-describing
 
 The robot emits a **column header** whenever the subscription changes, and
 before the first frame after connect:
 
 ```
-thdr:seq:now:flags:x:y:h:ox:oy:oh
-t:412:38472:d8:-1234:892:1571:-1240:889:1573
-t:413:38504:d8:-1198:901:1571:-1205:898:1572
+thdr seq now flags x y h ox oy oh
+t 412 38472 d8 -1234 892 1571 -1240 889 1573
+t 413 38504 d8 -1198 901 1571 -1205 898 1572
 ```
 
-A reader zips `thdr:` against each `t:`. Nothing needs a schema, a field table
+A reader zips `thdr` against each `t`. Nothing needs a schema, a field table
 or version negotiation, and `tlm_log.py` becomes "write the header row, write
-the data rows" — a valid CSV by construction. A host that reconnected mid-stream
-and missed the header sends `TLM:NOW`.
+the data rows" — a valid whitespace-delimited table by construction, one
+`s/ /,/g` from CSV. A host that reconnected mid-stream and missed the header
+sends `TLM NOW`.
 
-Column **order** is fixed per mode by §6.3/§6.4 — `thdr:` is a convenience and a
+Column **order** is fixed per mode by §6.3/§6.4 — `thdr` is a convenience and a
 drift check, not licence to reorder.
 
 ### 6.3 `POSE` columns (9)
@@ -377,9 +412,10 @@ Both pose sources ride every frame deliberately: seeded from one fix (§5.5),
 their divergence over a run *is* the drift being measured, so reporting them in
 the same frame at the same instant is the measurement.
 
-### 6.4 `FULL` columns (30)
+### 6.4 `FULL` columns (35)
 
-`POSE`'s 9, then:
+`POSE`'s 9, then these 26 (the count was misstated as 30 in the first
+draft — the table below is the authority; 9 + 26 = 35):
 
 | col | unit | meaning |
 |---|---|---|
@@ -391,7 +427,7 @@ the same frame at the same instant is the measurement.
 | `oa` | `[ms]` | OTOS sample age |
 | `tvx` `tvy` | `[mm/s ×10]` | body twist, fused from both wheels |
 | `tw` | `[rad/s ×100]` | body twist angular rate |
-| `l1`…`l4` | — | line sensor channels — valid iff `flags` bit 13 |
+| `l1` `l2` `l3` `l4` | — | line sensor channels — valid iff `flags` bit 13 |
 | `cr` `cg` `cb` `cc` | — | colour RGBC — valid iff `flags` bit 14 |
 | `cyb` `cyp` | `[us]` | cycle busy, cycle period |
 
@@ -447,15 +483,20 @@ time. That is the whole surface.
 ### 7.1 `GET` / `SET`
 
 ```
-GET:wheel_control.pid_kp        ->  get:wheel_control.pid_kp:0.020000
-GET                             ->  get:<name>:<value>   (one line per field, 80 lines)
-SET:wheel_control.pid_kp:0.03   ->  ok:0        (or err:0:3 out of range)
-SET:wheel_control.pid_kp:0.03:9 ->  ok:9
+GET wheel_control.pid_kp          ->  get wheel_control.pid_kp 0.020000
+GET                               ->  get <name> <value>   (one line per field, 80 lines)
+SET wheel_control.pid_kp 0.03     ->  ok          (no id: acked once, bare — §8.2)
+SET wheel_control.pid_kp 0.03 #9  ->  ok #9       (or err #9 3 out of range)
 ```
 
 Names are `<group>.<field>`, lowercase, exactly the 80 names in §7.3. A bare
 `GET` dumps every field — simultaneously the read-back-vs-file acceptance test
 and something a human can read at a plain terminal.
+
+**`GET` with an unknown name is silent** — no reply, and not counted
+malformed. `GET` carries no id, so there is no channel to `err` on, and a
+`get`-with-empty-value reply would invent a shape; silence is the defined
+behavior, stated here so no implementation picks a different one.
 
 **`SET` applies immediately where the field is live, and is stored otherwise.**
 v5's boot-only/live split (`ERR_NOT_LIVE`, and a `rotational_slip` needing a
@@ -520,14 +561,24 @@ baked or used as a baseline.
 
 | reply | meaning |
 |---|---|
-| `ok:<id>` | accepted — enqueued, or applied |
-| `err:<id>:<code>` | rejected, with a reason |
-| `done:<id>:<reason>` | the enqueued thing **finished**; `reason` ∈ `stop` (stop condition met) or `timeout` (backstop fired) |
+| `ok [#id]` | accepted — enqueued, or applied |
+| `err [#id] <code>` | rejected, with a reason |
+| `done #<id> <reason>` | the enqueued thing **finished**; `reason` ∈ `stop` (stop condition met) or `timeout` (backstop fired) |
 
-Each is sent **three times** on consecutive cycles. A reply is ~12 bytes, so
-this costs nothing, and it makes an outcome survive the measured ~5% radio frame
-loss without a ring, a depth, an eviction policy or a scan. A host takes the
-first copy and ignores repeats by id.
+An **id-carrying** reply is sent **three times** on consecutive cycles. A
+reply is ~12 bytes, so this costs nothing, and it makes an outcome survive
+the measured ~5% radio frame loss without a ring, a depth, an eviction policy
+or a scan. A host takes the first copy and ignores repeats by id. A reply
+**without** an id (the bare `ok` to an id-less `SET`) is sent **once** —
+there is no key to dedup repeats by; supply an id when the link is lossy.
+
+**Who owns the repeat:** it is emission policy, owned by whatever drives the
+robot's per-cycle output (`Core::Comms`'s cycle in the firmware; a
+`tick()`-driven pending-reply table in a standalone handler port). It is NOT
+a property of the line codec — a handler implemented as a pure function of
+its input bytes emits each reply once, and the repeat is added where the
+cycle lives. Specified target behavior, not yet implemented anywhere; see
+`radio-robot-lib` `docs/spec-defects.md` D4 for the decision record.
 
 **`done`'s `reason` replaces v5's flags-bit encoding.** v5 signalled
 timeout-vs-stop-condition only through `flags` bit 15 on the same frame as a
@@ -535,11 +586,22 @@ completion ack whose `err` was always 0. It is a word now.
 
 ### 8.2 Ids
 
+- An id is spelled **`#<n>`** and is always the **last token** of its line —
+  commands and replies alike. (Restores the pre-v5 `#` correlation-id
+  spelling — stakeholder, 2026-08-20.)
 - Host-assigned, `1..999999`, **unique for the session**.
-- A reused id is `err:<id>:11` (`ERR_DUPLICATE_ID`). Under v5 a reused move id
+- Because the id announces itself, it never shifts position when an optional
+  field is omitted — `CAL #9` needs no placeholder — and it is recoverable
+  even from a line that otherwise fails to parse (§2's `err` rule).
+- **Required** on `MOVE`/`GOTO`/`STOP`: they complete asynchronously and
+  `done` needs a correlation key. **Optional** on `SET`/`WHEELS`/`SEED`/`CAL`.
+- **Omitted id** → the command still executes, and its `ok`/`err` is sent
+  once, bare (§8.1) — a human at a terminal gets confirmation without
+  inventing ids. **`#0`** → "no ack wanted": execute silently. `#0` is legal
+  only where the id is optional; on `MOVE`/`GOTO`/`STOP` it is malformed.
+- A reused id is `err #<id> 11` (`ERR_DUPLICATE_ID`). Under v5 a reused move id
   was acked `err=0` and then **silently dropped** — a real, recorded footgun.
   v6 refuses it out loud.
-- Id `0` means "no ack wanted", legal on any verb with an optional id.
 - `ESTOP` never carries an id and is never acked — it must not queue behind
   anything, including an ack.
 
@@ -651,6 +713,10 @@ handshake fragments reach the robot before the dongle commits to pass-through,
 and counting them trips a fault bit on a clean connect. No v6 verb starts with
 these bytes, so this can never mask a real error.
 
+The `#` that introduces an id (§8.2) never collides with this rule:
+control-plane detection reads the FIRST byte of the line, and an id is never
+first — a verb is.
+
 ---
 
 ## 10. The REPL binding
@@ -665,8 +731,8 @@ MicroPython device gives you the REPL, and the protocol must be reachable
 REPL is not a second protocol — it is a second *binding* of the same table.
 
 ```
-MOVE:t:150:0:0:d:400:5000:7               wire
-p("MOVE:t:150:0:0:d:400:5000:7")          REPL, line-identical
+MOVE t 150 0 0 d 400 5000 #7              wire
+p("MOVE t 150 0 0 d 400 5000 #7")         REPL, line-identical
 r.move(v_x=150, stop_distance=400, timeout=5000, id=7)    REPL, ergonomic
 ```
 
@@ -683,15 +749,15 @@ same decision.
 ```python
 >>> import v6; p = v6.p
 >>> p("PING")
-pong:38472
->>> p("GET:wheel_control.pid_kp")
-get:wheel_control.pid_kp:0.020000
->>> p("MOVE:t:150:0:0:d:400:5000:7")
-ok:7
+pong 38472
+>>> p("GET wheel_control.pid_kp")
+get wheel_control.pid_kp 0.020000
+>>> p("MOVE t 150 0 0 d 400 5000 #7")
+ok #7
 ```
 
 `p()` **prints** each reply line and returns `None`. That is deliberate: a
-returned string would be echoed by the REPL as `'ok:7'` — with quotes — and a
+returned string would be echoed by the REPL as `'ok #7'` — with quotes — and a
 host would have to strip them. Printing means **the REPL's stdout is
 byte-identical to the v6 wire**, so one host parser serves REPL, UDP and radio
 with no special-casing.
@@ -733,9 +799,9 @@ uploaded-program future (§1.2) a *deployment* change rather than a rewrite.
 
 ### 10.4 Telemetry at a REPL — buffer, do not push
 
-This is the one genuinely hard part, and it is why `TLM:BUFFER` exists.
+This is the one genuinely hard part, and it is why `TLM BUFFER` exists.
 
-31 fps of asynchronous `t:` lines printed into a REPL destroys it: they
+31 fps of asynchronous `t` lines printed into a REPL destroys it: they
 interleave with the prompt, with the echo of what is being typed, and with any
 other output. So **on the REPL transport, telemetry defaults to `BUFFER`**: the
 control loop appends frames to a bounded deque and prints nothing.
@@ -799,18 +865,27 @@ byte-for-byte.
 ### 11.1 The whole codec
 
 ```python
-def encode(verb, *fields):
-    return (verb + "".join(":" + str(f) for f in fields) + "\n").encode()
+def encode(verb, *fields, id=None):
+    parts = [verb] + [str(f) for f in fields]
+    if id is not None:
+        parts.append("#" + str(id))
+    return (" ".join(parts) + "\n").encode()
 
 def decode(line):
-    parts = line.rstrip("\r\n").split(":")
-    return parts[0], parts[1:]
+    parts = line.split()            # collapses space runs, strips '\r\n'
+    id = None
+    if parts and parts[-1][:1] == "#":
+        id = int(parts[-1][1:])
+        parts = parts[:-1]
+    return parts[0], parts[1:], id
 ```
 
 That is not a simplification for the document's sake — it is the implementation.
 Add a verb table, an arity check, and the 80-row config table and you are done.
 **~150 lines per language, zero dependencies**, in C++, Python, JavaScript, and
-MicroPython.
+MicroPython. (`dbg` and `help` are rest-of-line — §2: decode those two with
+`line.split(None, 1)`. They are the only exception, both robot→host, and
+neither carries an id.)
 
 For comparison, v5 needs: COBS with a parameterized delimiter, incremental
 CRC-16 with a split scope, varint and zigzag codecs, a `FieldDesc`/`MessageTable`
@@ -820,7 +895,9 @@ protobuf runtime.
 ### 11.2 Firmware notes
 
 - **No dynamic allocation**, no `std::string`. Format with `snprintf` into a
-  fixed `char[240]`; parse with `strtol`/`strtof` in place over the line buffer.
+  fixed `char[240]`; parse with `strtol`/`strtof` in place over the line
+  buffer — both skip leading whitespace natively, so the space separator
+  costs the parser nothing.
 - **One float formatter**, `formatFixed()` (§7.2), used only by `get`.
 - **Measure the formatting cost before committing.** 30 `snprintf("%ld")` per
   frame at 31 fps. Estimated ~100 µs against a 32 ms cycle — 0.3% — but that is
@@ -871,13 +948,14 @@ stated loss budget — run **over the relay**, not USB.
 
 Staged so the binary plane is *emptied* before it is deleted:
 
-1. **`GET`/`SET`** land as two new v5 cleartext verbs; the binary config arms
+1. **`GET`/`SET`** land as two new cleartext verbs (already in v6's
+   space-separated grammar); the binary config arms
    (`CONFIG`/`GET_CONFIG`/`SET_FIELD`/`CFG`) go unused, then away.
-2. **`TLM` subscription + `thdr:`/`t:`** land alongside binary `TLM`; the binary
+2. **`TLM` subscription + `thdr`/`t`** land alongside binary `TLM`; the binary
    telemetry arm goes unused, then away.
 3. **`ok`/`err`/`done` lines** land alongside the ack ring; `wait_for_ack()`
    switches to line-reading; the ring goes away.
-4. **Motion verbs + the case flip** are the atomic cutover — C++ and Python
+4. **Motion verbs + the case-and-separator flip** are the atomic cutover — C++ and Python
    together, JavaScript as a third implementation of the same fixture.
 
 After step 3 the only binary users are the five motion verbs, so the final step
