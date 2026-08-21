@@ -30,7 +30,9 @@ survives.
 | **D3 / D3a** column count | **RESOLVED.** §6.4's heading is 35, §6.1's FULL row agrees, the table is declared authoritative, and `l1…l4` is spelled out as `l1 l2 l3 l4`. |
 | **D4** 3× reply repeat | **SPEC FIXED, DECISION STILL OPEN.** §8.1 now says the repeat is *emission policy* owned by whatever drives per-cycle output, explicitly **not** the line codec, and marks it "specified target behavior, not yet implemented anywhere." It no longer reads as shipped. **The (a)/(b)/(c) choice for this library's handler is still unmade** — see D4 below. |
 
-**Live questions: D4, and the newly-found D5/D5a** (below). D1-D3 are closed.
+**D4 is the only live question.** D1-D3 closed in `5a5b6da`; D5/D5a closed in
+`11f1d2d`, and the implementation was *verified against the new text* rather
+than assumed to match — see each defect's resolution note.
 
 One consequence for the fixture: because the bare-`ok` form replaced `ok:0`,
 every golden vector's id-less arm changes shape, not just its separator.
@@ -213,9 +215,15 @@ That is a safety-relevant divergence: it means an emergency stop on one
 implementation emits a reply that the same command on another implementation
 does not.
 
-**Recommended fix:** state the precedence explicitly in §2's recovery rule —
-something like *"except `ESTOP`, which never emits a reply under any
-circumstance, including this one."* One clause, and the ambiguity is gone.
+**RESOLVED in `11f1d2d`.** §2's recovery rule now carries the carve-out inline
+(*"The one exception is `ESTOP`, which never emits a reply under any
+circumstance, including this one"*), and §8.2 states it from the other side.
+Elite's ticket 008 pins the same precedence so the firmware cannot re-diverge.
+
+**Verified, not assumed:** the spec says a malformed `ESTOP` is *"dropped and
+counted, silently"* — our `handleEstop()` increments `malformedCount_` and
+returns without replying, which is exactly that. Pinned by
+`test_estop_with_trailing_id_still_never_acks`.
 
 ### D5a — the id grammar is stricter than the general integer rule, silently
 
@@ -224,6 +232,9 @@ general rule is that every wire value is *"a base-10 ASCII integer, optionally
 signed."* A porter reusing their general integer parser for the id accepts
 `#+5` as id 5.
 
-The C++ gives the id a dedicated digit-only parser for exactly this reason.
-Worth a sentence in §8.2 saying the id deliberately does **not** follow §2.2's
-signed rule.
+**RESOLVED in `11f1d2d`.** §8.2 now states the id digits are bare and unsigned,
+that `#+5`/`#-5`/`# 5` are all malformed, and that §2.2's "optionally signed"
+applies to data fields only.
+
+**Verified:** `parseIdDigits()` rejects any non-digit byte before `strtoul` ever
+runs, and all three forms plus a bare `#` are covered by tests.
