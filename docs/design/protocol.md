@@ -4,7 +4,8 @@
 *and* the design — there is no external spec file. §1–§8 are the design as
 implemented; §9 is what the implementation actually found: resolved
 ambiguities, one deliberate omission, and the gaps this work exposed,
-including the 2026-08-20 space/`#id` grammar migration.
+including the 2026-08-20 space/`#id` grammar migration and the 2026-08-21
+addition of `debug` and `RUN` (§6.2/§6.3).
 
 ---
 
@@ -162,6 +163,7 @@ class ProtocolHandler {
   // Unsolicited emissions the app drives, not the wire.
   void sendBanner();                        // device NEZHA2 robot <name> <serial>
   void sendReady();                         // ready
+  void sendDebug(const char* text);         // debug <text>  -- robot-to-host ONLY
   void emitTelemetry(const Snapshot& snapshot);  // thdr once, then t per frame
 
   uint32_t malformedCount() const;
@@ -245,6 +247,12 @@ class Adapter {
 
   // ---- telemetry ----
   virtual Result onTlm(TlmMode mode) = 0;
+
+  // ---- invocation by name (§6.3) ----
+  virtual Result onRun(const char* name,
+                       const char* const* argv, size_t argc,
+                       char* result, size_t resultCapacity,
+                       bool& hasResult) = 0;
 };
 
 }  // namespace Protocol
@@ -368,13 +376,15 @@ Enough to test DiffDrive over the wire, and no more.
 | `ID` | — | `id <drivetrain> <profile> <version>` | |
 | `VER` | — | `ver <version>` | |
 | `STATUS` | — | `status ready=1 active=0 connL=1 connR=1 otos=0 wedge=0 flags=<hex> tlm=off` | `k=v`, order not guaranteed, unknown keys ignored |
-| `HELP` | — | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS STOP ESTOP` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
+| `HELP` | — | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS STOP ESTOP RUN` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
 | `GET` | `[name]` | `get name value` (one field) or one `get` line per field (bare `GET`) | unknown name → silent, no reply, not counted malformed |
 | `SET` | `name value [#id]` | `ok [#id]` / `err [#id] <code>` | |
 | `TLM` | `mode` | — | `OFF`/`POSE`/`FULL`/`NOW`/`AUTO`/`BUFFER` decoded; mode-specific behavior beyond persisting the value is the calling application's job |
 | `WHEELS` | `left right duration [#id]` | `ok [#id]` / `err [#id] <code>` | maps onto `drive()` with no planner |
 | `STOP` | `#id` | `ok #<id>` / `err #<id> <code>` | required id; see §5.1 |
 | `ESTOP` | — | — | mandatory, never acked; see §5.1 |
+| `RUN` | `function [arg...] [#id]` | `ret <value> [#id]` / `ok [#id]` / `err [#id] <code>` | invocation by name; see §6.3 |
+| — | — | `debug <text>` | robot-to-host ONLY, no inbound wire form; see §6.2 |
 
 | deferred | why |
 |---|---|
@@ -396,6 +406,7 @@ for what a layer that adds `MOVE`/`GOTO` back would look like.
 |---|---|
 | `ok [#id]` | accepted — enqueued, or applied |
 | `err [#id] <code>` | rejected, with a reason (§4's `Result` → the code table below) |
+| `ret <value> [#id]` | `RUN` only (§6.3) — the invoked function returned a value |
 
 An id-carrying reply, per the wire's own design, is meant to be sent three
 times on consecutive cycles so an outcome survives packet loss without a ring
@@ -412,6 +423,126 @@ why and what it would take.
 | 8 | `ERR_NOT_CONFIGURED` | refused pre-`ready` |
 | 10 | `ERR_BUSY` | subsystem in motion; retry at rest |
 | 11 | `ERR_DUPLICATE_ID` | a reused id — refused out loud rather than silently dropped |
+
+### 6.2 `debug` — robot-to-host only
+
+Wire shape: **`debug <free text>`**, lowercase, a rest-of-line verb exactly
+like `HELP`'s own reply — everything after the first space is one field.
+`ProtocolHandler::sendDebug(const char* text)` is the only way this line is
+ever emitted; it is an unsolicited emission the application drives
+(alongside `sendBanner()`/`sendReady()`), never a reply to an inbound
+command.
+
+**The host never sends it, and there is no inbound wire form to reject.**
+Because it is lowercase, an inbound `debug ...` line is dropped by the same
+mechanism every other lowercase-led line is (§2.1) — silently, and not
+counted malformed. This is the structural fix for the v5 `DBG:`-flood
+incident (`.claude/rules/hardware-bench-testing.md` in the robot repo this
+library was extracted from): under v5 a robot's own debug output was a
+syntactically valid *command* to every other robot on a shared channel, and
+the flood was self-sustaining. Under this grammar a `debug` line can never
+parse as a command, closing that class structurally rather than by keeping
+the channel private.
+
+**Sanitization: strip, don't reject.** `text` is arbitrary and must not be
+able to forge a second line — `'\n'` and `'\r'` bytes are stripped before
+they can reach the sink. The alternative (reject the whole call) was
+considered and rejected: `sendDebug()` is `void`, with no channel to report
+a rejection back through, so discarding the entire message over one bad
+byte would lose strictly more information than delivering everything else
+in it. The whole line (`debug` + space + text + terminator) is also
+truncated, never overflowed, to fit the 240-byte cap — the same posture
+`feed()` itself takes on an overlong *inbound* line (§3.1).
+
+**`sendDebug("")` and `sendDebug(nullptr)` are the same case.** Both emit
+the bare line `debug\n` — no trailing space before the terminator. A text
+that sanitizes down to nothing (e.g. it was entirely `'\n'`/`'\r'` bytes)
+collapses onto this same bare shape, rather than leaving a dangling
+separator space (`debug \n`) that no other field-less reply in this file
+ever produces — consistent with the grammar's own "an empty token cannot
+exist between spaces" rule.
+
+### 6.3 `RUN` — invocation by name
+
+Wire shape: **`RUN <function> [arg...] [#id]`**.
+
+**Division of responsibility — this is the important design decision, and
+it must not move.** The handler parses and nothing else: it extracts the
+function name and the remaining raw argument tokens as `const char*`
+pointers into its own line buffer, and hands them to
+`Adapter::onRun(name, argv, argc, result, resultCapacity, hasResult)`. The
+handler holds no function table, does no name resolution, and does no type
+conversion — the same "the handler holds no tables" property that makes
+`GET`/`SET` pure delegation (§7).
+
+**The adapter owns resolution, type conversion, and invocation.** In
+MicroPython or JavaScript that is `globals()[name]` plus argument
+introspection — nearly free. **In C++ there is no lookup-by-name and no
+parameter-type reflection**, so a C++ adapter needs an explicit
+registration table declaring each function's name, arity, and per-argument
+types to implement `onRun()` at all. Say this plainly to any porter: `RUN`
+is the first verb where the C++ archetype does substantially *more* work
+than the dynamic ports, not less — a porter reading this handler should not
+conclude that registration machinery is itself part of the wire contract.
+This library's own `DiffDriveAdapter` registers nothing and answers every
+`RUN` with `ERR_UNKNOWN`, which is the correct behavior for an adapter with
+an empty allowlist, not a stub left unfinished.
+
+**The registration table IS the security boundary.** Whatever a concrete
+adapter registers is invocable by name from the wire by anything that can
+talk to the robot, including any other host on a shared radio channel.
+Treat the table as an explicit allowlist, not an implementation detail —
+a function should be registered because it is meant to be remotely
+callable, not because it happened to be convenient to expose.
+
+**Replies** — `ret` is a new lowercase reply verb:
+
+| outcome | reply |
+|---|---|
+| function returned a value | `ret <value> [#id]` |
+| function returned nothing (void) | `ok [#id]` |
+| unknown function | `err [#id] 1` (`ERR_UNKNOWN`) |
+| wrong arity, or an argument that will not convert | `err [#id] 2` (`ERR_BADARG`) |
+| `RUN` with no function name at all | malformed (counted; `err #<id> <code>` if the line's last token is a well-formed nonzero `#id`, per §2.3's standard recovery rule) |
+
+**The `#0` interaction:** `#0` means "no ack wanted, execute silently"
+(§2.2). With `#0` the function **still runs**, but **nothing is emitted,
+including `ret`** — a returned value is a reply, and `#0` suppresses
+replies, full stop. Omitted id → the function runs, and its `ret`/`ok`/
+`err` is sent once, bare, matching every other optional-id verb's own
+omitted-id shape.
+
+**A last field beginning with `'#'` is always the id slot, even against
+RUN's own open arity.** Every other verb in this library has a *fixed*
+arity, so whether an id slot exists at all is decided by field *count*
+before any field's *content* is inspected. `RUN`'s arity is open-ended
+(however many arguments the target function takes), so the handler instead
+inspects the line's *last* field directly: if it begins with `'#'`, it is
+the id (well-formed digits → a real id; anything else after the `'#'` →
+the whole line is malformed, the same as `SET`/`WHEELS`'s own "trailing
+token present but not a well-formed id" rule). This is a genuine
+consequence worth stating on its own: **a function's own final argument
+can never itself begin with `'#'`** under this wire grammar. A function
+that needs a literal `'#'`-led value as its last argument cannot be called
+that way — it would have to take that value as a non-final argument
+instead, or the caller reorders the call.
+
+**Two limitations, not implementation gaps:**
+
+1. **An argument cannot contain a space.** The grammar makes a space the
+   field separator, so string arguments are single-token only. This is a
+   genuine constraint on what `RUN` can express, not an oversight.
+2. **`onRun()` is called synchronously from `feed()`**, so a slow
+   registered function stalls line processing for as long as it runs.
+   Registered functions must return promptly; anything long-running must
+   be deferred by the calling application.
+
+**Sanitization of the return value.** The adapter's own `result` string is
+sanitized by the handler exactly like `debug`'s text — `'\n'`/`'\r'`
+stripped, truncated to fit the line cap — before it reaches the sink. A
+concrete `onRun()` does not need to pre-sanitize its own output; the
+handler treats it as untrusted content regardless, the same way it treats
+every other free-form string it ever formats onto the wire.
 
 ---
 
@@ -670,3 +801,108 @@ new equivalent single spelling, because "id-less" now means literally "no
 vectors for rules the colon grammar never had: space-run collapsing,
 `STOP #0` being malformed (required-id verb), and an unknown verb's
 trailing `#id` recovering an `err` reply.
+
+### 9.7 `debug` and `RUN` added (2026-08-21)
+
+Two verbs added to the library: `debug` (robot-to-host only, §6.2) and
+`RUN` (host-to-robot invocation by name, §6.3). `Adapter` gained one new
+pure-virtual method, `onRun()` — both concrete implementations in this
+repository (`MockAdapter`, `DiffDriveAdapter`) were updated; `DiffDriveAdapter`
+registers nothing and answers every `RUN` with `ERR_UNKNOWN` (§6.3).
+`kCommandTable` grew from 12 to 13 entries (`RUN` appended at the end), so
+`HELP`'s generated reply grew by five bytes (` RUN`) — still comfortably
+inside both its own local 160-byte formatting buffer and the wire's 240-byte
+line cap; a porter should not assume this margin is infinite, only that it
+held here.
+
+**A real bug found and fixed while implementing this:** the first working
+draft of `sendDebug()`/`handleRun()`'s final line-formatting buffer was sized
+`char buf[kMaxLineBytes]` (240 bytes). `kMaxLineBytes` already counts the
+wire content *including* the terminating `'\n'`, so a line that legitimately
+reaches the full 240 bytes needs a **241-byte** buffer — `snprintf()` also
+needs room for its own NUL terminator, and with only 240 bytes available it
+silently truncated the *last* byte of the formatted string (the trailing
+`'\n'` itself) to make room for the NUL it always writes. Caught by
+`test_send_debug_exactly_240_bytes_is_not_truncated`, a boundary test
+written specifically because the earlier hardening sweep (§9.4) had already
+established that boundary-byte-count reasoning in this file is exactly where
+bugs hide. Fixed by sizing the buffer `kMaxLineBytes + 1`. This is a
+C++-only hazard in the same spirit as §9.4's hex-float finding: Python's
+f-strings and JavaScript template literals have no equivalent "off by one
+for a NUL the language forces you to reserve room for," so a straight port
+would not reproduce this bug — but it WOULD need to get its own
+line-length-cap arithmetic right by some other means, and this is exactly
+the kind of boundary a porter should write a test for rather than reason
+about by inspection.
+
+**Design decisions made here, recorded for a future reader instead of only
+living in code comments:**
+
+- **`sendDebug("")` and `sendDebug(nullptr)` are the same case** (§6.2) —
+  both emit the bare `debug\n` line. The alternative (making null a no-op
+  that emits nothing at all) was rejected: `sendBanner()`/`sendReady()`
+  never take a "should I even emit" argument, and giving `sendDebug()` a
+  hidden suppression channel through its argument's nullness, distinct from
+  the wire's own explicit `#0` suppression spelling used elsewhere in this
+  file, would be a second, undocumented way to say "don't send this" with no
+  wire vocabulary to describe it.
+- **Sanitize, don't reject**, for both `debug`'s text and `RUN`'s returned
+  value (§6.2/§6.3). `sendDebug()` is `void` with no return channel at all;
+  `RUN`'s outcome channel (`Result`) is owned by the *adapter's* own
+  resolution/conversion/invocation logic, not by whether its return value
+  happens to contain a newline, so reusing that channel to signal "your
+  return value had a bad byte in it" would conflate two unrelated failure
+  modes. Stripping degrades gracefully; rejecting outright would silently
+  drop legitimate content over one bad byte with no way for either caller to
+  learn that happened.
+- **A last field beginning with `'#'` is always the id slot, even against
+  `RUN`'s own open arity** (§6.3) — resolved by content inspection rather
+  than by field count, because `RUN` is the one verb in this library whose
+  arity the handler cannot know in advance. The consequence — a function's
+  own final argument can never itself begin with `'#'` — is a genuine
+  expressiveness limit, not an oversight, and is stated as such rather than
+  left for a porter to discover by testing.
+- **`kMaxFieldTokens` raised from 8 to 20**, and a new `kMaxRunArgs` (16)
+  added, both firmware resource limits with no wire meaning of their own.
+  `RUN`'s open arity meant, for the first time in this file, that a verb's
+  own field count could legitimately exceed what the fixed-size token array
+  was sized for — every other verb's fixed arity had always been comfortably
+  inside the old cap, so this never mattered before. `handleRun()` checks
+  `fieldCount` against `kMaxFieldTokens` **before** indexing the field array
+  at all, which no other handler in this file needs to do (`protocol_handler.h`'s
+  own file-header ambiguity note #4 has the full reasoning). A line with more
+  real arguments than `kMaxRunArgs` is rejected as `ERR_BADARG` before the
+  adapter is ever called — a resource ceiling, not a claim about any real
+  function's arity.
+
+**What a MicroPython/JavaScript porter would get wrong, bluntly:**
+
+- **Under-building `onRun()`, not over-building it.** The natural instinct
+  in a dynamic language is `getattr(module, name)` / `globals()[name]` with
+  no registration table at all — and that is *correct* for those languages,
+  but it means "everything importable is remotely callable" unless the
+  porter deliberately restricts it. §6.3's security framing ("the
+  registration table IS the security boundary") is written for the C++
+  archetype, where building a table is unavoidable and *therefore* an
+  obvious place to enforce an allowlist; a dynamic-language port has to
+  choose to build that same restriction on purpose, because its own
+  language's ergonomics actively work against it.
+- **Assuming the id and the last argument can't collide.** A JavaScript or
+  Python port's own function-calling convention has no equivalent to "the
+  last field might secretly be the correlation id" — a porter translating
+  this handler's logic naively (e.g. "split on spaces, last token after the
+  name list is the id if the caller says there's one") will get this wrong
+  for a variadic function unless they re-derive the content-inspection rule
+  from this document rather than from the C++ source's control flow alone.
+- **Reproducing the buffer-sizing bug in spirit, if not in fact.** No
+  dynamic language will hit an actual NUL-terminator off-by-one, but a port
+  that computes "does this fit the 240-byte cap" by string concatenation
+  length alone, without a boundary test at exactly 240 bytes, can still ship
+  a fencepost error the same class of mistake produces — §9.4 already made
+  this point about hex-floats and leading whitespace; this section's own
+  finding is one more data point for the same lesson.
+- **Forgetting `onRun()` must return promptly.** It is called synchronously
+  from `feed()` in every implementation, dynamic or not; a JavaScript port
+  built on an event loop is especially easy to get this wrong in, by
+  registering an `async` function and awaiting it inline instead of
+  deferring the actual work and returning immediately.

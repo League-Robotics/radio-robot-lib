@@ -96,6 +96,24 @@
 //    rather than reusing the general unsigned-field parser,
 //    specifically so `#+5` is rejected as not-an-id (falls through to
 //    "ordinary malformed field", not "id 5").
+//
+// 4. RUN (docs/design/protocol.md's RUN section) has NO fixed arity —
+//    unlike every other verb in kCommandTable, the number of fields
+//    after its own name field is open-ended (however many arguments the
+//    target function takes). Every OTHER handler's arity check compares
+//    fieldCount against a small FIXED constant that is always well
+//    inside kMaxFieldTokens, so fields[] is always known to hold a real
+//    pointer for every index that check ever touches. handleRun() alone
+//    has to check fieldCount against kMaxFieldTokens itself, BEFORE
+//    indexing fields[] at all, or an adversarial line with more real
+//    tokens than fields[] has room to store pointers for would read an
+//    uninitialized array slot. See handleRun()'s own comment in the
+//    .cpp for the full resolution, including the companion decision
+//    that a last field beginning with '#' is ALWAYS the id slot, even
+//    against this open arity — so a function's own final argument can
+//    never itself begin with '#' under this wire grammar (a function
+//    needing that has to reorder its arguments, or take it as a
+//    non-final argument instead of the last one).
 #pragma once
 
 #include <cstddef>
@@ -144,6 +162,30 @@ class ProtocolHandler {
   void sendBanner();  // device NEZHA2 robot <name> <serial>
   void sendReady();   // ready
 
+  // debug: robot-to-host ONLY -- there is no inbound wire form of this
+  // verb at all (an inbound lowercase-led line is another robot's reply
+  // on a shared channel and is dropped silently, spec §2.1 -- the same
+  // mechanism that structurally closed the v5 DBG:-flood incident this
+  // verb is named after). Emits "debug <text>\n", a rest-of-line verb
+  // exactly like `help`'s own reply shape.
+  //
+  // Design calls made here, not left to the caller:
+  //   - `text == nullptr` and `text == ""` are the SAME case: both emit
+  //     the bare line "debug\n" (no trailing space before the
+  //     terminator, matching the wire grammar's own "an empty token
+  //     cannot exist between spaces" rule -- see golden_vectors.txt).
+  //   - Every '\n'/'\r' byte in `text` is STRIPPED, not rejected. This
+  //     method is void with no channel to report a rejection through
+  //     (unlike SET/WHEELS/RUN, sendDebug's caller gets no Result back),
+  //     so silently discarding the WHOLE message over one bad byte
+  //     would lose strictly more information than delivering everything
+  //     else in it. The alternative (drop the whole call) was
+  //     considered and rejected for exactly that reason.
+  //   - The whole line (verb + space + text + terminator) is truncated,
+  //     never overflowed, to fit kMaxLineBytes -- the same posture
+  //     feed() itself takes on an overlong INBOUND line (§3.1).
+  void sendDebug(const char* text);
+
   // thdr: once, on the first call and again whenever the column set
   // changes (spec §6.2); t: every call. See adapter.h's Snapshot/Column
   // for the caller's side of this contract.
@@ -186,17 +228,59 @@ class ProtocolHandler {
     VerbHandler handler;
   };
 
-  static const VerbEntry kCommandTable[12];
+  static const VerbEntry kCommandTable[13];
 
-  // Field-token storage cap for one line, verb-exclusive: the largest
-  // arity any in-scope verb declares is WHEELS's 4 (left, right,
-  // duration, optional #id), so this leaves headroom without being a
-  // firmware-unfriendly allocation. A line with MORE real tokens than
-  // this is always wrong-arity for every verb this library knows about
-  // (none has arity >= this cap), so capping storage here never turns
-  // a truly-too-long line into a falsely-accepted one — see
-  // tokenizeLine()'s own comment.
-  static constexpr size_t kMaxFieldTokens = 8;
+  // Field-token storage cap for one line, verb-exclusive. Every FIXED-
+  // arity verb's largest declared arity is WHEELS's 4 (left, right,
+  // duration, optional #id) -- comfortably inside this cap, so a line
+  // with more real tokens than THEIR arity is always wrong-arity
+  // regardless of storage, and capping storage here never turns a
+  // truly-too-long line into a falsely-accepted one for any of them
+  // (see tokenizeLine()'s own comment). RUN is the one exception: its
+  // arity is open-ended (however many arguments its target function
+  // takes), so this cap doubles as RUN's own hard ceiling on how many
+  // raw tokens it will trust fields[] to hold pointers for at all --
+  // handleRun() checks fieldCount against this constant BEFORE indexing
+  // fields[] (protocol_handler.h's own file-header ambiguity note #4),
+  // and kMaxRunArgs below is deliberately smaller still, leaving room
+  // for RUN's own function-name and optional-id fields inside this same
+  // budget. Raised from the pre-RUN value of 8 to fit a realistic
+  // multi-argument RUN call with headroom; unaffected for every other
+  // verb, whose own fixed arity checks are far below either number.
+  static constexpr size_t kMaxFieldTokens = 20;
+
+  // RUN's own ceiling on how many ARGUMENTS (excluding the function
+  // name and any trailing #id) it will forward to onRun() -- a firmware
+  // resource limit (the fixed argv[] array handleRun() builds on the
+  // stack), not a claim about any real function's arity. A line with
+  // more real arguments than this is rejected as malformed (ERR_BADARG)
+  // before onRun() is ever called. Deliberately well under
+  // kMaxFieldTokens - 2 (which reserves room for the function-name and
+  // optional-id fields in the same fieldCount budget), so the two
+  // constants can never disagree about how many pointers fields[]
+  // actually holds.
+  static constexpr size_t kMaxRunArgs = 16;
+
+  // RUN's stringified return value (docs/design/protocol.md's RUN
+  // section) -- an ARRAY SIZE (content bytes plus the NUL terminator),
+  // sized so the WHOLE reply line -- "ret " + this text + an optional
+  // " #<id>" at id's maximum width (a 10-digit uint32_t) + '\n' -- can
+  // never exceed kMaxLineBytes (which itself already counts the
+  // terminator, hence no separate "-1" here: the NUL this array reserves
+  // and the '\n' kMaxLineBytes reserves net out) even before
+  // handleRun()'s own sanitize pass, which can only shrink the text
+  // further (stripping '\n'/'\r', the same rule sendDebug()'s text
+  // gets), never grow it.
+  static constexpr size_t kMaxRunResultBytes =
+      kMaxLineBytes - 4 /* "ret " */ - 12 /* " #4294967295" */;
+
+  // sendDebug()'s own text budget, same accounting as
+  // kMaxRunResultBytes above: "debug " + this text + '\n' must fit
+  // kMaxLineBytes. No id suffix to reserve room for -- debug is
+  // robot-to-host only and never carries one -- so this is a larger
+  // budget than kMaxRunResultBytes even though both share the same
+  // "verb + one free-text field, capped at kMaxLineBytes" shape.
+  static constexpr size_t kMaxDebugTextBytes = kMaxLineBytes - 6 /* "debug " */;
 
   static constexpr size_t kMaxHeaderColumns = 40;
   static constexpr size_t kMaxHeaderNameBytes = 16;
@@ -264,6 +348,8 @@ class ProtocolHandler {
                   const char* lastFieldToken);
   void handleEstop(char** fields, size_t fieldCount,
                    const char* lastFieldToken);
+  void handleRun(char** fields, size_t fieldCount,
+                 const char* lastFieldToken);
 
   // ---- telemetry header change detection ----
   bool headerChanged(const Snapshot& snapshot) const;

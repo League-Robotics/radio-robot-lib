@@ -232,6 +232,17 @@ Result DiffDriveAdapter::onSet(const char* name, float value, uint32_t id) {
   return statusToResult(status);
 }
 
+Result DiffDriveAdapter::onRun(const char* /*name*/,
+                               const char* const* /*argv*/,
+                               size_t /*argc*/, char* /*result*/,
+                               size_t /*resultCapacity*/, bool& hasResult) {
+  // No registration table -- see diffdrive_adapter.h's own doc comment
+  // on this override. Every RUN is ERR_UNKNOWN, the same wire outcome
+  // as any name a real registration table would not recognize.
+  hasResult = false;
+  return Result::kUnknown;
+}
+
 size_t DiffDriveAdapter::fieldCount() const { return kFieldCount; }
 
 const char* DiffDriveAdapter::fieldName(size_t index) const {

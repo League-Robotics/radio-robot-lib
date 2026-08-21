@@ -253,9 +253,33 @@ const char* findLastFieldToken(const char* line) {
   return p == line ? nullptr : p;
 }
 
+// Copies `text` into `out` (a buffer of `outCap` bytes), STRIPPING every
+// '\n'/'\r' byte rather than rejecting the call outright -- see
+// sendDebug()'s and handleRun()'s own comments for why: both format
+// caller- or adapter-supplied free text directly onto a single wire
+// line, and an embedded terminator byte reaching the sink could forge a
+// second line the far end would parse as a separate, unintended
+// command/reply. `text == nullptr` is treated exactly like `text == ""`
+// (both produce a zero-length result) so every caller of this function
+// gets one behavior for "nothing to say," not two. Truncates, never
+// overflows, once `out` is full -- always NUL-terminates within
+// `outCap`. Returns the number of bytes written (excluding the
+// terminator), so a caller can tell "produced nothing" apart from
+// "produced text" without a second strlen().
+size_t sanitizeLineText(const char* text, char* out, size_t outCap) {
+  if (text == nullptr) text = "";
+  size_t len = 0;
+  for (const char* p = text; *p != '\0' && len + 1 < outCap; ++p) {
+    if (*p == '\n' || *p == '\r') continue;  // stripped -- never reaches out
+    out[len++] = *p;
+  }
+  out[len] = '\0';
+  return len;
+}
+
 }  // namespace
 
-const ProtocolHandler::VerbEntry ProtocolHandler::kCommandTable[12] = {
+const ProtocolHandler::VerbEntry ProtocolHandler::kCommandTable[13] = {
     {"HELLO", &ProtocolHandler::handleHello},
     {"PING", &ProtocolHandler::handlePing},
     {"ID", &ProtocolHandler::handleId},
@@ -268,6 +292,7 @@ const ProtocolHandler::VerbEntry ProtocolHandler::kCommandTable[12] = {
     {"WHEELS", &ProtocolHandler::handleWheels},
     {"STOP", &ProtocolHandler::handleStop},
     {"ESTOP", &ProtocolHandler::handleEstop},
+    {"RUN", &ProtocolHandler::handleRun},
 };
 
 ProtocolHandler::ProtocolHandler(Adapter& adapter, Sink& sink)
@@ -723,6 +748,145 @@ void ProtocolHandler::handleEstop(char** fields, size_t fieldCount,
   // acked, so it can never queue behind anything, including an ack.
 }
 
+// ---- RUN: parse-and-delegate only, per adapter.h's own onRun() doc --------
+//
+// This handler holds no function table, does no name resolution, and
+// does no type conversion -- it extracts the function-name token and
+// the raw argument tokens that follow it, and hands them to the
+// adapter unchanged. Everything past that (resolving the name, per-
+// argument conversion, invocation, stringifying a return value) is the
+// adapter's job (adapter.h's onRun() doc, docs/design/protocol.md's RUN
+// section).
+//
+// RUN's own arity is open-ended (unlike every other verb here), so its
+// id resolution can't use the "known field count decides whether an id
+// slot exists" trick SET/WHEELS use. Instead: a LAST field beginning
+// with '#' is unconditionally the id slot (well-formed digits -> a real
+// id; anything else after the '#' -> the whole line is malformed, same
+// as SET/WHEELS's own "3rd token present but not a well-formed id"
+// rule) -- so a function's own final argument can never itself begin
+// with '#' under this wire grammar. Once the (possible) id is stripped
+// off, whatever real fields are left are the function name plus its
+// arguments, in order; if NONE are left at all (the id, or the total
+// absence of any field, consumed everything), the line is malformed --
+// "RUN with no function name at all."
+void ProtocolHandler::handleRun(char** fields, size_t fieldCount,
+                                 const char* lastFieldToken) {
+  if (fieldCount == 0) {
+    // "RUN" with nothing after it at all -- no function name, and (per
+    // findLastFieldToken()'s own contract) lastFieldToken is nullptr
+    // here, so there is nothing to recover an id from either.
+    rejectMalformed(lastFieldToken, 2);
+    return;
+  }
+  if (fieldCount > kMaxFieldTokens - 1) {
+    // More real tokens than this line's fixed-size field array can
+    // safely hold pointers for (protocol_handler.h ambiguity note #4 /
+    // tokenizeLine()'s own comment) -- reject before indexing fields[]
+    // anywhere near that boundary. RUN is the only verb in this file
+    // whose arity is not fixed, so it is the only one that needs this
+    // check at all: every OTHER handler's own fixed-arity comparison is
+    // already far inside kMaxFieldTokens by construction.
+    rejectMalformed(lastFieldToken, 2);
+    return;
+  }
+
+  // The self-marking trailing id (spec grammar) is ALWAYS reserved for
+  // id position, even against RUN's own open arity.
+  size_t dataFieldCount = fieldCount;
+  uint32_t id = 0;
+  IdOutcome idOutcome = IdOutcome::kOmitted;
+  const char* last = fields[fieldCount - 1];
+  if (last[0] == '#') {
+    idOutcome = resolveTrailingOptionalId(last, id);
+    if (idOutcome == IdOutcome::kMalformed) {
+      rejectMalformed(lastFieldToken, 2);
+      return;
+    }
+    --dataFieldCount;
+  }
+
+  if (dataFieldCount == 0) {
+    // The id (or the total absence of any field) consumed everything --
+    // there is no function name left. Spec: "RUN with no function name
+    // at all -> malformed" -- still recovers an err reply against a
+    // well-formed nonzero id per the generic rule (e.g. "RUN #7").
+    rejectMalformed(lastFieldToken, 2);
+    return;
+  }
+
+  const char* name = fields[0];
+  const size_t argc = dataFieldCount - 1;  // fields[1 .. dataFieldCount-1]
+
+  if (argc > kMaxRunArgs) {
+    // A firmware resource limit (the fixed argv[] array below), not a
+    // claim about any function's real arity -- rejected the same way
+    // wrong arity is rejected everywhere else in this file.
+    ++malformedCount_;
+    switch (idOutcome) {
+      case IdOutcome::kNonzero: replyErr(id, 2); break;
+      case IdOutcome::kOmitted: replyErrBare(2); break;
+      case IdOutcome::kZero: break;
+      case IdOutcome::kMalformed: break;  // unreachable, handled above
+    }
+    return;
+  }
+
+  const char* argv[kMaxRunArgs];
+  for (size_t i = 0; i < argc; ++i) argv[i] = fields[1 + i];
+
+  char result[kMaxRunResultBytes] = {};
+  bool hasResult = false;
+  Result outcome =
+      adapter_.onRun(name, argv, argc, result, sizeof(result), hasResult);
+
+  if (idOutcome == IdOutcome::kZero) {
+    return;  // #0: silent no matter what happened -- a returned value
+             // IS a reply, and #0 suppresses replies (spec §2.2's "no
+             // ack wanted" extended here to RUN's own `ret`).
+  }
+
+  if (outcome != Result::kOk) {
+    if (idOutcome == IdOutcome::kNonzero) replyErr(id, resultCode(outcome));
+    else replyErrBare(resultCode(outcome));
+    return;
+  }
+
+  if (!hasResult) {
+    // A void-returning function: `ok`, exactly like any other accepted
+    // command with nothing further to report.
+    if (idOutcome == IdOutcome::kNonzero) replyOk(id);
+    else replyOkBare();
+    return;
+  }
+
+  // Sanitize the ADAPTER's own returned text before it reaches the
+  // sink -- the same '\n'/'\r'-stripping rule sendDebug()'s text gets,
+  // and for the same reason: this string is about to be formatted
+  // directly onto a single wire line, and this handler cannot assume a
+  // concrete Adapter's own onRun() already did this. kMaxRunResultBytes
+  // already guarantees the sanitized text plus "ret "/" #<id>"/'\n'
+  // fits kMaxLineBytes, and sanitizing can only shrink it further, never
+  // risk overflow.
+  char sanitized[kMaxRunResultBytes];
+  sanitizeLineText(result, sanitized, sizeof(sanitized));
+
+  // +1: kMaxLineBytes already counts the WIRE content up to and
+  // including '\n' (protocol_handler.h's own doc on the constant), but
+  // snprintf() also needs room for its own NUL terminator -- a content
+  // string that legitimately reaches the full 240 bytes needs a 241-byte
+  // buffer, or snprintf silently truncates the last byte (here, the
+  // trailing '\n' itself) to make room for the NUL it always writes.
+  char buf[kMaxLineBytes + 1];
+  if (idOutcome == IdOutcome::kNonzero) {
+    std::snprintf(buf, sizeof(buf), "ret %s #%lu\n", sanitized,
+                  static_cast<unsigned long>(id));
+  } else {
+    std::snprintf(buf, sizeof(buf), "ret %s\n", sanitized);
+  }
+  writeLine(buf);
+}
+
 // ---- unsolicited emissions -------------------------------------------------
 
 void ProtocolHandler::sendBanner() {
@@ -735,6 +899,33 @@ void ProtocolHandler::sendBanner() {
 }
 
 void ProtocolHandler::sendReady() { writeLine("ready\n"); }
+
+void ProtocolHandler::sendDebug(const char* text) {
+  // Sanitize into a temporary buffer FIRST, then decide the reply's
+  // shape off the RESULT -- not off whether `text` itself was empty --
+  // so "nullptr", "\"\"", and "text that is ENTIRELY '\n'/'\r' bytes"
+  // (e.g. "\r\n") all collapse onto the exact same bare "debug\n" output
+  // instead of the last one alone leaving a dangling separator space
+  // ("debug \n") that no other field-less reply in this file ever
+  // produces (protocol_handler.h's own sendDebug() doc: "an empty token
+  // cannot exist between spaces").
+  char sanitized[kMaxDebugTextBytes];
+  size_t len = sanitizeLineText(text, sanitized, sizeof(sanitized));
+
+  // +1: kMaxLineBytes already counts the WIRE content up to and
+  // including '\n' (protocol_handler.h's own doc on the constant), but
+  // snprintf() also needs room for its own NUL terminator -- a content
+  // string that legitimately reaches the full 240 bytes needs a 241-byte
+  // buffer, or snprintf silently truncates the last byte (here, the
+  // trailing '\n' itself) to make room for the NUL it always writes.
+  char buf[kMaxLineBytes + 1];
+  if (len == 0) {
+    std::snprintf(buf, sizeof(buf), "debug\n");
+  } else {
+    std::snprintf(buf, sizeof(buf), "debug %s\n", sanitized);
+  }
+  writeLine(buf);
+}
 
 // ---- telemetry emission -----------------------------------------------------
 

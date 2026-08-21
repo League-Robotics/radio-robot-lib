@@ -106,6 +106,8 @@ def _load_shim(tmp_path):
     lib.phSendBanner.restype = None
     lib.phSendReady.argtypes = [ctypes.c_void_p]
     lib.phSendReady.restype = None
+    lib.phSendDebug.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.phSendDebug.restype = None
 
     lib.phMalformedCount.argtypes = [ctypes.c_void_p]
     lib.phMalformedCount.restype = ctypes.c_uint32
@@ -139,6 +141,12 @@ def _load_shim(tmp_path):
     lib.phSetSetResult.restype = None
     lib.phSetTlmResult.argtypes = [ctypes.c_void_p, ctypes.c_int]
     lib.phSetTlmResult.restype = None
+    lib.phSetRunResult.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.phSetRunResult.restype = None
+    lib.phSetRunHasResult.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.phSetRunHasResult.restype = None
+    lib.phSetRunResultText.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.phSetRunResultText.restype = None
 
     lib.phWheelsCalls.argtypes = [ctypes.c_void_p]
     lib.phWheelsCalls.restype = ctypes.c_int
@@ -175,6 +183,16 @@ def _load_shim(tmp_path):
     lib.phTlmCalls.restype = ctypes.c_int
     lib.phLastTlmMode.argtypes = [ctypes.c_void_p]
     lib.phLastTlmMode.restype = ctypes.c_int
+
+    lib.phRunCalls.argtypes = [ctypes.c_void_p]
+    lib.phRunCalls.restype = ctypes.c_int
+    lib.phLastRunNameMatches.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.phLastRunNameMatches.restype = ctypes.c_int
+    lib.phLastRunArgc.argtypes = [ctypes.c_void_p]
+    lib.phLastRunArgc.restype = ctypes.c_int
+    lib.phLastRunArgMatches.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p]
+    lib.phLastRunArgMatches.restype = ctypes.c_int
 
     lib.phIdentityCalls.argtypes = [ctypes.c_void_p]
     lib.phIdentityCalls.restype = ctypes.c_int
@@ -255,6 +273,15 @@ def _parse_golden_vectors(path):
             actions.append(("IN", raw_line[len("IN "):]))
         elif raw_line.startswith("EMIT "):
             actions.append(("EMIT", raw_line[len("EMIT "):].split(" ")))
+        elif raw_line == "DEBUG" or raw_line.startswith("DEBUG "):
+            # DEBUG drives ProtocolHandler::sendDebug() directly (an
+            # unsolicited emission, not fed through feed() -- there is
+            # no wire form a host ever sends this on). Bare "DEBUG" with
+            # nothing after it is the empty-text case, distinct from
+            # "IN debug ..." a few lines below (which instead tests the
+            # verb arriving INBOUND, i.e. dropped silently).
+            text = raw_line[len("DEBUG"):]
+            actions.append(("DEBUG", text[1:] if text.startswith(" ") else ""))
         elif raw_line.startswith("OUT "):
             value = raw_line[len("OUT "):]
             if value == "NONE":
@@ -311,6 +338,12 @@ class _GoldenVectorRunner:
             lib.phSetWheelsResult(handle, int(tokens[0]))
         elif key == "stopresult":
             lib.phSetStopResult(handle, int(tokens[0]))
+        elif key == "runresult":
+            lib.phSetRunResult(handle, int(tokens[0]))
+        elif key == "runhasresult":
+            lib.phSetRunHasResult(handle, int(tokens[0]))
+        elif key == "runresulttext":
+            lib.phSetRunResultText(handle, self._keep(tokens[0]))
         else:
             raise ValueError(f"unknown SETUP key: {key!r}")
 
@@ -318,6 +351,8 @@ class _GoldenVectorRunner:
         lib, handle = self.lib, self.handle
         if kind == "IN":
             _feed(lib, handle, payload + "\n")
+        elif kind == "DEBUG":
+            lib.phSendDebug(handle, self._keep(payload))
         elif kind == "EMIT":
             names, values, hexes = [], [], []
             for token in payload:
@@ -1208,3 +1243,364 @@ def test_feed_chunk_split_equivalence_golden_vectors(tmp_path):
     print(f"chunk-split equivalence: {checked} feed()-driven golden vector "
           f"blocks, each checked one-shot + byte-at-a-time + 5 random "
           f"chunkings (fixed seed)")
+
+
+# ---------------------------------------------------------------------------
+# debug: robot-to-host only (docs/design/protocol.md's debug section).
+# sendDebug() is driven directly, never through feed() -- there is no
+# wire form a host ever sends this on.
+# ---------------------------------------------------------------------------
+
+def test_send_debug_basic_text(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSendDebug(handle, b"something happened")
+        assert _sink_lines(lib, handle) == ["debug something happened"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_send_debug_null_and_empty_text_are_the_same_case(tmp_path):
+    """sendDebug(nullptr) and sendDebug("") are documented as the SAME
+    case -- both emit the bare "debug\\n" line, no trailing space before
+    the terminator."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSendDebug(handle, None)
+        assert _sink_lines(lib, handle) == ["debug"]
+        lib.phSinkClear(handle)
+
+        lib.phSendDebug(handle, b"")
+        assert _sink_lines(lib, handle) == ["debug"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_send_debug_strips_embedded_newline_and_cr(tmp_path):
+    """'\\n'/'\\r' bytes in the text must never reach the sink -- they
+    could forge a second line the far end would parse as a separate,
+    unintended reply. Stripped, not rejected (sendDebug is void, with no
+    channel to report a rejected call through)."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSendDebug(handle, b"hello\nworld\r\n")
+        assert _sink_lines(lib, handle) == ["debug helloworld"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_send_debug_text_that_is_entirely_newlines_is_the_empty_case(tmp_path):
+    """A text consisting ONLY of '\\n'/'\\r' bytes strips down to nothing
+    -- must collapse onto the same bare "debug\\n" shape as an empty or
+    null text, not leave a dangling separator space ("debug \\n")."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSendDebug(handle, b"\n\r\n\r")
+        assert _sink_lines(lib, handle) == ["debug"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_send_debug_exactly_240_bytes_is_not_truncated(tmp_path):
+    """Boundary companion to the truncation test below: "debug " (6) +
+    233 bytes of text + '\\n' (1) == 240 bytes exactly, the wire's own
+    cap -- must be emitted in full, not truncated."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        text = "z" * 233
+        line = f"debug {text}"
+        assert len(line) + 1 == 240
+        lib.phSendDebug(handle, text.encode("ascii"))
+        assert _sink_lines(lib, handle) == [line]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_send_debug_241_bytes_is_truncated_not_overflowed(tmp_path):
+    """One byte over the boundary above: the 234th character must be
+    dropped, not overflow the line -- truncated to fit, never rejected
+    outright (sendDebug has no channel to report a rejection through)."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        text = "z" * 234
+        lib.phSendDebug(handle, text.encode("ascii"))
+        expected = "debug " + "z" * 233  # the 234th 'z' is dropped
+        assert _sink_lines(lib, handle) == [expected]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_debug_verb_inbound_is_dropped_silently_not_malformed(tmp_path):
+    """A `debug ...` line arriving as if it were INBOUND -- e.g. an echo
+    on a shared radio channel, or another robot's own debug output --
+    must be dropped SILENTLY: it is lowercase-led, so it can never
+    dispatch as a command (spec S2.1), and this is the structural fix
+    the v5 DBG:-flood incident needed. This is the debug-SPECIFIC
+    instance of that general rule (test_lowercase_verb_dropped_silently_
+    not_malformed already covers the general case with a synthetic
+    "dbg" verb; this one uses the LITERAL verb this ticket adds)."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        _feed(lib, handle, "debug something happened\n")
+        assert _sink_lines(lib, handle) == []
+        assert lib.phMalformedCount(handle) == 0
+
+        lib.phSetNow(handle, 321)
+        _feed(lib, handle, "PING\n")
+        assert _sink_lines(lib, handle) == ["pong 321"]
+    finally:
+        lib.phDestroy(handle)
+
+
+# ---------------------------------------------------------------------------
+# RUN: invocation by name (docs/design/protocol.md's RUN section). The
+# handler only parses -- name + raw argument tokens -- and delegates
+# resolution, conversion, invocation and stringification to the
+# adapter (MockAdapter here).
+# ---------------------------------------------------------------------------
+
+def test_run_zero_args_calls_adapter_with_empty_argv(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        _feed(lib, handle, "RUN blink\n")
+        assert lib.phRunCalls(handle) == 1
+        assert lib.phLastRunNameMatches(handle, b"blink")
+        assert lib.phLastRunArgc(handle) == 0
+        assert _sink_lines(lib, handle) == ["ok"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_passes_positional_args_in_order(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        _feed(lib, handle, "RUN add 19 23 #9\n")
+        assert lib.phRunCalls(handle) == 1
+        assert lib.phLastRunNameMatches(handle, b"add")
+        assert lib.phLastRunArgc(handle) == 2
+        assert lib.phLastRunArgMatches(handle, 0, b"19")
+        assert lib.phLastRunArgMatches(handle, 1, b"23")
+        assert _sink_lines(lib, handle) == ["ok #9"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_omitted_id_void_return_acks_bare(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        lib.phSetRunHasResult(handle, 0)
+        _feed(lib, handle, "RUN blink\n")
+        assert _sink_lines(lib, handle) == ["ok"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_omitted_id_with_return_value_is_bare_ret(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        lib.phSetRunHasResult(handle, 1)
+        lib.phSetRunResultText(handle, b"42")
+        _feed(lib, handle, "RUN add 19 23\n")
+        assert _sink_lines(lib, handle) == ["ret 42"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_nonzero_id_with_return_value_is_ret_with_id(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        lib.phSetRunHasResult(handle, 1)
+        lib.phSetRunResultText(handle, b"42")
+        _feed(lib, handle, "RUN add 19 23 #9\n")
+        assert _sink_lines(lib, handle) == ["ret 42 #9"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_zero_id_still_calls_adapter_but_suppresses_ret(tmp_path):
+    """`#0` means "no ack wanted" -- the function still RUNS (the
+    adapter is still called), but NOTHING is emitted, including a `ret`
+    the function would otherwise have returned: a result is a reply,
+    and #0 suppresses replies."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        lib.phSetRunHasResult(handle, 1)
+        lib.phSetRunResultText(handle, b"42")
+        _feed(lib, handle, "RUN add 19 23 #0\n")
+        assert lib.phRunCalls(handle) == 1, "the function must still run"
+        assert _sink_lines(lib, handle) == [], "#0 suppresses even a ret"
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_zero_id_suppresses_err_too(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_UNKNOWN)
+        _feed(lib, handle, "RUN no_such_fn #0\n")
+        assert lib.phRunCalls(handle) == 1
+        assert _sink_lines(lib, handle) == []
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_unknown_function_is_err_1(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_UNKNOWN)
+        _feed(lib, handle, "RUN no_such_function #4\n")
+        assert lib.phRunCalls(handle) == 1
+        assert _sink_lines(lib, handle) == ["err #4 1"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_bad_arg_is_err_2(tmp_path):
+    """Wrong arity, or an argument that fails to convert to its target's
+    declared type, is the ADAPTER's own call (kBadArg) -- the handler
+    holds no arity table for any registered function."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_BADARG)
+        _feed(lib, handle, "RUN add one two #4\n")
+        assert lib.phRunCalls(handle) == 1
+        assert _sink_lines(lib, handle) == ["err #4 2"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_no_function_name_at_all_is_malformed(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        _feed(lib, handle, "RUN\n")
+        assert lib.phRunCalls(handle) == 0
+        assert lib.phMalformedCount(handle) == 1
+        assert _sink_lines(lib, handle) == []
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_only_an_id_token_is_no_function_name_but_recovers_the_id(tmp_path):
+    """"RUN #7" -- the ONLY field present is consumed as the id, leaving
+    nothing to be the function name. Still malformed, but (per the
+    generic recovery rule) the well-formed nonzero id is recoverable for
+    the err reply."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        _feed(lib, handle, "RUN #7\n")
+        assert lib.phRunCalls(handle) == 0
+        assert lib.phMalformedCount(handle) == 1
+        assert _sink_lines(lib, handle) == ["err #7 2"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_last_field_hash_non_digit_is_malformed_whole_line(tmp_path):
+    """A last field beginning with '#' is ALWAYS the id slot under this
+    grammar, even against RUN's own open arity -- so a function whose
+    real LAST argument needs to literally start with '#' cannot be
+    called that way; the whole line is malformed instead, the same as
+    SET/WHEELS's own "3rd token present but not a well-formed id"
+    rule."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        _feed(lib, handle, "RUN foo #abc\n")
+        assert lib.phRunCalls(handle) == 0
+        assert lib.phMalformedCount(handle) == 1
+        assert _sink_lines(lib, handle) == []
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_hash_prefixed_non_last_arg_is_an_ordinary_argument(tmp_path):
+    """The '#'-reserved-for-id rule applies ONLY to the line's LAST
+    field -- a '#'-led token anywhere else is just an ordinary
+    argument."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        _feed(lib, handle, "RUN foo #abc 5\n")
+        assert lib.phRunCalls(handle) == 1
+        assert lib.phLastRunArgc(handle) == 2
+        assert lib.phLastRunArgMatches(handle, 0, b"#abc")
+        assert lib.phLastRunArgMatches(handle, 1, b"5")
+        assert _sink_lines(lib, handle) == ["ok"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_too_many_args_is_rejected_without_calling_adapter(tmp_path):
+    """kMaxRunArgs is a firmware resource limit (the fixed argv[] array
+    handleRun() builds), not a claim about any real function's arity --
+    exceeding it is rejected the same way any other wrong arity is,
+    BEFORE the adapter is ever called."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        args = " ".join(str(i) for i in range(17))  # kMaxRunArgs == 16
+        _feed(lib, handle, f"RUN foo {args} #4\n")
+        assert lib.phRunCalls(handle) == 0
+        assert lib.phMalformedCount(handle) == 1
+        assert _sink_lines(lib, handle) == ["err #4 2"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_at_kmaxrunargs_is_accepted(tmp_path):
+    """The boundary companion to the test above: exactly kMaxRunArgs
+    (16) arguments must be accepted and passed through in full."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        args = " ".join(str(i) for i in range(16))
+        _feed(lib, handle, f"RUN foo {args} #4\n")
+        assert lib.phRunCalls(handle) == 1
+        assert lib.phLastRunArgc(handle) == 16
+        assert lib.phLastRunArgMatches(handle, 15, b"15")
+        assert _sink_lines(lib, handle) == ["ok #4"]
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_run_result_text_is_sanitized_before_reaching_the_sink(tmp_path):
+    """The ADAPTER's own returned text is untrusted content, exactly
+    like sendDebug()'s text -- '\\n'/'\\r' bytes in it must never reach
+    the sink, or a malicious/buggy registered function could forge a
+    second line."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        lib.phSetRunResult(handle, RESULT_OK)
+        lib.phSetRunHasResult(handle, 1)
+        lib.phSetRunResultText(handle, b"line1\nline2\r\n")
+        _feed(lib, handle, "RUN foo #5\n")
+        assert _sink_lines(lib, handle) == ["ret line1line2 #5"]
+    finally:
+        lib.phDestroy(handle)

@@ -26,6 +26,16 @@ class MockAdapter : public Protocol::Adapter {
   Protocol::Result stopResult = Protocol::Result::kOk;
   Protocol::Result setResult = Protocol::Result::kOk;
   Protocol::Result tlmResult = Protocol::Result::kOk;
+  Protocol::Result runResult = Protocol::Result::kOk;
+  bool runHasResult = false;
+  // Text copied verbatim into onRun()'s `result` buffer when
+  // runHasResult is true -- a test can point this at a string
+  // containing '\n'/'\r' to exercise ProtocolHandler's own sanitize
+  // pass on the ADAPTER's returned text (docs/design/protocol.md's RUN
+  // section: sanitized exactly like sendDebug()'s text). Borrowed, not
+  // copied -- same outlive-the-call contract as every other canned
+  // string field on this mock.
+  const char* runResultText = "";
 
   // A small fixed config table -- the source of truth for both a named
   // GET and a bare GET's dump. A name not in this table is the "unknown
@@ -53,6 +63,7 @@ class MockAdapter : public Protocol::Adapter {
   mutable int getCalls = 0;
   int setCalls = 0;
   int tlmCalls = 0;
+  int runCalls = 0;
 
   // ---- last-call arguments ----
   float lastWheelsLeft = 0.0f;
@@ -65,6 +76,12 @@ class MockAdapter : public Protocol::Adapter {
   float lastSetValue = 0.0f;
   uint32_t lastSetId = 0;
   Protocol::TlmMode lastTlmMode = Protocol::TlmMode::kOff;
+
+  // ---- RUN's own last-call recording ----
+  static constexpr size_t kMaxRecordedRunArgs = 16;
+  char lastRunName[64] = {};
+  size_t lastRunArgc = 0;
+  char lastRunArgs[kMaxRecordedRunArgs][64] = {};
 
   void identity(Protocol::Identity& out) const override {
     ++identityCalls;
@@ -119,6 +136,21 @@ class MockAdapter : public Protocol::Adapter {
   size_t fieldCount() const override { return numFields; }
   const char* fieldName(size_t index) const override {
     return index < numFields ? fieldNames[index] : "";
+  }
+  Protocol::Result onRun(const char* name, const char* const* argv,
+                         size_t argc, char* result, size_t resultCapacity,
+                         bool& hasResult) override {
+    ++runCalls;
+    std::snprintf(lastRunName, sizeof(lastRunName), "%s", name);
+    lastRunArgc = argc;
+    for (size_t i = 0; i < argc && i < kMaxRecordedRunArgs; ++i) {
+      std::snprintf(lastRunArgs[i], sizeof(lastRunArgs[i]), "%s", argv[i]);
+    }
+    hasResult = runHasResult;
+    if (runHasResult) {
+      std::snprintf(result, resultCapacity, "%s", runResultText);
+    }
+    return runResult;
   }
   Protocol::Result onTlm(Protocol::TlmMode mode) override {
     ++tlmCalls;

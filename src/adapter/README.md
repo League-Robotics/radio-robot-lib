@@ -36,6 +36,10 @@ of the others and hold the one thing neither of them is allowed to know
   what differs and why (this library has no odometry, no OTOS, no
   line/colour sensors, so a literal `x`/`y`/`h` world pose is not
   producible here).
+- **`RUN`** → `ERR_UNKNOWN`, always. This adapter registers no callable
+  functions at all — see `docs/design/protocol.md` §6.3: the
+  registration table IS the security allowlist, and this one is
+  deliberately empty, not an unfinished stub.
 
 ## What is NOT wire-reachable
 

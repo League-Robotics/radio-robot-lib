@@ -132,6 +132,70 @@ class Adapter {
 
   // ---- telemetry ----
   virtual Result onTlm(TlmMode mode) = 0;
+
+  // ---- RUN: invocation by name (docs/design/protocol.md's RUN
+  // section) ----
+  //
+  // The HANDLER holds no function table -- it only parses
+  // "RUN <name> [arg...] [#id]" into a name and the RAW, unconverted
+  // argument tokens that followed it, and hands them here unchanged.
+  // THIS method owns name resolution, per-argument type conversion,
+  // invocation, and stringifying any return value. In a dynamic host
+  // (MicroPython, JavaScript) that is close to free -- `globals()[name]`
+  // plus reflecting the target's own parameter list. In C++, where
+  // there is no lookup-by-name and no parameter-type reflection, a
+  // concrete Adapter needs its own explicit name/arity/argument-type
+  // registration table to implement this at all. RUN is therefore the
+  // first verb where this C++ archetype does MATERIALLY MORE work than
+  // a straight port to a dynamic language would need, not less -- a
+  // porter should not conclude that registration machinery is itself
+  // part of the wire contract.
+  //
+  // The registration table IS the security boundary: whatever a
+  // concrete Adapter registers is invocable BY NAME from the wire by
+  // anything that can talk to the robot, including any other host
+  // overhearing a shared radio channel. Treat the table as an explicit
+  // allowlist, not an implementation detail -- an Adapter with no
+  // registration table at all (e.g. this library's own
+  // DiffDriveAdapter, which owns no callable surface) has an empty
+  // allowlist, and every RUN on it is correctly ERR_UNKNOWN.
+  //
+  // onRun() is called SYNCHRONOUSLY from ProtocolHandler::feed(), so a
+  // slow registered function stalls line processing for as long as it
+  // runs. Registered functions must return promptly; anything
+  // long-running is the calling application's job to defer.
+  //
+  //   name          -- the function name token, borrowed, valid only
+  //                     for the duration of this call.
+  //   argv/argc     -- the RAW field tokens AFTER the function name,
+  //                     unconverted; borrowed pointers into the
+  //                     handler's own line buffer, valid only for the
+  //                     duration of this call. An argument can never
+  //                     itself contain a space (the wire grammar's own
+  //                     field separator) or begin with '#' in the
+  //                     line's last position (reserved for the id) --
+  //                     both are genuine expressiveness limits on what
+  //                     RUN can pass, not an omission in this seam.
+  //   result        -- caller-owned buffer, resultCapacity bytes, this
+  //                     method may fill with the stringified return
+  //                     value. Left untouched if hasResult is false.
+  //                     ProtocolHandler sanitizes and may further
+  //                     truncate whatever is written here before it
+  //                     reaches the wire (the same '\n'/'\r'-stripping
+  //                     rule sendDebug()'s own text gets) -- this
+  //                     method does not need to pre-sanitize its own
+  //                     output.
+  //   hasResult     -- set true ONLY if the target function returned a
+  //                     value. A void-returning function leaves this
+  //                     false, and the wire replies bare `ok`/`ok #id`,
+  //                     never `ret`.
+  // Returns kUnknown for an unregistered name, kBadArg for wrong arity
+  // or an argument that fails to convert to its target's declared
+  // parameter type, kOk otherwise (whether or not hasResult ends up
+  // true).
+  virtual Result onRun(const char* name, const char* const* argv, size_t argc,
+                       char* result, size_t resultCapacity,
+                       bool& hasResult) = 0;
 };
 
 }  // namespace Protocol

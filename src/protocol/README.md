@@ -24,11 +24,20 @@ header for the full resolution history of what changed and why.
 
 ## Scope
 
-In: `HELLO PING ID VER STATUS HELP GET SET TLM WHEELS STOP ESTOP`, and
-their replies. No kernel, no motors, no config storage, no transport --
-bytes in via `feed()`, bytes out via `Sink`. `MOVE`/`GOTO`/`SEED`/`CAL`
-are deliberately out of scope; they need a planner, navigator, or
-odometry this library does not own.
+In: `HELLO PING ID VER STATUS HELP GET SET TLM WHEELS STOP ESTOP RUN`, and
+their replies, plus `debug` (robot-to-host only, no inbound wire form).
+No kernel, no motors, no config storage, no transport -- bytes in via
+`feed()`, bytes out via `Sink`. `MOVE`/`GOTO`/`SEED`/`CAL` are
+deliberately out of scope; they need a planner, navigator, or odometry
+this library does not own.
+
+**`RUN` (2026-08-21):** invocation by name -- `RUN <function> [arg...]
+[#id]`. The handler only parses; a concrete `Adapter`'s `onRun()` owns
+name resolution, per-argument type conversion, invocation, and
+stringifying any return value. See `docs/design/protocol.md` §6.3 for
+the full division of responsibility (and why a C++ adapter needs a
+registration table a MicroPython/JavaScript port would not) and §9.7 for
+the decisions made adding it.
 
 ## Testing
 

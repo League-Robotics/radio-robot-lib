@@ -168,6 +168,17 @@ def nan_driver(tmp_path_factory):
         "nan_regression_driver")
 
 
+@pytest.fixture(scope="session")
+def run_debug_driver(tmp_path_factory):
+    """sendDebug() sanitization + RUN's #0-suppresses-a-REGISTERED-ret
+    driver (run_debug_driver.cpp) -- see its own header comment."""
+    return _compile_asan_executable(
+        tmp_path_factory,
+        [_PACKAGE_DIR / "protocol_handler.cpp",
+         _TEST_DIR / "run_debug_driver.cpp"],
+        "run_debug_driver")
+
+
 def _encode_records(chunks):
     """The fuzz driver's stdin protocol: repeated
     (uint32_t little-endian length, raw bytes) records."""
@@ -309,6 +320,31 @@ ADVERSARIAL_CASES = [
     ("set_value_many_dots", [b"SET group.alpha 1.2.3.4\n"]),
     ("wheels_duration_huge_digit_run",
      [b"WHEELS 100 100 " + b"9" * 40 + b"\n"]),
+
+    # ---- RUN: open arity, adversarial argument counts/content (spec
+    # grammar's RUN section -- the handler only parses, so these mostly
+    # exercise the fieldCount/kMaxFieldTokens/kMaxRunArgs bound checks
+    # handleRun() adds on top of the generic tokenizer, not anything
+    # verb-specific to WHEELS/SET) ----
+    ("run_zero_args", [b"RUN blink\n"]),
+    ("run_many_args_within_kmaxrunargs",
+     [b"RUN foo " + b" ".join(str(i).encode() for i in range(16)) + b"\n"]),
+    ("run_args_over_kmaxrunargs",
+     [b"RUN foo " + b" ".join(str(i).encode() for i in range(17)) + b"\n"]),
+    ("run_args_over_kmaxfieldtokens",
+     # MORE real tokens than kMaxFieldTokens (20) can hold pointers for
+     # at all -- handleRun() must reject this BEFORE indexing fields[]
+     # anywhere near that boundary, not just before kMaxRunArgs.
+     [b"RUN foo " + b" ".join(str(i).encode() for i in range(40)) + b"\n"]),
+    ("run_single_arg_near_line_length_cap",
+     [b"RUN foo " + b"x" * 225 + b"\n"]),
+    ("run_nonascii_arg",
+     [b"RUN foo " + "héllo wôrld".encode("utf-8").replace(b" ", b"_") +
+      b" #5\n"]),
+    ("run_hash_prefixed_non_digit_last_arg", [b"RUN foo #abc\n"]),
+    ("run_only_hash_id_no_function_name", [b"RUN #7\n"]),
+    ("run_bare_no_function_name", [b"RUN\n"]),
+    ("run_trailing_spaces_only", [b"RUN" + b" " * 50 + b"\n"]),
 
     # ---- non-space whitespace bytes as a field's LEADING byte -- the
     # hazard that survives the grammar migration (a literal leading ' '
@@ -556,4 +592,30 @@ def test_nan_inf_get_reply_formatting_is_safe(nan_driver):
         b"get posinf.field 4294.967040",
         b"get neginf.field -4294.967040",
         b"get " + b"n" * 235 + b" 1.500000",
+    ], f"unexpected output: {result.stdout!r}"
+
+
+def test_run_debug_driver_survives_and_matches(run_debug_driver):
+    """Runs run_debug_driver.cpp under ASan/UBSan and asserts its exact
+    output sequence -- both sendDebug()'s own sanitization (embedded
+    '\\n'/'\\r' stripped; null/empty/all-newline text all collapse to
+    the bare "debug\\n" shape; a too-long text is truncated to the
+    233-byte cap, not overflowed) and RUN's #0-suppresses-a-REGISTERED-
+    ret rule (a configured return value is silently swallowed under #0,
+    but reported normally under a nonzero id)."""
+    result = subprocess.run(
+        [str(run_debug_driver)], capture_output=True, timeout=10,
+        env={**__import__("os").environ, **_SANITIZER_ENV_EXTRA})
+    _assert_survived(result, "run/debug driver")
+    lines = result.stdout.splitlines()
+    assert lines == [
+        b"debug helloworld",       # embedded '\n'/'\r' stripped
+        b"debug",                  # "" -> bare
+        b"debug",                  # nullptr -> the SAME case as ""
+        b"debug",                  # entirely '\n'/'\r' -> bare too
+        b"debug " + b"z" * 233,    # truncated to the 233-byte text cap
+        b"ret 42 #5",              # RUN foo #0's ret was suppressed
+                                   # entirely (nothing between the
+                                   # truncated debug line and this);
+                                   # RUN foo #5 reports normally
     ], f"unexpected output: {result.stdout!r}"

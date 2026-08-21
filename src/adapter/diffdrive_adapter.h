@@ -136,6 +136,17 @@ class DiffDriveAdapter : public Adapter {
 
   Result onTlm(TlmMode mode) override;
 
+  // RUN: this library registers no callable functions at all -- there is
+  // no wheel-kernel operation this adapter exposes by NAME the way
+  // WHEELS/STOP/ESTOP already expose it structurally. adapter.h's own
+  // onRun() doc frames a concrete Adapter's registration table as the
+  // security allowlist; this adapter's allowlist is empty, so every RUN
+  // is ERR_UNKNOWN, same as any other name a real registration table
+  // does not recognize.
+  Result onRun(const char* name, const char* const* argv, size_t argc,
+              char* result, size_t resultCapacity,
+              bool& hasResult) override;
+
   // ---- telemetry projection (NOT part of Protocol::Adapter — the app
   // driving the loop calls this once per frame it wants to emit, then
   // hands the result straight to ProtocolHandler::emitTelemetry()). The

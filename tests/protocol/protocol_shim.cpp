@@ -58,6 +58,12 @@ void phSendBanner(void* handle) {
 void phSendReady(void* handle) {
   static_cast<Handle*>(handle)->handler.sendReady();
 }
+// `text` may be nullptr -- ProtocolHandler::sendDebug() treats nullptr
+// and "" identically (both emit the bare "debug\n" line); ctypes passes
+// a Python `None` argument through as a NULL c_char_p unchanged.
+void phSendDebug(void* handle, const char* text) {
+  static_cast<Handle*>(handle)->handler.sendDebug(text);
+}
 
 uint32_t phMalformedCount(void* handle) {
   return static_cast<Handle*>(handle)->handler.malformedCount();
@@ -147,6 +153,18 @@ void phSetTlmResult(void* handle, int result) {
   static_cast<Handle*>(handle)->adapter.tlmResult =
       static_cast<Protocol::Result>(result);
 }
+void phSetRunResult(void* handle, int result) {
+  static_cast<Handle*>(handle)->adapter.runResult =
+      static_cast<Protocol::Result>(result);
+}
+void phSetRunHasResult(void* handle, int hasResult) {
+  static_cast<Handle*>(handle)->adapter.runHasResult = hasResult != 0;
+}
+// `text` must outlive its use -- same borrowed-pointer contract as
+// phSetGetOverride above (the mock stores the pointer, not a copy).
+void phSetRunResultText(void* handle, const char* text) {
+  static_cast<Handle*>(handle)->adapter.runResultText = text;
+}
 
 // ---- MockAdapter call-log readback ---------------------------------------
 
@@ -202,6 +220,28 @@ int phTlmCalls(void* handle) {
 }
 int phLastTlmMode(void* handle) {
   return static_cast<int>(static_cast<Handle*>(handle)->adapter.lastTlmMode);
+}
+
+int phRunCalls(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.runCalls;
+}
+int phLastRunNameMatches(void* handle, const char* name) {
+  return std::strcmp(static_cast<Handle*>(handle)->adapter.lastRunName,
+                      name) == 0
+             ? 1
+             : 0;
+}
+int phLastRunArgc(void* handle) {
+  return static_cast<int>(static_cast<Handle*>(handle)->adapter.lastRunArgc);
+}
+// Returns 1 if argv[index] from the last onRun() call equals `value`, 0
+// if it does not match OR index is out of the recorded range -- so a
+// test cannot mistake "out of range" for "matched an empty string".
+int phLastRunArgMatches(void* handle, int index, const char* value) {
+  MockAdapter& a = static_cast<Handle*>(handle)->adapter;
+  if (index < 0 || static_cast<size_t>(index) >= a.lastRunArgc) return 0;
+  if (static_cast<size_t>(index) >= MockAdapter::kMaxRecordedRunArgs) return 0;
+  return std::strcmp(a.lastRunArgs[index], value) == 0 ? 1 : 0;
 }
 
 int phIdentityCalls(void* handle) {
