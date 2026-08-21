@@ -57,9 +57,9 @@ the same vocabulary.
 ### 1.1 Where the cruise speed lives, and why
 
 - **A V-form's commanded velocity *is* its cruise.** There is no separate cruise
-  argument, because the number you passed is the target. It is still reached
+  argument, because the number you passed is the ceiling. It is still reached
   through the velocity profile — commanding `200` does not step to 200 mm/s, it
-  ramps there — so "cruise" and "maximum" are the same thing for these forms.
+  ramps there — so "cruise" and "maximum" are the same thing throughout.
 - **An X-form's commanded value is a displacement**, which says nothing about
   how fast to cover it, so `cruise` is its own argument. Pass `0` for the
   configured default.
@@ -84,10 +84,36 @@ go_to_r(x, y)          ==  move_x(arcLength, 2·atan2(y, x))
 go_to_w(x, y)          ==  read pose → world-to-body → go_to_r
 ```
 
-`b` is the track width; `rot` is in radians for the arithmetic. The body forms
-*are* the wheel forms composed with differential kinematics, which is why
-`wheels_x` and `wheels_v` are the only primitives — everything else is a change
-of coordinates on top of them.
+`rot` is in radians for the arithmetic, and `b` is the **effective** track
+width — not the measured one. The body forms *are* the wheel forms composed
+with differential kinematics, which is why `wheels_x` and `wheels_v` are the
+only primitives; everything else is a change of coordinates on top of them.
+
+### 2.1 `b` is the effective track width
+
+Ideal differential kinematics say `omega = (vR − vL) / b`, but a skid-steer
+robot drags its wheels sideways through a turn and rotates **less** than that
+for a given wheel differential. `rotational_slip` is the measured ratio of
+actual rotation to ideal, so every kinematic use of the track wants:
+
+```
+b = trackwidth / rotational_slip          (rotational_slip == 0 → no correction)
+```
+
+The robot config stores only those two raw numbers, and the effective value is
+derived at boot — `Config::Robot::effectiveTrackWidth()`, deliberately a
+*method* rather than a stored field, so configuration read-back never reports a
+derived number as though it had been measured. That one value is then handed to
+the drive, the odometry and the planner limits, so **every `b` in this document
+is the effective one**, including §3.3's pivot rate and §3.6's odometry.
+
+**Never bend `trackwidth` to make turns land.** It is the one independently
+verifiable number in the robot config — a caliper reaches it. Scrub belongs in
+`rotational_slip`, which is separately measurable against camera truth, and
+keeping them apart is what lets a bad turn be diagnosed instead of merely
+compensated. On `tovez`, 13 camera-truth turns across ±90/±180/±360° at three
+rates put the effective track at 136.59 ± 0.58 mm against a caliper-measured
+128 mm.
 
 Useful things that fall straight out:
 
@@ -117,9 +143,12 @@ Move each wheel a commanded distance. Both wheels finish together: the ratio
 `left:right` is what defines the path, so the faster wheel is not allowed to
 arrive early and wait.
 
-`cruise` is the **dominant** wheel's speed — the one with the larger magnitude.
-The other wheel's speed follows from the ratio. This is what makes `cruise` a
-single number for a two-wheel command.
+`cruise` is the **dominant** wheel's **maximum** speed — the dominant wheel
+being the one with the larger magnitude. The other wheel's speed follows from
+the ratio, which is what makes `cruise` a single number for a two-wheel command.
+
+It is a ceiling, not a speed that is held: the profile ramps up to it and
+decelerates out of it, and a short move may never reach it at all.
 
 `timeout` is a required backstop, not the stop condition. If the robot is
 blocked and the encoders never reach the commanded distance, the timeout is what
@@ -127,7 +156,7 @@ ends the move.
 
 ### 3.2 `wheels_v(left, right, duration)`
 
-Command each wheel a cruise velocity, held for `duration`. The ratio is
+Command each wheel a maximum velocity, held for `duration`. The ratio is
 maintained through the ramp, so the commanded curvature is the same at 20 mm/s
 and at 200 mm/s.
 
@@ -160,9 +189,9 @@ Two rules that are not obvious and were learned the hard way:
 - **Never replace an in-flight arc with a pivot at speed.** Doing so ratio-locks
   a hard brake onto the reversing wheel. Ramp to rest through an ordinary
   planned stop first, then pivot from rest.
-- **The pivot rate is derived, not configured**: `2 · speed / trackWidth`. There
-  is no pivot-speed knob, and adding one would let a program request a pivot the
-  wheels cannot deliver.
+- **The pivot rate is derived, not configured**: `2 · speed / b`, with `b` the
+  effective track width (§2.1). There is no pivot-speed knob, and adding one
+  would let a program request a pivot the wheels cannot deliver.
 
 **Fine alignment is not a tuning knob.** The terminal trim (`align_tol` 1.0°,
 `align_max_nudges` 6) exists to land the last fraction of a degree. 333 measured
@@ -225,7 +254,7 @@ that assumes one is an API that does not run on the whole fleet.
   (recovered from `odometry.cpp:17-51`):
 
   ```
-  Δleft, Δright → (distance, headingDelta)     differential forward kinematics
+  Δleft, Δright → (distance, headingDelta)     forward kinematics, effective b
   midTheta  = theta + headingDelta / 2
   x        += distance · cos(midTheta)
   y        += distance · sin(midTheta)
@@ -252,7 +281,7 @@ posted, and what the loop consumes:
 
 ```
 uLeft, uRight   the ratio, normalized so max(|uLeft|, |uRight|) == 1
-cruise          [mm/s] the dominant wheel's target speed
+cruise          [mm/s] the dominant wheel's maximum speed — a ceiling, not a hold
 stop            Displacement | Time
 limit           in stop's own unit
 deadline        [ms] timeout backstop, or the lease
@@ -261,7 +290,7 @@ id              correlation id, unique for the session
 
 This is not new. It is the recovered `Motion::Move` plus `MoveShape`, where
 `shapeOf()` normalizes by the dominant wheel and `cruise` is that wheel's own
-speed.
+maximum speed.
 
 **The profiler plans one scalar.** Each wheel commands `λ · u_w`, so the
 commanded left:right ratio — and therefore the heading the segment sweeps —
