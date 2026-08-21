@@ -272,6 +272,36 @@ that assumes one is an API that does not run on the whole fleet.
 Pose drifts. A camera fix or an external seed is what corrects it, and seeding
 writes **both** sources so their later divergence is the drift being measured.
 
+### 3.7 Stopping — `stop(immediate=False)` and `estop()`
+
+Two verbs, and they are not two flavours of the same thing. **`stop` is how a
+program ends a motion it meant to end. `estop` is what you call when something
+has gone wrong.** Reaching for `estop` as a general-purpose halt is a category
+error — it is a panic path, and using it routinely both hides real emergencies
+and subjects the drivetrain to jerk it did not need to take.
+
+| call | deceleration | use it when |
+|---|---|---|
+| `stop()` | jerk-limited ramp to rest, using the configured decel and jerk ceilings | the normal case — you found the line, the program is done, the operator pressed a button |
+| `stop(immediate=True)` | zero the target now; accept the jerk and acceleration consequences | you must stop short and a smooth ramp will not do it in the distance available |
+| `estop()` | zero now, latched, planner queue cleared | something is wrong — collision, geofence breach, sensor fault, an exception on the way out |
+
+`stop()` is the default because a jerk-limited stop is the one that does not
+cost anything: it does not slip the wheels, does not lurch the chassis, and
+leaves odometry trustworthy. `stop(immediate=True)` is a legitimate choice, not
+a lesser `estop` — it says "I need the distance more than I need the smoothness"
+— but the acceleration it commands is real, and on a robot that is carrying
+something or measuring its own pose, that has consequences.
+
+`estop()` additionally **latches**. Motion stays refused until it is cleared,
+which is what makes it safe as a fault response and wrong as a control-flow
+tool: a program that calls `estop` to end a leg has to clear it before the next
+one, and a program that clears an `estop` reflexively has disarmed its own
+safety path.
+
+**`stop()` takes effect on the current motion.** It is not a queue entry that
+waits its turn — see §6 for why that distinction is written in measurements.
+
 ---
 
 ## 4. The control block
@@ -339,9 +369,9 @@ plus two that only exist locally:
 
 | reason | meaning |
 |---|---|
-| `stop` | the stop condition was met |
+| `stop` | the stop condition was met, or `stop()` ended it |
 | `timeout` | the backstop fired |
-| `estop` | a panic stop ended it |
+| `estop` | a panic stop ended it — the fault path, not ordinary control flow |
 | `aborted` | the caller abandoned it — callback said so, or the generator was closed |
 
 **The loop has exactly one owner.** Calling `tick` while a fiber owns it raises
@@ -383,10 +413,20 @@ assumed everywhere else.
 - **No unbounded form exists.** A V-form is bounded by its `duration`, which is
   the lease. An X-form is bounded by its displacement **plus** a required
   `timeout` backstop. There is no call that means "go until I say stop."
-- **`stop` is planned; `estop` is the panic stop.** Measured on a 400 mm leg
-  with the halt sent 0.5 s in: `stop` travelled the full 39.8 cm and took 5.9 s
-  to go inactive, `estop` travelled 2.9 cm and cleared in 0.10 s. Every halt
-  path — geofence, Ctrl-C, callback abort, `finally` — calls `estop`.
+- **`stop` ends a motion; `estop` responds to a fault** (§3.7). They are not
+  interchangeable in either direction. Use `stop()` for ordinary control flow,
+  and `estop()` for geofence breaches, collisions, Ctrl-C, and any loop leaving
+  by exception. Catch-and-`estop`-and-re-raise, rather than a bare `finally`:
+  a normal exit has already stopped, and estopping it anyway latches the robot
+  for no reason.
+- **A stop that queues behind the active motion is not a stop.** Measured on a
+  400 mm leg with the halt sent 0.5 s in: a *queued* stop let the robot travel
+  the entire 39.8 cm and took 5.9 s to go inactive, because it waited for the
+  leg to finish first; `estop` travelled 2.9 cm and cleared in 0.10 s. That
+  measurement is why `stop()` in this API acts on the current motion rather
+  than enqueueing behind it — a program that says "stop" when it sees the line
+  must not drive the rest of the leg first. It is also why the number cannot be
+  read as "smooth stops are slow": it measured queueing, not deceleration.
 - **One `estop` is not proof of a stop.** The motor brick latches its last
   commanded speed and does not reset when the microcontroller does. A single
   `estop` failed 5 of 6 attempts in measurement, and one issued by a
@@ -415,8 +455,8 @@ robot.move_x(0, 90).wait()                   # pivot 90 deg CCW in place
 robot.go_to_w(-150, 400, arrive=10).wait()   # drive to a world point
 
 def watch(t):                                # observer; may end the move
-    if t.line[0] < 200:                      # crossed a line
-        robot.estop()
+    if t.line[0] < 200:                      # found the line — expected, so
+        robot.stop()                         # a normal jerk-limited stop
 
 robot.move_x(400, 0, on_tick=watch)          # a callback blocks, and observes
 
@@ -425,10 +465,14 @@ robot.move_x(400, 0, on_tick=watch)          # a callback blocks, and observes
 try:
     for t in robot.move_x(400, 0):           # iterating is what ticks it
         if t.color.blue > 300:
-            robot.estop()
+            robot.stop()                     # expected condition: normal stop
             break
-finally:
-    robot.estop()                            # every driving loop owes this
+        if t.range < 80:                     # about to hit something:
+            robot.stop(immediate=True)       # stop short, accept the jerk
+            break
+except BaseException:                        # exception or Ctrl-C is a fault
+    robot.estop()                            # so the fault path is estop
+    raise
 
 
 # ---- Mode A — a fiber drives the loop ------------------------------------
@@ -437,12 +481,13 @@ robot.start()                                # launch the tick fiber, once
 m = robot.move_x(400, 0)                     # posts; the fiber runs it
 try:
     while not m.done:
-        if bumper.pressed():
+        if bumper.pressed():                 # a collision IS an emergency
             robot.estop()
             break
         sleep(0.02)                          # you MUST yield, or you starve it
-finally:
+except BaseException:
     robot.estop()
+    raise
 
 print(m.reason)                              # stop | timeout | estop | aborted
 ```
@@ -465,17 +510,19 @@ await robot.moveX({distance: 400, rotation: 0});
 await robot.goToW({x: -150, y: 400, arrive: 10});
 
 await robot.moveX({distance: 400, rotation: 0}, (t) => {
-  if (t.line[0] < 200) robot.estop();          // a callback blocks, and observes
+  if (t.line[0] < 200) robot.stop();           // expected condition, normal stop
 });
 
 
 // ---- Mode B — you drive the loop ----------------------------------------
 try {
   for await (const t of robot.moveX({distance: 400, rotation: 0})) {
-    if (t.color.blue > 300) { robot.estop(); break; }
+    if (t.color.blue > 300) { robot.stop(); break; }
+    if (t.range < 80) { robot.stop({immediate: true}); break; }   // stop short
   }
-} finally {
-  robot.estop();
+} catch (e) {
+  robot.estop();                               // a thrown error is a fault
+  throw e;
 }
 
 
@@ -485,11 +532,12 @@ robot.start();
 const m = robot.moveX({distance: 400, rotation: 0});
 try {
   while (!m.done) {
-    if (bumper.pressed()) { robot.estop(); break; }
-    await robot.sleep(20);                     // yield
+    if (bumper.pressed()) { robot.estop(); break; }   // collision: emergency
+    await robot.sleep(20);                            // yield
   }
-} finally {
+} catch (e) {
   robot.estop();
+  throw e;
 }
 
 console.log(m.reason);                         // stop | timeout | estop | aborted
@@ -514,7 +562,25 @@ Angles are **degrees at the API and milliradian integers on the wire**. The API
 is what a person types; the wire is what a parser reads, and it carries base-10
 integers only. The conversion lives in the binding, in one place.
 
-`STOP #<id>` and `ESTOP` are unchanged.
+Stopping (§3.7):
+
+| method | wire |
+|---|---|
+| `stop()` | `STOP #<id>` |
+| `stop(immediate=True)` | `STOP now #<id>` |
+| `estop()` | `ESTOP` — no id, never acked |
+
+`STOP` gains one optional token rather than splitting into two verbs. §9.2's
+argument does not apply here: `kind`/`stop`/`frame` had to go because they made
+*invalid combinations* spellable, and `STOP`'s modifier has no invalid
+combination to make — both values are meaningful for the same argument list.
+The optional token sits safely before the id because the id is self-marking.
+
+Two semantic changes ride along, both deliberate:
+
+- **`STOP` acts on the current motion** instead of enqueueing behind it (§6).
+- **`STOP` carries a deceleration choice.** The current wire has only the
+  jerk-limited form.
 
 ### 9.2 The verb split, proposed
 
@@ -554,6 +620,9 @@ Stated here so they are easy to reverse rather than buried in prose.
 3. **`go_to_w`'s pose source is pluggable** rather than assuming an OTOS is
    fitted (§3.6).
 4. **No `v_y` argument** on `move_v` until a holonomic base exists (§3.4).
+5. **`stop()` acts on the current motion and takes a deceleration choice**
+   (§3.7, §9.1), which changes `STOP`'s wire semantics from planned-and-queued
+   to immediate-and-profiled. `estop()` stays exactly what it was.
 
 ---
 
