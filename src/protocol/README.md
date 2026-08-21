@@ -31,10 +31,30 @@ odometry this library does not own.
 - **golden vectors** (`golden_vectors.txt`, driven by
   `test_protocol_harness.py::test_golden_vectors`) -- the spec S11.3
   cross-language conformance fixture: literal wire examples from the
-  spec text, asserted byte-for-byte through a mock adapter.
+  spec text plus every `Result`/error-code combination the handler can
+  emit, asserted byte-for-byte through a mock adapter.
 - **feed()'s byte-block contract, case-as-direction, arity, and
   ESTOP's no-ack rule** -- individually named tests in
   `test_protocol_harness.py`; see that file's own module docstring.
+- **chunk-split equivalence**
+  (`test_protocol_harness.py::test_feed_chunk_split_equivalence_golden_vectors`)
+  -- every feed()-driven golden-vector block, fed one-shot,
+  byte-at-a-time, and via several fixed-seed random chunkings, must
+  produce byte-identical output. This is the invariant a future
+  MicroPython/JavaScript port is most likely to get wrong.
+- **adversarial input + the recovery invariant**
+  (`test_protocol_adversarial.py`) -- hostile bytes (embedded NUL,
+  high-ASCII/UTF-8, control characters, colon floods, line-length
+  boundaries, unterminated fragments) run through the REAL handler
+  compiled with AddressSanitizer + UndefinedBehaviorSanitizer, each
+  followed by a check that a subsequent well-formed line still
+  dispatches correctly. Also holds the regression tests for the three
+  real parser bugs this sweep found and fixed (hex-float values,
+  leading-whitespace numeric fields, a NaN reaching `formatConfigValue()`)
+  and a characterization test for one deliberately-not-fixed C-string
+  quirk (`test_embedded_nul_immediately_after_verb_matches_bare_verb`)
+  -- see that file's own module docstring, and
+  `docs/design/protocol.md` S9.4, for the full story.
 
 Read `protocol_handler.h`'s file header for the numbered list of wire
 spec ambiguities this implementation had to resolve (the optional

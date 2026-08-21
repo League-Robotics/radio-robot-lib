@@ -22,8 +22,25 @@ namespace {
 // arity is a rejection, not a best-effort parse" extended to field
 // content.
 
+// strtol/strtoul/strtof all skip LEADING whitespace before the first
+// digit (a C-standard behavior, not a project choice), which would
+// silently accept a field like " 100" or "\t100" as a valid "100" --
+// contradicting this file's own "stray space makes the field
+// unparseable" contract above (that sentence is only true of a
+// TRAILING space; a leading one sails through). An adversarial-input
+// sweep found this by construction (a stray '\r' that has drifted
+// mid-field rather than sitting immediately before the terminator is
+// exactly this case). Reject it explicitly, once, ahead of every
+// numeric decode below.
+bool isWireSpace(char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' ||
+         c == '\r';
+}
+
 bool parseInt32(const char* field, int32_t& out) {
-  if (field == nullptr || field[0] == '\0') return false;
+  if (field == nullptr || field[0] == '\0' || isWireSpace(field[0])) {
+    return false;
+  }
   char* endPtr = nullptr;
   errno = 0;
   long value = std::strtol(field, &endPtr, 10);
@@ -37,7 +54,10 @@ bool parseUint32(const char* field, uint32_t& out) {
   // strtoul silently accepts a leading '-' and wraps around, which
   // would turn "-5" into a huge unsigned value instead of failing --
   // reject it up front.
-  if (field == nullptr || field[0] == '\0' || field[0] == '-') return false;
+  if (field == nullptr || field[0] == '\0' || field[0] == '-' ||
+      isWireSpace(field[0])) {
+    return false;
+  }
   char* endPtr = nullptr;
   errno = 0;
   unsigned long value = std::strtoul(field, &endPtr, 10);
@@ -53,9 +73,23 @@ bool parseUint32(const char* field, uint32_t& out) {
 // nothing in this project ever needs a robot to accept "1e10" or "nan"
 // as a gain.
 bool parseFloatField(const char* field, float& out) {
-  if (field == nullptr || field[0] == '\0') return false;
+  if (field == nullptr || field[0] == '\0' || isWireSpace(field[0])) {
+    return false;
+  }
   for (const char* p = field; *p != '\0'; ++p) {
-    if (*p == 'e' || *p == 'E') return false;  // no exponents, spec §2.2
+    // 'e'/'E' bars decimal-exponent notation ("1e10", spec §2.2). 'x'/'X'
+    // bars C99 HEX FLOAT notation ("0x1p3", "0X1.8P3") -- strtof accepts
+    // this syntax unconditionally (it is not gated behind the 'e'/'E'
+    // check at all, since a hex float's exponent letter is 'p', not
+    // 'e'), so an adversarial-input sweep found that a wire value like
+    // `SET:foo:0x1.8p3` silently decoded to 12.0 instead of being
+    // rejected -- exactly the "no exponents" rule this function exists
+    // to enforce, bypassed by a spelling the spec's authors never had in
+    // mind. A MicroPython or JavaScript port would not reproduce this:
+    // neither `float()` nor `Number()`/`parseFloat()` accepts hex-float
+    // syntax, so this was a C++-only divergence from every other
+    // implementation of this same fixture.
+    if (*p == 'e' || *p == 'E' || *p == 'x' || *p == 'X') return false;
   }
   char* endPtr = nullptr;
   errno = 0;
@@ -112,7 +146,21 @@ bool resolveOptionalId(const char* field, bool present, uint32_t& id,
 // exponent, using integer arithmetic because newlib-nano's printf has
 // no %f. formatConfigValue(0.02f) -> "0.020000",
 // formatConfigValue(-51.5f) -> "-51.500000" (spec's own examples).
+//
+// `value` is NOT wire-parsed here -- it is whatever the ADAPTER's own
+// onGet() handed back (parseFloatField already rejects NaN/Inf on the
+// way IN, spec §2.2/§7.2's "no NaN, no inf"), so this function cannot
+// assume it is finite. +-Inf is already handled correctly below: it
+// compares greater than kMaxScaled and gets clamped before the cast.
+// NaN does not: EVERY comparison against a NaN is false, so
+// `scaled > kMaxScaled` is false too and a NaN sails past the clamp
+// intact into `static_cast<uint32_t>(scaled)` -- converting a NaN to an
+// unsigned integer is undefined behavior (caught live by
+// -fsanitize=undefined's float-cast-overflow check during the
+// adversarial-input sweep). There is no wire spelling for NaN to
+// preserve, so fail safe to 0.0 rather than invent one.
 void formatConfigValue(float value, char* out, size_t cap) {
+  if (std::isnan(value)) value = 0.0f;
   constexpr uint32_t kDivisor = 1000000u;  // 10^6 -- spec's fixed 6 digits
   const bool negative = value < 0.0f;
   const float magnitude = negative ? -value : value;

@@ -114,14 +114,79 @@ SETUP setresult 8
 IN SET:wheel_control.pid_kp:0.03:9
 OUT err:9:11
 
+# ---- 8.3 Error-code coverage: every code Result can produce
+# (adapter.h; docs/protocol-v6-spec.md S8.3) now has at least one wire
+# vector IN THIS FIXTURE -- codes 3 and 11 already had one each above
+# (S7.1's and S8.2's own literal examples); this block adds the
+# remaining six (1, 2, 4, 6, 8, 10) so a port author working from
+# golden_vectors.txt alone, without cross-referencing the Python test
+# suite, sees every code the handler can emit. SET is the vehicle for
+# the adapter-Result codes since it is the one verb whose outcome is
+# entirely the adapter's Result, unfiltered by any handler-level bounds
+# table (S6: "the handler holds no field table, no bounds").
+
+# ERR_UNKNOWN (Result::kUnknown, ordinal 1) -- "no such verb or field
+# name". GET has no wire channel to carry this on (ambiguity note #2,
+# protocol_handler.h) so SET is the only verb that can produce it on
+# the wire.
+SETUP setresult 1
+IN SET:no.such.field:1.0:4
+OUT err:4:1
+
+# ERR_BADARG (Result::kBadArg, ordinal 2) -- "malformed/non-finite
+# argument, wrong arity". Two DIFFERENT sources produce this same code:
+# the handler's OWN value decode failing before onSet() is ever called
+# (shown here), and the adapter itself returning kBadArg for a
+# well-formed value it rejects on other grounds (both wire-identical,
+# by design -- S6).
+SETUP setresult 0
+IN SET:wheel_control.pid_kp:notanumber
+OUT err:0:2
+
+# ERR_FULL (Result::kFull, ordinal 4) -- "queue full (4 pending)".
+SETUP setresult 4
+IN SET:wheel_control.pid_kp:0.03
+OUT err:0:4
+
+# ERR_UNIMPLEMENTED (Result::kUnimplemented, ordinal 5) -- "recognized,
+# not wired on this build".
+SETUP setresult 5
+IN SET:wheel_control.pid_kp:0.03:9
+OUT err:9:6
+
+# ERR_NOT_CONFIGURED (Result::kNotReady, ordinal 6) -- "refused pre-ready".
+SETUP setresult 6
+IN SET:wheel_control.pid_kp:0.03:9
+OUT err:9:8
+
+# ERR_BUSY (Result::kBusy, ordinal 7) -- "subsystem in motion; retry at
+# rest".
+SETUP setresult 7
+IN SET:wheel_control.pid_kp:0.03:9
+OUT err:9:10
+
 # ---- 5. Motion ----
 
 # docs/plan.md Step 4's own acceptance criterion, run one step early
 # because the handler alone is enough to prove it:
 #   feed("WHEELS:100:100:1000:5\n") -> sink contains "ok:5"
-SETUP setresult 0
+SETUP wheelsresult 0
 IN WHEELS:100:100:1000:5
 OUT ok:5
+
+# WHEELS's `id` is OPTIONAL (spec S5.2, `[:<id>]`) -- the 4-field vector
+# above is the id-present arm; this is the id-absent arm, which per
+# protocol_handler.h's ambiguity note #1 still acks, with id 0.
+SETUP wheelsresult 0
+IN WHEELS:100:100:1000
+OUT ok:0
+
+# WHEELS rejected: ERR_RANGE (Result::kRange, ordinal 3) -- e.g. the
+# adapter enforcing spec S5.2's 5000 ms ceiling (protocol_handler.h
+# ambiguity note #3: the handler itself does not enforce it).
+SETUP wheelsresult 3
+IN WHEELS:100:100:9000:6
+OUT err:6:3
 
 # STOP's reply format is spec S5.4's literal "ok:<id> on enqueue";
 # spec never states a concrete id for it, so id 7 is this fixture's own
@@ -130,6 +195,14 @@ OUT ok:5
 SETUP stopresult 0
 IN STOP:7
 OUT ok:7
+
+# STOP rejected: ERR_BUSY (Result::kBusy, ordinal 7) -- STOP's id is
+# REQUIRED (spec S3.1's `STOP | id`, no brackets) so unlike SET/WHEELS
+# there is no id-0-suppresses-ack carve-out; it is always acked, even
+# on rejection.
+SETUP stopresult 7
+IN STOP:11
+OUT err:11:10
 
 # ESTOP: spec S8.2, literal requirement -- "ESTOP never carries an id
 # and is never acked". There is no wire text to quote because the

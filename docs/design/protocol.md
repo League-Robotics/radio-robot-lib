@@ -424,7 +424,75 @@ same reason — §6.5's bits are OTOS/line/colour/planner, none of which exist
 here. Reusing those bit *numbers* for different meanings would actively
 mislead anyone cross-referencing the spec.
 
-### 9.4 Where the adapter lives, and why
+### 9.4 Hardening sweep (2026-08-20) — bugs found, and what they mean for a port
+
+Stakeholder direction: `src/protocol/` is going to be an **archetype**,
+ported to MicroPython and JavaScript by reading it and running its fixture,
+so this pass focused entirely on the handler's own robustness, not new
+features. Full detail lives in the fix-site comments in
+`protocol_handler.cpp` and in `tests/protocol/test_protocol_adversarial.py`'s
+module docstring; this is the summary a future porter should read first.
+
+**Three real bugs, all fixed, none a wire-format change:**
+
+1. **`formatConfigValue()` cast a NaN straight to `uint32_t`** — undefined
+   behavior, confirmed live by UBSan. A NaN can never arrive *over the wire*
+   (`parseFloatField` already rejects it on input, spec §2.2/§7.2's "no
+   NaN, no inf"), so this was only reachable through the `Adapter` seam — an
+   adapter's own stored config value being NaN (e.g. upstream
+   divide-by-zero in a real firmware's config math), read back by `GET`.
+   Fixed by clamping NaN to 0.0 before the cast; `+Inf`/`-Inf` were already
+   handled correctly by the existing overflow clamp.
+2. **Hex-float syntax (`SET:name:0x1.8p3`) bypassed "no exponents"
+   entirely.** The exponent guard only checked for `'e'`/`'E'`; a hex
+   float's exponent marker is `'p'`, gated behind a `'0x'` prefix the guard
+   never looked for, so `strtof` silently accepted it (`0x1.8p3` → 12.0).
+   **Archetype-relevant on its own**: neither Python's `float()` nor
+   JavaScript's `Number()`/`parseFloat()` accepts hex-float syntax, so this
+   was a **C++-only divergence** — a straight port would not have this bug
+   at all, and would need to actively decide whether to *add* hex-float
+   rejection or simply rely on its own numeric parser already refusing it.
+3. **A leading-whitespace numeric field was silently accepted**
+   (`WHEELS: 100:100:1000`, space after the first `:`) because
+   `strtol`/`strtoul`/`strtof` all skip leading whitespace per the C
+   standard — contradicting this file's own "strict, whole field consumed"
+   doc comment, which (before the fix) was only actually true of
+   *trailing* whitespace. Every language's numeric parser has its own
+   leniency here (Python's `int()`/`float()` also strip whitespace **and**
+   accept `_` digit separators; JavaScript's `Number(" ")` is `0`) — a port
+   author should decide this deliberately per language, not inherit
+   whichever behavior their host language's built-in parser happens to
+   have.
+
+**One characterization finding, not fixed — read this before porting
+`dispatch()`:** every wire-touching comparison in this handler (verb
+lookup, field splitting) operates on NUL-terminated C strings, per this
+file's own "no allocation, no `std::string`" constraint (§2.2). `strcmp()`
+stops at the first NUL in *either* operand, so `PING extra
+` compares
+**equal** to `"PING"` and dispatches exactly like a bare `PING` — silently
+discarding `extra` with no malformed-count increment. Spec §2's verb
+grammar (`verb ::= [A-Za-z][A-Za-z0-9_]*`) does not admit NUL in a verb at
+all, so the grammar-correct behavior would be rejection, not silent
+acceptance of the truncated prefix. **This is NOT reproduced by a
+length-aware host language**: Python `bytes`/JavaScript strings compare
+full length, embedded NUL included, so `b"PING extra" == b"PING"` is
+`False` in Python. A faithful line-by-line port of this C++ handler's
+*logic* would therefore behave differently from this reference
+implementation on this one input class — pinned as a characterization
+test (`test_embedded_nul_immediately_after_verb_matches_bare_verb`) so it
+cannot drift silently, not fixed, because a real fix means abandoning
+C-string comparisons throughout the parser (a far larger, riskier change
+than this pass's scope, and in tension with §2.2's explicit no-`std::string`
+firmware constraint).
+
+**What did NOT change:** the wire format itself. Every fix above tightens
+*rejection* of inputs that were already meant to be rejected (per this
+file's own prior doc comments) or were never legal per spec §2's grammar in
+the first place — no previously-accepted, spec-legal input is now rejected,
+and no reply shape changed.
+
+### 9.5 Where the adapter lives, and why
 
 `src/adapter/` — its own package, not inside `src/protocol/` or
 `src/diffdrive/`. It is the one component required to depend on both, and each

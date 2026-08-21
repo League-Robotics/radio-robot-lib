@@ -26,6 +26,7 @@ Run with::
 
 import ctypes
 import pathlib
+import random
 import subprocess
 
 import pytest
@@ -788,3 +789,119 @@ def test_emit_telemetry_header_reprinted_only_on_column_change(tmp_path):
         assert _sink_lines(lib, handle) == ["thdr:seq:now:x:y", "t:3:1002:7:8"]
     finally:
         lib.phDestroy(handle)
+
+
+# ---------------------------------------------------------------------------
+# Chunk-split equivalence (docs/design/protocol.md S2.1) -- the single
+# most valuable invariant feed() has, and the one a future MicroPython/
+# JavaScript port is most likely to get wrong: a real transport hands
+# feed() arbitrary fragments, and reassembly must be byte-identical to
+# handing it the whole line in one call, no matter where the cuts fall.
+#
+# Checked against every FEED()-DRIVEN golden-vector block (a block whose
+# actions are all "IN" -- an "EMIT" block drives emitTelemetry()
+# directly, not feed(), so it says nothing about chunking and is
+# skipped): once fed as one block, once byte-at-a-time, and several
+# times with random cut points, using a FIXED seed so a failure
+# reproduces exactly instead of flaking.
+# ---------------------------------------------------------------------------
+
+def _block_wire_bytes(actions):
+    """Concatenate one golden-vector block's "IN" action text (each with
+    its own '\n' terminator) into the single byte string a real
+    transport would hand to feed() across that block's whole action
+    sequence. Returns None for a block that isn't purely feed()-driven
+    (e.g. it contains an "EMIT" action)."""
+    parts = []
+    for kind, payload in actions:
+        if kind != "IN":
+            return None
+        parts.append((payload + "\n").encode("ascii"))
+    return b"".join(parts)
+
+
+def _run_block_feed(lib, setup_calls, wire_bytes, chunk_sizes):
+    """Fresh handle; apply `setup_calls`; feed `wire_bytes` split into
+    consecutive pieces of `chunk_sizes` bytes each (any bytes left over
+    after `chunk_sizes` is exhausted go in one final feed() call); return
+    everything the sink captured."""
+    handle = lib.phCreate()
+    try:
+        runner = _GoldenVectorRunner(lib, handle)
+        for key, tokens in setup_calls:
+            runner.apply_setup(key, tokens)
+        pos = 0
+        for size in chunk_sizes:
+            if pos >= len(wire_bytes):
+                break
+            chunk = wire_bytes[pos:pos + size]
+            lib.phFeed(handle, chunk, len(chunk))
+            pos += len(chunk)
+        if pos < len(wire_bytes):
+            remainder = wire_bytes[pos:]
+            lib.phFeed(handle, remainder, len(remainder))
+        length = lib.phSinkLength(handle)
+        if length == 0:
+            return b""
+        buf = ctypes.create_string_buffer(length)
+        n = lib.phSinkRead(handle, buf, length)
+        assert n == length
+        return buf.raw[:length]
+    finally:
+        lib.phDestroy(handle)
+
+
+def _random_chunk_sizes(rng, total):
+    """Split `total` bytes into randomly-sized pieces (1-5 bytes each),
+    so a run crosses MANY feed()-boundary positions, not just one."""
+    sizes = []
+    remaining = total
+    while remaining > 0:
+        size = rng.randint(1, 5)
+        sizes.append(size)
+        remaining -= size
+    return sizes
+
+
+def test_feed_chunk_split_equivalence_golden_vectors(tmp_path):
+    """For every feed()-driven golden-vector block: one-shot feed(),
+    byte-at-a-time feed(), and several fixed-seed random chunkings must
+    all produce byte-identical sink output. This is the property most
+    likely to be quietly violated by a hand-rolled reassembly loop, in
+    this implementation or in a later port of it, so it belongs in the
+    shared fixture story rather than only in ad hoc block-boundary
+    tests."""
+    lib = _load_shim(tmp_path)
+    blocks = _parse_golden_vectors(_GOLDEN_VECTORS_PATH)
+    assert blocks, "no golden vectors parsed -- fixture path or format broke"
+    rng = random.Random(20260820)  # fixed seed: a failure must reproduce
+    checked = 0
+    for index, (setup_calls, actions, _expected_out) in enumerate(blocks):
+        wire_bytes = _block_wire_bytes(actions)
+        if not wire_bytes:
+            continue  # EMIT-driven block, or a block with no IN actions
+        checked += 1
+
+        baseline = _run_block_feed(lib, setup_calls, wire_bytes,
+                                    [len(wire_bytes)])
+
+        byte_at_a_time = _run_block_feed(
+            lib, setup_calls, wire_bytes, [1] * len(wire_bytes))
+        assert byte_at_a_time == baseline, (
+            f"golden vector block {index}: byte-at-a-time feed diverged "
+            f"from one-shot feed\n  one-shot:       {baseline!r}\n"
+            f"  byte-at-a-time: {byte_at_a_time!r}")
+
+        for trial in range(5):
+            chunk_sizes = _random_chunk_sizes(rng, len(wire_bytes))
+            chunked = _run_block_feed(lib, setup_calls, wire_bytes,
+                                       chunk_sizes)
+            assert chunked == baseline, (
+                f"golden vector block {index} trial {trial}: random "
+                f"chunking {chunk_sizes!r} diverged from one-shot feed\n"
+                f"  one-shot: {baseline!r}\n  chunked:  {chunked!r}")
+
+    assert checked > 0, "no feed()-driven golden vector blocks found to check"
+    print(f"chunk-split equivalence: {checked} feed()-driven golden vector "
+          f"blocks, each checked one-shot + byte-at-a-time + 5 random "
+          f"chunkings (fixed seed)")
