@@ -11,13 +11,20 @@
 //      "debug\n", a text that is ENTIRELY '\n'/'\r' bytes must collapse
 //      onto that same bare shape, and a too-long text must be
 //      TRUNCATED to fit the 240-byte line cap, never overflow it.
-//   2. RUN's own "#0 suppresses EVERYTHING, including a REGISTERED
-//      function's own ret value" rule -- this needs MockAdapter to
-//      actually have a return value configured (runHasResult=true) for
-//      the check to mean anything; the generic adversarial fuzz driver
-//      (asan_fuzz_driver.cpp) never configures one, so it cannot tell
-//      "suppressed a ret" apart from "there was never a ret to
-//      suppress."
+//   2. RUN's ack-then-ret path with a REGISTERED return value under
+//      ASan/UBSan -- this needs MockAdapter to actually have a return
+//      value configured (runHasResult=true) for the check to mean
+//      anything; the generic adversarial fuzz driver
+//      (asan_fuzz_driver.cpp) never configures one. (Historical note:
+//      this used to also demonstrate RUN's `#0`-suppresses-a-ret rule;
+//      `#0` no longer suppresses anything as of the 2026-08-21
+//      reliability layer -- docs/design/protocol.md §6.3 -- it is
+//      simply always a stale retransmit that never invokes onRun() at
+//      all, which test_protocol_harness.py's
+//      test_run_id_zero_is_a_stale_retransmit_never_executes already
+//      covers via the ctypes shim's own call-count introspection; this
+//      driver has no such introspection, so it no longer tries to
+//      demonstrate that case.)
 //
 // Nothing under src/ knows this file exists; test scaffolding only,
 // like protocol_shim.cpp / mock_adapter.h / nan_regression_driver.cpp.
@@ -55,12 +62,11 @@ int main() {
   std::string longText(500, 'z');         // way over the 240-byte cap
   handler.sendDebug(longText.c_str());
 
-  // ---- 2. RUN's #0 suppresses a REGISTERED function's ret, too ----
+  // ---- 2. RUN with a REGISTERED return value, under ASan/UBSan ----
   adapter.runResult = Protocol::Result::kOk;
   adapter.runHasResult = true;
   adapter.runResultText = "42";
-  feedLine(handler, "RUN foo #0\n");  // must produce NOTHING
-  feedLine(handler, "RUN foo #5\n");  // contrast: must produce "ret 42 #5\n"
+  feedLine(handler, "RUN foo #1\n");  // must produce "ack 1 0\nret 42 #1\n"
 
   std::fflush(stdout);
   return 0;

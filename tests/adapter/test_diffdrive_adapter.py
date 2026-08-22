@@ -171,13 +171,15 @@ def test_acceptance_wheels_to_lease_expiry_to_estop(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        # feed("WHEELS 100 100 1000 #5\n")  ->  sink contains "ok #5"
-        _feed(lib, handle, b"WHEELS 100 100 1000 #5\n")
-        assert _sink_text(lib, handle) == "ok #5\n"
+        # feed("WHEELS 100 100 1000 #1\n")  ->  sink contains "ack 1 0"
+        # (docs/design/protocol.md S8 -- `ok` is gone, the ack alone is
+        # the acceptance signal, and the id is mandatory now).
+        _feed(lib, handle, b"WHEELS 100 100 1000 #1\n")
+        assert _sink_text(lib, handle) == "ack 1 0\n"
         lib.paSinkClear(handle)
 
         # Subscribe telemetry so subsequent steps produce t: frames.
-        _feed(lib, handle, b"TLM POSE\n")
+        _feed(lib, handle, b"TLM POSE #2\n")
         lib.paSinkClear(handle)
 
         # step the kernel  ->  t: frames show counts (posl/posr) climbing
@@ -201,15 +203,18 @@ def test_acceptance_wheels_to_lease_expiry_to_estop(tmp_path):
         assert lib.paMotorAppliedDutyLeft(handle) == 0.0
         assert lib.paMotorAppliedDutyRight(handle) == 0.0
 
-        # feed("ESTOP\n")  ->  latched zero, no ack (by design)
+        # feed("ESTOP\n")  ->  latched zero, and NOW replies "estop"
+        # (docs/design/protocol.md S8.3, superseding the pre-2026-08-21
+        # "never acked" rule -- the stop still executes before the
+        # reply is written).
         lib.paSinkClear(handle)
         _feed(lib, handle, b"ESTOP\n")
-        assert lib.paSinkLength(handle) == 0, "ESTOP must never ack"
+        assert _sink_text(lib, handle) == "estop\n"
+        lib.paSinkClear(handle)
         lib.paStep(handle)
         assert lib.paEstopped(handle) == 1
         assert lib.paMotorAppliedDutyLeft(handle) == 0.0
         assert lib.paMotorAppliedDutyRight(handle) == 0.0
-        assert lib.paSinkLength(handle) == 0, "ESTOP must never ack"
     finally:
         lib.paDestroy(handle)
 
@@ -244,7 +249,7 @@ def test_twist_sign_left_and_right_are_not_swapped(tmp_path):
         # speed (and vice versa) -- backwards, not just off by a sign
         # convention footnote.
         _feed(lib, handle, b"WHEELS 150 -150 1000 #1\n")
-        assert _sink_text(lib, handle) == "ok #1\n"
+        assert _sink_text(lib, handle) == "ack 1 0\n"
 
         for _ in range(40):
             lib.paStep(handle)
@@ -279,7 +284,7 @@ def test_lease_expiry_stops_the_wheels_measured_at_the_motor(tmp_path):
     try:
         lease_ms = 200
         _feed(lib, handle, f"WHEELS 200 200 {lease_ms} #1\n".encode("ascii"))
-        assert _sink_text(lib, handle) == "ok #1\n"
+        assert _sink_text(lib, handle) == "ack 1 0\n"
 
         # Well inside the lease: driving, not expired.
         for _ in range(5):
@@ -325,7 +330,7 @@ def test_stop_calls_neutral_and_acks(tmp_path):
         assert lib.paMotorAppliedDutyLeft(handle) != 0.0
 
         _feed(lib, handle, b"STOP #2\n")
-        assert _sink_text(lib, handle) == "ok #2\n"
+        assert _sink_text(lib, handle) == "ack 2 0\n"
         for _ in range(3):
             lib.paStep(handle)
         assert lib.paMotorAppliedDutyLeft(handle) == 0.0
@@ -339,10 +344,13 @@ def test_wheels_duration_over_ceiling_is_rejected(tmp_path):
     handle = _new_handle(lib)
     try:
         # spec S5.2's ceiling is 5000 ms; the handler itself does not
-        # enforce it (protocol_handler.h ambiguity note #3) -- this
-        # adapter does (diffdrive_adapter.h kWheelsDurationCeiling).
+        # enforce it (protocol_handler.h ambiguity note #1) -- this
+        # adapter does (diffdrive_adapter.h kWheelsDurationCeiling). The
+        # command still ACKs (it arrived, in order); the rejection is a
+        # SEPARATE err line, code first now (docs/design/protocol.md
+        # S8.2/S8.6).
         _feed(lib, handle, b"WHEELS 100 100 5001 #1\n")
-        assert _sink_text(lib, handle) == "err #1 3\n"  # ERR_RANGE
+        assert _sink_text(lib, handle) == "ack 1 0\nerr 3 #1\n"  # ERR_RANGE
     finally:
         lib.paDestroy(handle)
 
@@ -351,16 +359,21 @@ def test_get_set_wheel_control_field_round_trips(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        _feed(lib, handle, b"SET wheel_control.pid_kp 0.030000 #9\n")
-        assert _sink_text(lib, handle) == "ok #9\n"
+        _feed(lib, handle, b"SET wheel_control.pid_kp 0.030000 #1\n")
+        assert _sink_text(lib, handle) == "ack 1 0\n"
         lib.paSinkClear(handle)
 
-        _feed(lib, handle, b"GET wheel_control.pid_kp\n")
-        assert _sink_text(lib, handle) == "get wheel_control.pid_kp 0.030000\n"
+        _feed(lib, handle, b"GET wheel_control.pid_kp #2\n")
+        assert _sink_text(lib, handle) == (
+            "ack 2 0\nget wheel_control.pid_kp 0.030000\n")
         lib.paSinkClear(handle)
 
-        _feed(lib, handle, b"GET wheel_control.nonexistent\n")
-        assert lib.paSinkLength(handle) == 0, "unknown GET name must be silent"
+        # Unknown GET name: still acked (it arrived, in order) but
+        # produces no `get` line of its own (docs/design/protocol.md
+        # S6/S8.2 -- no longer "silent" in the sense of no reply at all,
+        # since every sequenced command gets an ack now).
+        _feed(lib, handle, b"GET wheel_control.nonexistent #3\n")
+        assert _sink_text(lib, handle) == "ack 3 0\n"
     finally:
         lib.paDestroy(handle)
 
@@ -369,12 +382,13 @@ def test_identity_and_status_have_plausible_values(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        _feed(lib, handle, b"ID\n")
-        assert _sink_text(lib, handle) == "id differential step4 v6-step4\n"
+        _feed(lib, handle, b"ID #1\n")
+        assert _sink_text(lib, handle) == (
+            "ack 1 0\nid differential step4 v6-step4\n")
         lib.paSinkClear(handle)
 
-        _feed(lib, handle, b"VER\n")
-        assert _sink_text(lib, handle) == "ver v6-step4\n"
+        _feed(lib, handle, b"VER #2\n")
+        assert _sink_text(lib, handle) == "ack 2 0\nver v6-step4\n"
         lib.paSinkClear(handle)
 
         # Output() defaults everything false/0 until the kernel has
@@ -384,9 +398,10 @@ def test_identity_and_status_have_plausible_values(tmp_path):
         lib.paStep(handle)
         lib.paSinkClear(handle)
 
-        _feed(lib, handle, b"STATUS\n")
+        _feed(lib, handle, b"STATUS #3\n")
         text = _sink_text(lib, handle)
-        assert text.startswith("status ready=1 active=0 connL=1 connR=1 ")
+        assert text.startswith("ack 3 0\nstatus ready=1 active=0 connL=1 connR=1 ")
+        assert text.rstrip("\n").endswith(" next=4"), text
     finally:
         lib.paDestroy(handle)
 

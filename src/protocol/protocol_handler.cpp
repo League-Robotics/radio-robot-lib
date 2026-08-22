@@ -1,6 +1,7 @@
 // protocol_handler.cpp — Protocol::ProtocolHandler implementation. See
-// protocol_handler.h for the class contract and the numbered list of
-// wire-spec ambiguities this file resolves.
+// protocol_handler.h for the class contract, the reliability-layer state
+// machine summary, and the numbered list of wire-spec ambiguities this
+// file resolves.
 #include "protocol_handler.h"
 
 #include <cerrno>
@@ -23,36 +24,21 @@ namespace {
 // content.
 
 // strtol/strtoul/strtof all skip LEADING whitespace before the first
-// digit (a C-standard behavior, not a project choice). Under the
-// COLON-delimited grammar this library used before the 2026-08-20
-// grammar switch (commit 5a5b6da), that was a live bug: a field like
-// " 100" or "\t100" sat directly after a ':' separator and could
-// legitimately start with a stray space, which strtol would silently
-// digest before parsing the digits, contradicting this file's own
-// "strict, whole field consumed" contract.
-//
-// Under the SPACE grammar, the exact hazard the original fix targeted
-// -- a token beginning with a literal ' ' (0x20) -- is now structurally
-// IMPOSSIBLE to reach through this check: tokenizeLine() below collapses
-// every run of ' ' into one separator and trims leading/trailing space
-// before a token pointer is ever handed to a field decoder, so
-// field[0] == ' ' can never be true for a token this parser produced.
-// That part of the guard is dead code, kept only as cheap, harmless
-// defense in depth (see the file-header note below).
+// digit (a C-standard behavior, not a project choice). Under the space
+// grammar, a literal leading ' ' (0x20) can never reach a field decoder
+// at all: tokenizeLine() below collapses every run of ' ' into one
+// separator and trims leading/trailing line whitespace before a token
+// pointer is ever handed to a field decoder. That part of the guard is
+// dead code, kept only as cheap, harmless defense in depth.
 //
 // The guard is NOT fully dead, though -- it stays genuinely load-bearing
 // for the OTHER C whitespace bytes. Spec §2's field grammar is
 // `field ::= any bytes except ' ' and '\n'`, which means '\t', '\v',
-// '\f' and '\r' are all LEGAL, ordinary field bytes under the new
-// grammar -- nothing about tokenizing on ' ' stops a field from starting
-// with one of them (e.g. "SET foo.bar<TAB>1.0" tokenizes `<TAB>1.0` as
-// the value field, tab included). strtof/strtol would silently skip
-// that leading tab per the C standard and parse "1.0" anyway, exactly
-// reproducing the original bug's shape for a byte the space grammar
-// never made a separator. So this check survives the migration, just
-// with a narrower live threat surface than it had under the colon
-// grammar: reachable and load-bearing for '\t'/'\v'/'\f'/'\r', vestigial
-// (but harmless to keep) for ' ' itself.
+// '\f' and '\r' are all LEGAL, ordinary field bytes -- nothing about
+// tokenizing on ' ' stops a field from starting with one of them (e.g.
+// "SET foo.bar<TAB>1.0 #9" tokenizes `<TAB>1.0` as the value field, tab
+// included). strtof/strtol would silently skip that leading tab per the
+// C standard and parse "1.0" anyway.
 bool isWireSpace(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' ||
          c == '\r';
@@ -88,15 +74,15 @@ bool parseUint32(const char* field, uint32_t& out) {
   return true;
 }
 
-// The id's own numeric grammar (spec §8.2/§2: `id ::= '#' [0-9]+`) is
+// The id's own numeric grammar (spec §2.2: `id ::= '#' [0-9]+`) is
 // STRICTER than parseUint32() above: no sign at all, not even a leading
 // '+', which C's strtoul() would otherwise accept as valid syntax and
 // parseUint32() does not itself reject (it only rejects '-', spec
 // §2.2's general integer-field rule being "optionally signed"). A
 // pre-pass that requires every byte to be an ASCII digit before
 // strtoul() ever runs means "#+5" is correctly NOT a well-formed id --
-// it falls through to being treated as an ordinary (malformed) field,
-// not as id 5.
+// it falls through to "no valid id at all" (docs/design/protocol.md
+// §8.4), not "id 5".
 bool parseIdDigits(const char* text, uint32_t& out) {
   if (text == nullptr || text[0] == '\0') return false;
   for (const char* p = text; *p != '\0'; ++p) {
@@ -111,6 +97,17 @@ bool parseIdDigits(const char* text, uint32_t& out) {
   return true;
 }
 
+// Resolves `token` (the line's raw last token, or nullptr if the line
+// was just the verb) as a mandatory sequence id (docs/design/
+// protocol.md §2.2/§8): must be present and match `#[0-9]+` exactly.
+// There is no "#0 is special" branch here at all -- deleting that
+// special case (§2.2) means every well-formed id, including 0, is
+// handled identically by dispatch()'s own three-way sequence compare.
+bool parseMandatoryId(const char* token, uint32_t& id) {
+  if (token == nullptr || token[0] != '#') return false;
+  return parseIdDigits(token + 1, id);
+}
+
 // Config values are the one place floats appear on the wire (spec
 // §7.2). "No exponents, no NaN, no inf" is stated for the integer
 // fields (§2.2) but this handler applies the same posture here too --
@@ -123,19 +120,11 @@ bool parseFloatField(const char* field, float& out) {
   for (const char* p = field; *p != '\0'; ++p) {
     // 'e'/'E' bars decimal-exponent notation ("1e10", spec §2.2). 'x'/'X'
     // bars C99 HEX FLOAT notation ("0x1p3", "0X1.8P3") -- strtof accepts
-    // this syntax unconditionally (it is not gated behind the 'e'/'E'
-    // check at all, since a hex float's exponent letter is 'p', not
-    // 'e'), so an adversarial-input sweep found that a wire value like
-    // `SET foo.bar 0x1.8p3` silently decoded to 12.0 instead of being
-    // rejected -- exactly the "no exponents" rule this function exists
-    // to enforce, bypassed by a spelling the spec's authors never had in
-    // mind. A MicroPython or JavaScript port would not reproduce this:
-    // neither `float()` nor `Number()`/`parseFloat()` accepts hex-float
-    // syntax, so this was a C++-only divergence from every other
-    // implementation of this same fixture. Unaffected by the
-    // colon-to-space grammar migration: this is a property of strtof()
-    // parsing an already-extracted field's own CONTENT, independent of
-    // how that field was delimited on the wire.
+    // this syntax unconditionally, so an adversarial-input sweep found
+    // that a wire value like `SET foo.bar 0x1.8p3 #9` silently decoded
+    // to 12.0 instead of being rejected. A MicroPython or JavaScript
+    // port would not reproduce this: neither `float()` nor
+    // `Number()`/`parseFloat()` accepts hex-float syntax.
     if (*p == 'e' || *p == 'E' || *p == 'x' || *p == 'X') return false;
   }
   char* endPtr = nullptr;
@@ -166,47 +155,12 @@ bool parseTlmMode(const char* field, TlmMode& mode) {
   return false;
 }
 
-// Outcome of resolving a verb's own OPTIONAL trailing id (SET, WHEELS)
-// against spec §8.2's now-unambiguous rule (protocol_handler.h's
-// "Resolved-by-the-new-grammar" note): omitted, explicit `#0`, an
-// explicit nonzero `#<n>`, or a trailing token that is present but is
-// NOT a well-formed id at all (e.g. a bare "9" with no '#', or "#abc")
-// -- which, since SET/WHEELS have no OTHER use for that positional
-// slot, means the whole line is malformed, not just "id-less".
-enum class IdOutcome : uint8_t { kOmitted, kZero, kNonzero, kMalformed };
-
-// `token` must be non-null when called (callers only invoke this when a
-// trailing token IS present -- an omitted id is handled by the caller
-// without inspecting anything, per IdOutcome::kOmitted above).
-IdOutcome resolveTrailingOptionalId(const char* token, uint32_t& id) {
-  if (token[0] != '#') return IdOutcome::kMalformed;
-  uint32_t parsed = 0;
-  if (!parseIdDigits(token + 1, parsed)) return IdOutcome::kMalformed;
-  id = parsed;
-  return parsed == 0 ? IdOutcome::kZero : IdOutcome::kNonzero;
-}
-
-// Spec §2's generic malformed-line recovery: "If the line's last token
-// is a well-formed nonzero #id, reply err #<id> <code>." `token` may be
-// nullptr (a line that was just a verb, nothing after it) -- always
-// false in that case, matching "otherwise no reply".
-bool recoverTrailingId(const char* token, uint32_t& id) {
-  if (token == nullptr || token[0] != '#') return false;
-  uint32_t parsed = 0;
-  if (!parseIdDigits(token + 1, parsed)) return false;
-  if (parsed == 0) return false;  // id 0 never gets an err reply (§8.2)
-  id = parsed;
-  return true;
-}
-
 // formatConfigValue() -- spec §7.2's formatFixed(), reproduced here
 // (not included from src/archive/protocol-v6/wire_v6_format.{h,cpp},
 // which is reference-only): six fractional digits, always present, no
 // exponent, using integer arithmetic because newlib-nano's printf has
 // no %f. formatConfigValue(0.02f) -> "0.020000",
 // formatConfigValue(-51.5f) -> "-51.500000" (spec's own examples).
-// Unaffected by the grammar migration -- pure value formatting, no
-// wire delimiter involved.
 //
 // `value` is NOT wire-parsed here -- it is whatever the ADAPTER's own
 // onGet() handed back (parseFloatField already rejects NaN/Inf on the
@@ -244,7 +198,7 @@ void formatConfigValue(float value, char* out, size_t cap) {
 // MUST be called BEFORE tokenizeLine() mutates any of `line`'s
 // separator spaces to '\0': it walks real ' ' bytes backward from the
 // end of the string. Returns nullptr if `line` has no token besides the
-// verb itself (nothing after it to recover an id from).
+// verb itself (nothing after it to resolve an id from).
 const char* findLastFieldToken(const char* line) {
   const char* end = line + std::strlen(line);
   const char* p = end;
@@ -351,9 +305,9 @@ void ProtocolHandler::onLineComplete() {
     return;
   }
 
-  // The self-marking trailing id (spec §2/§8.2) must be located BEFORE
-  // tokenizeLine() below mutates any separator space to '\0' -- see
-  // findLastFieldToken()'s own comment.
+  // The mandatory trailing id (docs/design/protocol.md §8) must be
+  // located BEFORE tokenizeLine() below mutates any separator space to
+  // '\0' -- see findLastFieldToken()'s own comment.
   const char* lastFieldToken = findLastFieldToken(lineBuf_);
 
   char* tokens[kMaxFieldTokens];
@@ -384,7 +338,9 @@ size_t ProtocolHandler::tokenizeLine(char* line, char** tokens,
   return count;
 }
 
-// ---- dispatch ------------------------------------------------------------
+// ---- dispatch / the reliability layer -----------------------------------
+// docs/design/protocol.md §8 in full; this is the state machine summary
+// from protocol_handler.h's own file header, implemented.
 
 void ProtocolHandler::dispatch(char* verb, char** fields, size_t fieldCount,
                                 const char* lastFieldToken) {
@@ -392,50 +348,115 @@ void ProtocolHandler::dispatch(char* verb, char** fields, size_t fieldCount,
   // lowercase, and verb lookup is case-sensitive. A verb starting with
   // a lowercase letter can never be a command this table knows about --
   // it is another robot's reply, overheard on a shared channel, and it
-  // is dropped SILENTLY, not counted malformed. This is the structural
-  // fix for the DBG:-flood incident (hardware-bench-testing.md): a
-  // reply can never parse as a command under v6.
+  // is dropped SILENTLY, not counted malformed.
   if (verb[0] >= 'a' && verb[0] <= 'z') return;
+
+  // ---- the two verbs OUTSIDE the sequence (docs/design/protocol.md
+  // §8.3) -- checked by verb identity, before any id is even looked at.
+  if (std::strcmp(verb, "ESTOP") == 0) {
+    // ESTOP is maximally forgiving: it executes and replies regardless
+    // of fieldCount or content, so its own handler does not need
+    // fieldCount/lastFieldToken at all. The id parameter is unused by
+    // handleEstop() -- passed as 0 only to satisfy the shared
+    // VerbHandler signature every kCommandTable entry shares.
+    handleEstop(fields, fieldCount, 0);
+    return;
+  }
+  if (std::strcmp(verb, "HELLO") == 0) {
+    // HELLO's own arity is unchanged from before the reliability layer
+    // (zero fields, id or otherwise) -- a HELLO with a trailing field
+    // is wrong arity, same as any other extra field, and (since HELLO
+    // is outside the sequence) has no ack to anchor an err against, so
+    // it is silently malformed like any other unsequenced-verb failure
+    // (docs/design/protocol.md §9.8).
+    if (fieldCount != 0) {
+      ++malformedCount_;
+      return;
+    }
+    handleHello(fields, fieldCount, 0);
+    return;
+  }
+
+  // ---- everything else is on the sequenced plane (docs/design/
+  // protocol.md §8.1/§8.4): a mandatory, well-formed #<id> is REQUIRED
+  // as the line's last token, independent of whether the verb itself is
+  // even recognized.
+  uint32_t id = 0;
+  if (!parseMandatoryId(lastFieldToken, id)) {
+    // No trailing field at all, or one that isn't a well-formed
+    // '#'[0-9]+ -- the line cannot be sequence-classified. Nothing to
+    // compare against expectedNext_, so there is no reply of any kind
+    // (§8.4 items 1-2).
+    ++malformedCount_;
+    return;
+  }
+
+  // The id itself is always fields[fieldCount - 1] once well-formed
+  // (findLastFieldToken() found it), so the verb's own DATA fields are
+  // everything before it.
+  const size_t dataFieldCount = fieldCount - 1;
+
+  if (id < expectedNext_) {
+    // A stale retransmit -- the host never saw our ack for something we
+    // already accepted. Do NOT re-execute (a resent WHEELS must not
+    // drive twice); just re-state what we already have.
+    replyAck(expectedNext_ - 1);
+    return;
+  }
+  if (id > expectedNext_) {
+    // A gap: something between expectedNext_ and id never arrived (or
+    // arrived out of order). Discard -- do NOT execute, and do not even
+    // look up the verb -- and tell the host exactly what we need next.
+    gapOutstanding_ = true;
+    replyNack(expectedNext_);
+    return;
+  }
+
+  // id == expectedNext_: in order. The sequence advances and the ack is
+  // sent UNCONDITIONALLY, before the verb is even looked up -- "did the
+  // bytes arrive, in order" is answered here regardless of what they
+  // turn out to contain (docs/design/protocol.md §8.2).
+  expectedNext_ = id + 1;
+  gapOutstanding_ = false;
+  replyAck(id);
 
   for (const auto& entry : kCommandTable) {
     if (std::strcmp(verb, entry.name) == 0) {
-      (this->*entry.handler)(fields, fieldCount, lastFieldToken);
+      (this->*entry.handler)(fields, dataFieldCount, id);
       return;
     }
   }
-  // Unknown verb: no arity is knowable, but the line's own last token
-  // can still be a well-formed nonzero #id worth acking against (spec
-  // §2's own "including unknown verbs" framing -- protocol_handler.h's
-  // ambiguity note #2).
-  rejectMalformed(lastFieldToken, resultCode(Result::kUnknown));
+  // Unknown verb, but in order: the ack above already covered "arrived
+  // in sequence"; this is the "content rejected" half (§8.2/§8.4 item 1).
+  ++malformedCount_;
+  replyErr(id, resultCode(Result::kUnknown));
 }
 
-void ProtocolHandler::replyOk(uint32_t id) {
-  char buf[24];
-  std::snprintf(buf, sizeof(buf), "ok #%lu\n", static_cast<unsigned long>(id));
+void ProtocolHandler::replyAck(uint32_t ackedId) {
+  char buf[40];
+  std::snprintf(buf, sizeof(buf), "ack %lu %lu\n",
+                static_cast<unsigned long>(ackedId),
+                static_cast<unsigned long>(lastDone_));
   writeLine(buf);
 }
 
-void ProtocolHandler::replyOkBare() { writeLine("ok\n"); }
+void ProtocolHandler::replyNack(uint32_t nextId) {
+  char buf[40];
+  std::snprintf(buf, sizeof(buf), "nack %lu %lu\n",
+                static_cast<unsigned long>(nextId),
+                static_cast<unsigned long>(lastDone_));
+  writeLine(buf);
+}
 
 void ProtocolHandler::replyErr(uint32_t id, uint8_t code) {
+  // Field order: code THEN #id -- the id is always the LAST token of
+  // ANY line under this grammar, replies included (docs/design/
+  // protocol.md §8.6). This used to be `err #<id> <code>`, an
+  // undocumented exception to that same rule; fixed 2026-08-21.
   char buf[32];
-  std::snprintf(buf, sizeof(buf), "err #%lu %u\n",
-                static_cast<unsigned long>(id), static_cast<unsigned>(code));
+  std::snprintf(buf, sizeof(buf), "err %u #%lu\n", static_cast<unsigned>(code),
+                static_cast<unsigned long>(id));
   writeLine(buf);
-}
-
-void ProtocolHandler::replyErrBare(uint8_t code) {
-  char buf[16];
-  std::snprintf(buf, sizeof(buf), "err %u\n", static_cast<unsigned>(code));
-  writeLine(buf);
-}
-
-void ProtocolHandler::rejectMalformed(const char* lastFieldToken,
-                                       uint8_t code) {
-  ++malformedCount_;
-  uint32_t id = 0;
-  if (recoverTrailingId(lastFieldToken, id)) replyErr(id, code);
 }
 
 void ProtocolHandler::writeLine(const char* text) {
@@ -452,7 +473,12 @@ uint8_t ProtocolHandler::resultCode(Result result) {
     case Result::kUnimplemented: return 6;
     case Result::kNotReady: return 8;
     case Result::kBusy: return 10;
-    case Result::kDuplicateId: return 11;
+    case Result::kDuplicateId: return 11;  // unreachable as of 2026-08-21
+                                            // (docs/design/protocol.md
+                                            // §2.2/§9.8) -- kept for
+                                            // completeness against the
+                                            // Result enum, never actually
+                                            // produced by this handler.
   }
   return 1;  // unreachable with every enumerator handled above; kept so
              // a FUTURE enumerator trips -Wswitch instead of silently
@@ -460,21 +486,30 @@ uint8_t ProtocolHandler::resultCode(Result result) {
 }
 
 // ---- session verbs --------------------------------------------------------
-// HELLO/PING/ID/VER/STATUS/HELP all take zero fields (spec §3.1) -- any
-// trailing token at all, id-shaped or not, is wrong arity.
+// HELLO is handled entirely in dispatch() (it is unsequenced and has its
+// own arity check there). PING/ID/VER/STATUS/HELP all take zero DATA
+// fields (spec §3.1, id already stripped by dispatch()) -- any
+// remaining field at all is wrong arity.
 
 void ProtocolHandler::handleHello(char** fields, size_t fieldCount,
-                                   const char* lastFieldToken) {
+                                   uint32_t id) {
   (void)fields;
-  if (fieldCount != 0) { rejectMalformed(lastFieldToken, 2); return; }
+  (void)fieldCount;
+  (void)id;
+  // HELLO resets the reliability layer's entire state (docs/design/
+  // protocol.md §8.3) -- the session-start resync a (re)connecting host
+  // performs.
+  expectedNext_ = 1;
+  lastDone_ = 0;
+  gapOutstanding_ = false;
   sendBanner();  // spec §4: HELLO's reply is byte-identical to the
                  // unsolicited boot banner
 }
 
 void ProtocolHandler::handlePing(char** fields, size_t fieldCount,
-                                  const char* lastFieldToken) {
+                                  uint32_t id) {
   (void)fields;
-  if (fieldCount != 0) { rejectMalformed(lastFieldToken, 2); return; }
+  if (fieldCount != 0) { ++malformedCount_; replyErr(id, 2); return; }
   char buf[32];
   std::snprintf(buf, sizeof(buf), "pong %lu\n",
                 static_cast<unsigned long>(adapter_.now()));
@@ -482,9 +517,9 @@ void ProtocolHandler::handlePing(char** fields, size_t fieldCount,
 }
 
 void ProtocolHandler::handleVer(char** fields, size_t fieldCount,
-                                 const char* lastFieldToken) {
+                                 uint32_t id) {
   (void)fields;
-  if (fieldCount != 0) { rejectMalformed(lastFieldToken, 2); return; }
+  if (fieldCount != 0) { ++malformedCount_; replyErr(id, 2); return; }
   Identity identity;
   adapter_.identity(identity);
   char buf[64];
@@ -493,9 +528,9 @@ void ProtocolHandler::handleVer(char** fields, size_t fieldCount,
 }
 
 void ProtocolHandler::handleId(char** fields, size_t fieldCount,
-                                const char* lastFieldToken) {
+                                uint32_t id) {
   (void)fields;
-  if (fieldCount != 0) { rejectMalformed(lastFieldToken, 2); return; }
+  if (fieldCount != 0) { ++malformedCount_; replyErr(id, 2); return; }
   Identity identity;
   adapter_.identity(identity);
   char buf[96];
@@ -505,32 +540,30 @@ void ProtocolHandler::handleId(char** fields, size_t fieldCount,
 }
 
 void ProtocolHandler::handleStatus(char** fields, size_t fieldCount,
-                                    const char* lastFieldToken) {
+                                    uint32_t id) {
   (void)fields;
-  if (fieldCount != 0) { rejectMalformed(lastFieldToken, 2); return; }
+  if (fieldCount != 0) { ++malformedCount_; replyErr(id, 2); return; }
   StatusFields status;
   adapter_.status(status);
-  char buf[160];
+  char buf[176];
   std::snprintf(buf, sizeof(buf),
                 "status ready=%d active=%d connL=%d connR=%d otos=%d "
-                "wedge=%d flags=%x tlm=%s\n",
+                "wedge=%d flags=%x tlm=%s next=%lu\n",
                 status.ready ? 1 : 0, status.active ? 1 : 0,
                 status.connLeft ? 1 : 0, status.connRight ? 1 : 0,
                 status.otos ? 1 : 0, status.wedge ? 1 : 0,
-                static_cast<unsigned int>(status.flags), status.tlm);
+                static_cast<unsigned int>(status.flags), status.tlm,
+                static_cast<unsigned long>(expectedNext_));
   writeLine(buf);
 }
 
 void ProtocolHandler::handleHelp(char** fields, size_t fieldCount,
-                                  const char* lastFieldToken) {
+                                  uint32_t id) {
   (void)fields;
-  if (fieldCount != 0) { rejectMalformed(lastFieldToken, 2); return; }
+  if (fieldCount != 0) { ++malformedCount_; replyErr(id, 2); return; }
   // "Generated by walking the verb table at runtime, so it cannot drift
-  // from the dispatcher" (spec §4) -- kCommandTable is the SAME table
-  // dispatch() looks verbs up in. help's OWN reply is rest-of-line
-  // (spec §2) but that only matters to a PARSER reading it back in --
-  // this handler only ever emits it, so it is built by hand as a plain
-  // space-joined list, same as before the grammar switch.
+  // from the dispatcher" (spec S4) -- kCommandTable is the SAME table
+  // dispatch() looks verbs up in.
   char buf[160];
   size_t pos = 0;
   auto append = [&](const char* text) {
@@ -550,8 +583,8 @@ void ProtocolHandler::handleHelp(char** fields, size_t fieldCount,
 // ---- configuration: pure delegation, no storage here (spec §6) ----------
 
 void ProtocolHandler::handleGet(char** fields, size_t fieldCount,
-                                 const char* lastFieldToken) {
-  if (fieldCount > 1) { rejectMalformed(lastFieldToken, 2); return; }
+                                 uint32_t id) {
+  if (fieldCount > 1) { ++malformedCount_; replyErr(id, 2); return; }
 
   char buf[kMaxGetReplyBytes];
   char formatted[32];
@@ -559,7 +592,9 @@ void ProtocolHandler::handleGet(char** fields, size_t fieldCount,
     // Bare GET: dump every field the adapter declares, one line each
     // (spec §7.1: "one line per field, 80 lines" for the real 80-row
     // table -- this library carries none, so the line count here is
-    // whatever THIS adapter's fieldCount() says).
+    // whatever THIS adapter's fieldCount() says). The GET command was
+    // already acked once, as a whole, by dispatch() -- there is no
+    // per-field ack.
     size_t total = adapter_.fieldCount();
     for (size_t i = 0; i < total; ++i) {
       const char* name = adapter_.fieldName(i);
@@ -574,10 +609,9 @@ void ProtocolHandler::handleGet(char** fields, size_t fieldCount,
 
   const char* name = fields[0];
   float value = 0.0f;
-  // Unknown name: GET never carries an id (`GET | [name]`, spec §3.1),
-  // so there is no wire channel to reject it on -- silent (spec §7.1,
-  // stated explicitly: "GET with an unknown name is silent -- no
-  // reply, and not counted malformed").
+  // Unknown name: no `get` line, but the command is still acked (it
+  // arrived fine and was answered with an empty result) -- not an
+  // error, and not counted malformed (docs/design/protocol.md §6, §8.2).
   if (!adapter_.onGet(name, value)) return;
   formatConfigValue(value, formatted, sizeof(formatted));
   std::snprintf(buf, sizeof(buf), "get %s %s\n", name, formatted);
@@ -585,106 +619,58 @@ void ProtocolHandler::handleGet(char** fields, size_t fieldCount,
 }
 
 void ProtocolHandler::handleSet(char** fields, size_t fieldCount,
-                                 const char* lastFieldToken) {
-  if (fieldCount != 2 && fieldCount != 3) {
-    rejectMalformed(lastFieldToken, 2);
-    return;
-  }
-
-  const bool idProvided = (fieldCount == 3);
-  uint32_t id = 0;
-  IdOutcome idOutcome = idProvided
-      ? resolveTrailingOptionalId(fields[2], id)
-      : IdOutcome::kOmitted;
-  if (idOutcome == IdOutcome::kMalformed) {
-    // The 3rd token is present but is not a well-formed `#id` -- SET
-    // has no other use for a 3rd positional field, so this is a
-    // malformed line, not "a SET with an id-less extra field".
-    rejectMalformed(lastFieldToken, 2);
-    return;
-  }
+                                 uint32_t id) {
+  if (fieldCount != 2) { ++malformedCount_; replyErr(id, 2); return; }
 
   const char* name = fields[0];
   float value = 0.0f;
   if (!parseFloatField(fields[1], value)) {
     // The VALUE field itself is malformed -- a handler-level decode
     // failure (spec §7.2: SET's value is decoded by the handler), never
-    // reaching onSet(). Still apply the same id-outcome-driven reply
-    // shape as the success path, so a typo'd value on an otherwise
-    // well-formed SET still gets the ack format its own id calls for.
+    // reaching onSet(). The command was already acked (it arrived, in
+    // order); this err is the separate "content rejected" signal
+    // (docs/design/protocol.md §8.2).
     ++malformedCount_;
-    switch (idOutcome) {
-      case IdOutcome::kNonzero: replyErr(id, 2); break;
-      case IdOutcome::kOmitted: replyErrBare(2); break;
-      case IdOutcome::kZero: break;  // #0 -- no ack wanted, stays silent
-      case IdOutcome::kMalformed: break;  // unreachable, handled above
-    }
+    replyErr(id, 2);
     return;
   }
 
   Result result = adapter_.onSet(name, value, id);
-  switch (idOutcome) {
-    case IdOutcome::kZero:
-      return;  // executes silently, no ack at all (spec §8.2)
-    case IdOutcome::kOmitted:
-      if (result == Result::kOk) replyOkBare();
-      else replyErrBare(resultCode(result));
-      return;
-    case IdOutcome::kNonzero:
-      if (result == Result::kOk) replyOk(id);
-      else replyErr(id, resultCode(result));
-      return;
-    case IdOutcome::kMalformed:
-      return;  // unreachable, handled above
-  }
+  if (result != Result::kOk) replyErr(id, resultCode(result));
+  // kOk: nothing further -- the ack dispatch() already sent IS the
+  // acceptance (§8.2). `ok` no longer exists.
 }
 
 // ---- telemetry -------------------------------------------------------------
 
 void ProtocolHandler::handleTlm(char** fields, size_t fieldCount,
-                                 const char* lastFieldToken) {
-  if (fieldCount != 1) { rejectMalformed(lastFieldToken, 2); return; }
+                                 uint32_t id) {
+  if (fieldCount != 1) { ++malformedCount_; replyErr(id, 2); return; }
   TlmMode mode;
   if (!parseTlmMode(fields[0], mode)) {
-    rejectMalformed(lastFieldToken, 2);
+    ++malformedCount_;
+    replyErr(id, 2);
     return;
   }
-  // TLM carries no id (spec §3.1) so there is no wire channel to ack or
-  // reject it on -- the Result is the adapter's own business (e.g.
-  // logging) and never surfaces on the wire.
+  // The Result is the adapter's own business (e.g. logging) and never
+  // surfaces on the wire -- unchanged from before the reliability layer;
+  // TLM is acked (it is sequenced now) but its own Result still is not
+  // separately reported.
   (void)adapter_.onTlm(mode);
 }
 
 // ---- motion ----------------------------------------------------------------
 
 void ProtocolHandler::handleWheels(char** fields, size_t fieldCount,
-                                    const char* lastFieldToken) {
-  if (fieldCount != 3 && fieldCount != 4) {
-    rejectMalformed(lastFieldToken, 2);
-    return;
-  }
-
-  const bool idProvided = (fieldCount == 4);
-  uint32_t id = 0;
-  IdOutcome idOutcome = idProvided
-      ? resolveTrailingOptionalId(fields[3], id)
-      : IdOutcome::kOmitted;
-  if (idOutcome == IdOutcome::kMalformed) {
-    rejectMalformed(lastFieldToken, 2);
-    return;
-  }
+                                    uint32_t id) {
+  if (fieldCount != 3) { ++malformedCount_; replyErr(id, 2); return; }
 
   int32_t left = 0, right = 0;
   uint32_t duration = 0;
   if (!parseInt32(fields[0], left) || !parseInt32(fields[1], right) ||
       !parseUint32(fields[2], duration)) {
     ++malformedCount_;
-    switch (idOutcome) {
-      case IdOutcome::kNonzero: replyErr(id, 2); break;
-      case IdOutcome::kOmitted: replyErrBare(2); break;
-      case IdOutcome::kZero: break;
-      case IdOutcome::kMalformed: break;  // unreachable, handled above
-    }
+    replyErr(id, 2);
     return;
   }
 
@@ -693,59 +679,43 @@ void ProtocolHandler::handleWheels(char** fields, size_t fieldCount,
   // adapter untouched.
   Result result = adapter_.onWheels(static_cast<float>(left),
                                      static_cast<float>(right), duration, id);
-  switch (idOutcome) {
-    case IdOutcome::kZero:
-      return;
-    case IdOutcome::kOmitted:
-      if (result == Result::kOk) replyOkBare();
-      else replyErrBare(resultCode(result));
-      return;
-    case IdOutcome::kNonzero:
-      if (result == Result::kOk) replyOk(id);
-      else replyErr(id, resultCode(result));
-      return;
-    case IdOutcome::kMalformed:
-      return;  // unreachable, handled above
-  }
+  if (result != Result::kOk) replyErr(id, resultCode(result));
 }
 
 void ProtocolHandler::handleStop(char** fields, size_t fieldCount,
-                                  const char* lastFieldToken) {
-  // STOP's id is REQUIRED (`STOP #<id>`, spec §3.1 -- no brackets), and
-  // it is the verb's ONLY field, so fieldCount must be exactly 1.
-  if (fieldCount != 1) { rejectMalformed(lastFieldToken, 2); return; }
-  uint32_t id = 0;
-  // recoverTrailingId() requires a well-formed AND NONZERO id, which is
-  // exactly STOP's own rule: spec §8.2 states "#0 is legal only where
-  // the id is optional; on MOVE/GOTO/STOP it is malformed" -- so a
-  // literal "STOP #0" is rejected here the same way "STOP notanid" is,
-  // and (since the id is what would have been recovered) correctly
-  // produces no reply either way.
-  if (!recoverTrailingId(fields[0], id)) {
-    rejectMalformed(lastFieldToken, 2);
-    return;
-  }
+                                  uint32_t id) {
+  (void)fields;
+  // STOP's id was ITS entire old field list; now that dispatch() strips
+  // the mandatory id centrally, STOP has no DATA fields of its own at
+  // all -- any remaining field is wrong arity.
+  if (fieldCount != 0) { ++malformedCount_; replyErr(id, 2); return; }
   Result result = adapter_.onStop(id);
-  if (result == Result::kOk) replyOk(id);
-  else replyErr(id, resultCode(result));
+  if (result != Result::kOk) replyErr(id, resultCode(result));
 }
 
 void ProtocolHandler::handleEstop(char** fields, size_t fieldCount,
-                                   const char* lastFieldToken) {
+                                   uint32_t id) {
+  // ESTOP is OUTSIDE the sequence entirely (docs/design/protocol.md
+  // §8.3) -- dispatch() calls this directly, before any id is even
+  // looked at, and passes fieldCount/lastFieldToken exactly as
+  // tokenizeLine() produced them (fields may include what LOOKS like an
+  // id-shaped token; it is never treated as one here).
+  //
+  // Maximally forgiving: ANY line whose verb is ESTOP executes the
+  // stop, regardless of trailing junk or arity -- a panic stop must
+  // never be refused over a syntax nit. `fields`/`fieldCount` are
+  // therefore unused; `id` is always 0 here (dispatch() never resolves
+  // a real one for this verb).
   (void)fields;
-  (void)lastFieldToken;
-  if (fieldCount != 0) {
-    // ESTOP is NEVER acked, not even on wrong arity -- spec §5.4/§8.2's
-    // own emphatic, repeated "never carries an id and is never acked...
-    // must not queue behind anything, including an ack" wins over §2's
-    // generic malformed-line id-recovery rule (protocol_handler.h's
-    // ambiguity note #2). Deliberately does NOT call rejectMalformed().
-    ++malformedCount_;
-    return;
-  }
+  (void)fieldCount;
+  (void)id;
+
+  // Execute BEFORE replying -- the stop must never wait on the sink
+  // (docs/design/protocol.md §8.3, superseding the pre-2026-08-21 "never
+  // reply at all" rule, whose own rationale -- "must not queue behind an
+  // outbound reply" -- this ordering already satisfies).
   adapter_.onEstop();
-  // No reply, ever: spec §8.2 -- ESTOP never carries an id and is never
-  // acked, so it can never queue behind anything, including an ack.
+  writeLine("estop\n");
 }
 
 // ---- RUN: parse-and-delegate only, per adapter.h's own onRun() doc --------
@@ -758,77 +728,42 @@ void ProtocolHandler::handleEstop(char** fields, size_t fieldCount,
 // adapter's job (adapter.h's onRun() doc, docs/design/protocol.md's RUN
 // section).
 //
-// RUN's own arity is open-ended (unlike every other verb here), so its
-// id resolution can't use the "known field count decides whether an id
-// slot exists" trick SET/WHEELS use. Instead: a LAST field beginning
-// with '#' is unconditionally the id slot (well-formed digits -> a real
-// id; anything else after the '#' -> the whole line is malformed, same
-// as SET/WHEELS's own "3rd token present but not a well-formed id"
-// rule) -- so a function's own final argument can never itself begin
-// with '#' under this wire grammar. Once the (possible) id is stripped
-// off, whatever real fields are left are the function name plus its
-// arguments, in order; if NONE are left at all (the id, or the total
-// absence of any field, consumed everything), the line is malformed --
-// "RUN with no function name at all."
+// The mandatory id is already stripped by dispatch() before this is
+// ever called (docs/design/protocol.md §6.3, 2026-08-21) -- unlike the
+// pre-reliability-layer design, this handler no longer inspects the
+// line's last field for a leading '#' itself; `fields`/`fieldCount` here
+// are purely the function name plus its arguments.
 void ProtocolHandler::handleRun(char** fields, size_t fieldCount,
-                                 const char* lastFieldToken) {
+                                 uint32_t id) {
   if (fieldCount == 0) {
-    // "RUN" with nothing after it at all -- no function name, and (per
-    // findLastFieldToken()'s own contract) lastFieldToken is nullptr
-    // here, so there is nothing to recover an id from either.
-    rejectMalformed(lastFieldToken, 2);
+    // "RUN #<id>" -- the id consumed the only field, leaving no function
+    // name at all. Still acked (dispatch() already did that); this err
+    // is the "content rejected" half.
+    ++malformedCount_;
+    replyErr(id, 2);
     return;
   }
   if (fieldCount > kMaxFieldTokens - 1) {
-    // More real tokens than this line's fixed-size field array can
-    // safely hold pointers for (protocol_handler.h ambiguity note #4 /
+    // More real DATA tokens than this line's fixed-size field array can
+    // safely hold pointers for (protocol_handler.h ambiguity note #3 /
     // tokenizeLine()'s own comment) -- reject before indexing fields[]
     // anywhere near that boundary. RUN is the only verb in this file
     // whose arity is not fixed, so it is the only one that needs this
     // check at all: every OTHER handler's own fixed-arity comparison is
     // already far inside kMaxFieldTokens by construction.
-    rejectMalformed(lastFieldToken, 2);
-    return;
-  }
-
-  // The self-marking trailing id (spec grammar) is ALWAYS reserved for
-  // id position, even against RUN's own open arity.
-  size_t dataFieldCount = fieldCount;
-  uint32_t id = 0;
-  IdOutcome idOutcome = IdOutcome::kOmitted;
-  const char* last = fields[fieldCount - 1];
-  if (last[0] == '#') {
-    idOutcome = resolveTrailingOptionalId(last, id);
-    if (idOutcome == IdOutcome::kMalformed) {
-      rejectMalformed(lastFieldToken, 2);
-      return;
-    }
-    --dataFieldCount;
-  }
-
-  if (dataFieldCount == 0) {
-    // The id (or the total absence of any field) consumed everything --
-    // there is no function name left. Spec: "RUN with no function name
-    // at all -> malformed" -- still recovers an err reply against a
-    // well-formed nonzero id per the generic rule (e.g. "RUN #7").
-    rejectMalformed(lastFieldToken, 2);
+    ++malformedCount_;
+    replyErr(id, 2);
     return;
   }
 
   const char* name = fields[0];
-  const size_t argc = dataFieldCount - 1;  // fields[1 .. dataFieldCount-1]
+  const size_t argc = fieldCount - 1;  // fields[1 .. fieldCount-1]
 
   if (argc > kMaxRunArgs) {
     // A firmware resource limit (the fixed argv[] array below), not a
-    // claim about any function's real arity -- rejected the same way
-    // wrong arity is rejected everywhere else in this file.
+    // claim about any function's real arity.
     ++malformedCount_;
-    switch (idOutcome) {
-      case IdOutcome::kNonzero: replyErr(id, 2); break;
-      case IdOutcome::kOmitted: replyErrBare(2); break;
-      case IdOutcome::kZero: break;
-      case IdOutcome::kMalformed: break;  // unreachable, handled above
-    }
+    replyErr(id, 2);
     return;
   }
 
@@ -840,23 +775,15 @@ void ProtocolHandler::handleRun(char** fields, size_t fieldCount,
   Result outcome =
       adapter_.onRun(name, argv, argc, result, sizeof(result), hasResult);
 
-  if (idOutcome == IdOutcome::kZero) {
-    return;  // #0: silent no matter what happened -- a returned value
-             // IS a reply, and #0 suppresses replies (spec §2.2's "no
-             // ack wanted" extended here to RUN's own `ret`).
-  }
-
   if (outcome != Result::kOk) {
-    if (idOutcome == IdOutcome::kNonzero) replyErr(id, resultCode(outcome));
-    else replyErrBare(resultCode(outcome));
+    replyErr(id, resultCode(outcome));
     return;
   }
 
   if (!hasResult) {
-    // A void-returning function: `ok`, exactly like any other accepted
-    // command with nothing further to report.
-    if (idOutcome == IdOutcome::kNonzero) replyOk(id);
-    else replyOkBare();
+    // A void-returning function: nothing further -- the ack already
+    // sent is the whole story, exactly like any other accepted command
+    // with nothing to report (§8.2).
     return;
   }
 
@@ -878,12 +805,8 @@ void ProtocolHandler::handleRun(char** fields, size_t fieldCount,
   // buffer, or snprintf silently truncates the last byte (here, the
   // trailing '\n' itself) to make room for the NUL it always writes.
   char buf[kMaxLineBytes + 1];
-  if (idOutcome == IdOutcome::kNonzero) {
-    std::snprintf(buf, sizeof(buf), "ret %s #%lu\n", sanitized,
-                  static_cast<unsigned long>(id));
-  } else {
-    std::snprintf(buf, sizeof(buf), "ret %s\n", sanitized);
-  }
+  std::snprintf(buf, sizeof(buf), "ret %s #%lu\n", sanitized,
+                static_cast<unsigned long>(id));
   writeLine(buf);
 }
 
@@ -908,7 +831,8 @@ void ProtocolHandler::sendDebug(const char* text) {
   // instead of the last one alone leaving a dangling separator space
   // ("debug \n") that no other field-less reply in this file ever
   // produces (protocol_handler.h's own sendDebug() doc: "an empty token
-  // cannot exist between spaces").
+  // cannot exist between spaces"). Entirely unaffected by the
+  // reliability layer -- debug never carries an id.
   char sanitized[kMaxDebugTextBytes];
   size_t len = sanitizeLineText(text, sanitized, sizeof(sanitized));
 
@@ -1003,6 +927,18 @@ void ProtocolHandler::emitTelemetry(const Snapshot& snapshot) {
     rememberHeader(snapshot);
   }
   emitFrame(snapshot);
+
+  // The reliability layer's own periodic emission (docs/design/
+  // protocol.md §8.5) -- rides the caller's own telemetry cadence, no
+  // timer of this class's own. A stalled stream (gapOutstanding_) keeps
+  // re-nacking for free at this rate; otherwise this simply re-states
+  // the highest id already accepted, so a host that goes quiet after
+  // its last command still eventually learns it landed.
+  if (gapOutstanding_) {
+    replyNack(expectedNext_);
+  } else {
+    replyAck(expectedNext_ - 1);
+  }
 }
 
 }  // namespace Protocol

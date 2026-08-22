@@ -23,14 +23,22 @@ one-line-at-a-time tests do not:
    handler that wedges after one bad frame is useless on a lossy radio
    link. Every adversarial case below is followed by an explicit line
    terminator (flushing any pending partial/overflowing line) and then
-   `PING\n`, and the test asserts the reply `pong 0\n` is the last thing
-   the sink produced. (Sending the recovery command WITHOUT first
-   flushing the garbage line would be testing a different, stricter
-   property -- whether a well-formed command survives being
-   concatenated directly onto an unterminated garbage prefix, which
-   spec S2's line grammar never promises -- so this file always closes
-   the garbage line first, the way a real next line from a real host
-   would arrive.)
+   `HELLO\n`, and the test asserts the reply (the boot banner) is the
+   last thing the sink produced. **Uses `HELLO`, not `PING`, since the
+   2026-08-21 reliability layer (docs/design/protocol.md S8) made `PING`
+   a SEQUENCED verb requiring a mandatory `#<id>` matching whatever
+   `expectedNext_` happens to be at that point in the session --
+   `HELLO` is the one verb whose recovery-check behavior is
+   STATE-INDEPENDENT (it is unsequenced and unconditionally resets the
+   sequence to a known value), so it is the only choice that lets this
+   file's per-case sweep assert a single fixed expected output without
+   tracking each case's own effect on `expectedNext_`.** (Sending the
+   recovery command WITHOUT first flushing the garbage line would be
+   testing a different, stricter property -- whether a well-formed
+   command survives being concatenated directly onto an unterminated
+   garbage prefix, which spec S2's line grammar never promises -- so
+   this file always closes the garbage line first, the way a real next
+   line from a real host would arrive.)
 
 3. **Grammar migration, 2026-08-20 (spec commit 5a5b6da).** This file
    was rewritten from a colon-delimited, positional-id grammar to the
@@ -206,6 +214,15 @@ def _assert_survived(result, context):
         f"{result.stderr.decode('utf-8', 'replace')}")
 
 
+# MockAdapter's default identityToReturn (mock_adapter.h) is every field
+# defaulted to "" -- asan_fuzz_driver.cpp never calls phSetIdentity's
+# equivalent, so a HELLO's banner on that driver is always this exact,
+# deterministic line: "device NEZHA2 robot " + "" + " " + "" + "\n".
+# Used as the recovery invariant's fixed expected tail (see this module's
+# own docstring point 2 for why HELLO, not PING, is the recovery probe).
+_HELLO_BANNER = b"device NEZHA2 robot  \n"
+
+
 # ---------------------------------------------------------------------------
 # Adversarial cases (spec grammar: line ::= verb (' ' field)* '\n', a run
 # of spaces is ONE separator, id is a trailing '#'-prefixed field, verb
@@ -312,37 +329,46 @@ ADVERSARIAL_CASES = [
     ("lowercase_verb_with_spaces_and_high_bytes",
      [b"dbg " + bytes(range(0x80, 0x90)) + b"\n"]),
 
-    # ---- numeric-field adversarial spellings ----
-    ("wheels_field_all_pluses", [b"WHEELS +100 +100 +1000\n"]),
-    ("wheels_field_leading_zeros", [b"WHEELS 000100 00100 0001000\n"]),
-    ("set_value_only_a_sign", [b"SET group.alpha -\n"]),
-    ("set_value_only_a_dot", [b"SET group.alpha .\n"]),
-    ("set_value_many_dots", [b"SET group.alpha 1.2.3.4\n"]),
+    # ---- numeric-field adversarial spellings -- ids added (#1, a fresh
+    # handle's own first in-order id) so these actually reach the
+    # field-decode logic under ASan/UBSan, rather than bailing out
+    # earlier on "no id at all" (docs/design/protocol.md S8) ----
+    ("wheels_field_all_pluses", [b"WHEELS +100 +100 +1000 #1\n"]),
+    ("wheels_field_leading_zeros", [b"WHEELS 000100 00100 0001000 #1\n"]),
+    ("set_value_only_a_sign", [b"SET group.alpha - #1\n"]),
+    ("set_value_only_a_dot", [b"SET group.alpha . #1\n"]),
+    ("set_value_many_dots", [b"SET group.alpha 1.2.3.4 #1\n"]),
     ("wheels_duration_huge_digit_run",
-     [b"WHEELS 100 100 " + b"9" * 40 + b"\n"]),
+     [b"WHEELS 100 100 " + b"9" * 40 + b" #1\n"]),
 
     # ---- RUN: open arity, adversarial argument counts/content (spec
     # grammar's RUN section -- the handler only parses, so these mostly
     # exercise the fieldCount/kMaxFieldTokens/kMaxRunArgs bound checks
     # handleRun() adds on top of the generic tokenizer, not anything
-    # verb-specific to WHEELS/SET) ----
-    ("run_zero_args", [b"RUN blink\n"]),
+    # verb-specific to WHEELS/SET). Ids added (#1) so these reach
+    # handleRun() itself under ASan/UBSan rather than bailing out on
+    # "no id at all" first -- RUN's id is mandatory now (docs/design/
+    # protocol.md S6.3/S8) ----
+    ("run_zero_args", [b"RUN blink #1\n"]),
     ("run_many_args_within_kmaxrunargs",
-     [b"RUN foo " + b" ".join(str(i).encode() for i in range(16)) + b"\n"]),
+     [b"RUN foo " + b" ".join(str(i).encode() for i in range(16)) +
+      b" #1\n"]),
     ("run_args_over_kmaxrunargs",
-     [b"RUN foo " + b" ".join(str(i).encode() for i in range(17)) + b"\n"]),
+     [b"RUN foo " + b" ".join(str(i).encode() for i in range(17)) +
+      b" #1\n"]),
     ("run_args_over_kmaxfieldtokens",
      # MORE real tokens than kMaxFieldTokens (20) can hold pointers for
      # at all -- handleRun() must reject this BEFORE indexing fields[]
      # anywhere near that boundary, not just before kMaxRunArgs.
-     [b"RUN foo " + b" ".join(str(i).encode() for i in range(40)) + b"\n"]),
+     [b"RUN foo " + b" ".join(str(i).encode() for i in range(40)) +
+      b" #1\n"]),
     ("run_single_arg_near_line_length_cap",
-     [b"RUN foo " + b"x" * 225 + b"\n"]),
+     [b"RUN foo " + b"x" * 225 + b" #1\n"]),
     ("run_nonascii_arg",
      [b"RUN foo " + "héllo wôrld".encode("utf-8").replace(b" ", b"_") +
-      b" #5\n"]),
+      b" #1\n"]),
     ("run_hash_prefixed_non_digit_last_arg", [b"RUN foo #abc\n"]),
-    ("run_only_hash_id_no_function_name", [b"RUN #7\n"]),
+    ("run_only_hash_id_no_function_name", [b"RUN #1\n"]),
     ("run_bare_no_function_name", [b"RUN\n"]),
     ("run_trailing_spaces_only", [b"RUN" + b" " * 50 + b"\n"]),
 
@@ -368,18 +394,18 @@ def test_recovers_after_adversarial_input(fuzz_driver, name, chunks):
     """The recovery invariant (docs/design/protocol.md S2.1 / spec S2):
     however hostile `chunks` is, the parser must (a) never crash,
     overflow, or trap under ASan/UBSan, and (b) still dispatch a clean
-    PING correctly once the garbage line is closed out. A handler that
+    HELLO correctly once the garbage line is closed out. A handler that
     wedges after one bad frame is useless on a lossy radio link."""
     # A bare '\n' first closes out whatever partial/overflowing line the
-    # adversarial chunks left pending, so PING arrives as its own clean
+    # adversarial chunks left pending, so HELLO arrives as its own clean
     # line -- see this module's docstring point 2 for why that is the
     # fair way to phrase "a subsequent well-formed line", not a way to
-    # dodge the harder case.
-    result = _run(fuzz_driver, list(chunks) + [b"\n", b"PING\n"])
+    # dodge the harder case, and why HELLO rather than PING.
+    result = _run(fuzz_driver, list(chunks) + [b"\n", b"HELLO\n"])
     _assert_survived(result, f"case {name!r}")
-    assert result.stdout.endswith(b"pong 0\n"), (
-        f"case {name!r}: PING after the garbage did not produce the "
-        f"expected reply -- handler did not recover\n"
+    assert result.stdout.endswith(_HELLO_BANNER), (
+        f"case {name!r}: HELLO after the garbage did not produce the "
+        f"expected banner -- handler did not recover\n"
         f"stdout: {result.stdout!r}")
 
 
@@ -388,29 +414,25 @@ def test_recovers_after_every_adversarial_input_in_one_session(fuzz_driver):
     back-to-back, on ONE handler instance in ONE process (rather than a
     fresh handler per case) -- the failure mode a per-case sweep cannot
     see is state leaking or accumulating badly enough across many bad
-    lines that some LATER, unrelated line misdispatches. A PING is
-    interleaved after every case; every one must come back clean."""
+    lines that some LATER, unrelated line misdispatches. A HELLO is
+    interleaved after every case; every one must come back clean, and
+    (being unsequenced and state-resetting) each one's expected output
+    is the SAME fixed banner regardless of anything any earlier case did
+    to expectedNext_/gapOutstanding_ -- the property a sequenced PING
+    could not offer here (see this module's own docstring point 2)."""
     chunks = []
     for _name, case_chunks in ADVERSARIAL_CASES:
         chunks.extend(case_chunks)
         chunks.append(b"\n")
-        chunks.append(b"PING\n")
+        chunks.append(b"HELLO\n")
     result = _run(fuzz_driver, chunks, timeout=30)
     _assert_survived(result, "combined adversarial session")
-    pong_count = result.stdout.count(b"pong 0\n")
-    # +1, not exactly len(ADVERSARIAL_CASES): the "embedded_nul_after_verb"
-    # case (b"PING\x00extra\n") is itself indistinguishable from a bare
-    # "PING\n" to this parser -- see
-    # test_embedded_nul_immediately_after_verb_matches_bare_verb below for
-    # why -- so its OWN garbage payload already produces one pong, on top
-    # of the recovery PING appended after every case. Any OTHER deficit
-    # or surplus is a real finding, not this known, deterministic one.
-    expected = len(ADVERSARIAL_CASES) + 1
-    assert pong_count == expected, (
-        f"expected {expected} pong replies ({len(ADVERSARIAL_CASES)} "
-        f"recovery PINGs + 1 from embedded_nul_after_verb's own payload "
-        f"matching PING), got {pong_count} -- a PING somewhere in the "
-        f"session did not come back, so state from an earlier case "
+    banner_count = result.stdout.count(_HELLO_BANNER)
+    expected = len(ADVERSARIAL_CASES)
+    assert banner_count == expected, (
+        f"expected {expected} banner replies (one recovery HELLO per "
+        f"adversarial case), got {banner_count} -- a HELLO somewhere in "
+        f"the session did not come back, so state from an earlier case "
         f"corrupted a later one\nfull stdout: {result.stdout!r}")
 
 
@@ -420,15 +442,15 @@ def test_random_byte_fuzz_survives_and_recovers(fuzz_driver):
     ' ', and '#' at random positions, so a single blob can contain
     several "lines" of pure noise, and can spuriously look like a
     well-formed id), FIXED seed so a failure reproduces exactly. Each
-    trial is followed by the same flush + PING recovery check."""
+    trial is followed by the same flush + HELLO recovery check."""
     rng = random.Random(20260820)
     trial_count = 40
     for trial in range(trial_count):
         length = rng.randint(0, 500)
         blob = bytes(rng.randrange(256) for _ in range(length))
-        result = _run(fuzz_driver, [blob, b"\n", b"PING\n"])
+        result = _run(fuzz_driver, [blob, b"\n", b"HELLO\n"])
         _assert_survived(result, f"random fuzz trial {trial} (len={length})")
-        assert result.stdout.endswith(b"pong 0\n"), (
+        assert result.stdout.endswith(_HELLO_BANNER), (
             f"random fuzz trial {trial} (len={length}): did not recover\n"
             f"blob: {blob!r}\nstdout: {result.stdout!r}")
 
@@ -450,34 +472,46 @@ def test_embedded_nul_immediately_after_verb_matches_bare_verb(fuzz_driver):
     itself written against NUL-terminated C strings, per this file's
     own documented "no allocation, no std::string" constraint (spec
     S2.2), so it ALSO stops at the first embedded NUL and treats it
-    exactly like the true end of the line. The observable result is
-    identical either way: `PING\x00extra\n` dispatches exactly like
-    `PING\n`, silently discarding "extra" (and anything else up to the
+    exactly like the true end of the line -- `PING\x00extra #5\n`
+    dispatches exactly like a BARE `PING\n` with nothing after it at
+    all, silently discarding "extra #5" (and anything else up to the
     real '\n') with no malformed-count increment and no sign anything
     was dropped.
+
+    **Re-verified again (2026-08-21) after the reliability layer made
+    PING's id mandatory (docs/design/protocol.md S8):** a bare `PING`
+    with no id at all is now itself malformed (no reply of any kind),
+    so this characterization's OBSERVABLE consequence changed even
+    though its ROOT CAUSE (the C-string truncation at the embedded NUL)
+    did not -- and the mandatory id makes the finding, if anything,
+    MORE striking: there is a perfectly well-formed `#5` sitting right
+    after the embedded NUL in the wire bytes below, and the parser
+    never sees it at all, because `strlen()` already stopped four bytes
+    earlier.
 
     Spec S2's verb grammar (`verb ::= [A-Za-z][A-Za-z0-9_]*`) does not
     admit NUL in a verb at all, so the grammar-correct behavior would be
     to REJECT this line as unparseable -- this C-string-based
-    implementation instead silently accepts it as the shorter verb.
+    implementation instead silently accepts it as the shorter verb (and,
+    since that shorter verb then has no visible id at all, the mandatory-
+    id rule makes the whole line malformed with no reply).
 
     This is exactly the kind of thing a MicroPython or JavaScript port
     would NOT reproduce: `bytes`/`str` equality in Python, and string
     equality in JavaScript, compare the FULL length, embedded NUL bytes
-    included -- `b"PING\x00extra" == b"PING"` is `False`. A port that
+    included -- `b"PING\x00extra #5" == b"PING"` is `False`. A port that
     otherwise faithfully mirrors this C++ handler's logic would treat
-    this exact input as an unknown verb (or a malformed one), not as
-    PING, and that divergence would only surface as a conformance-suite
-    mismatch on inputs no one thought to write down -- which is why it
-    is written down here."""
-    result = _run(fuzz_driver, [b"PING\x00extra\n"])
+    this exact input as an unknown verb (or a malformed one) carrying a
+    perfectly good id, not as a bare, id-less PING, and that divergence
+    would only surface as a conformance-suite mismatch on inputs no one
+    thought to write down -- which is why it is written down here."""
+    result = _run(fuzz_driver, [b"PING\x00extra #5\n"])
     _assert_survived(result, "embedded NUL immediately after a verb name")
-    assert result.stdout == b"pong 0\n", (
-        f"expected this to (surprisingly) dispatch as PING, got: "
+    assert result.stdout == b"", (
+        f"expected this to (surprisingly) dispatch as a BARE, id-less "
+        f"PING and therefore produce no reply at all, got: "
         f"{result.stdout!r} -- if this now differs, the C-string "
-        f"dispatch behavior changed and this module's docstring / "
-        f"test_recovers_after_every_adversarial_input_in_one_session's "
-        f"pong-count math both need updating")
+        f"dispatch behavior changed and this test needs updating")
 
 
 # ---------------------------------------------------------------------------
@@ -491,10 +525,13 @@ def test_hex_float_no_longer_bypasses_no_exponents_rule(fuzz_driver):
     for 'e'/'E', never 'x'/'X', so this slipped through as if it were
     an ordinary decimal literal. Must now be rejected as malformed
     (err code 2, ERR_BADARG), the same as any other unparseable value,
-    and must NOT have reached the adapter's onSet()."""
-    result = _run(fuzz_driver, [b"SET group.alpha 0x1.8p3\n"])
+    and must NOT have reached the adapter's onSet(). A mandatory id
+    (docs/design/protocol.md S8) is required to reach handleSet()'s own
+    value-decode step at all -- the line is acked (it arrived, in
+    order) before the value-decode failure produces the err."""
+    result = _run(fuzz_driver, [b"SET group.alpha 0x1.8p3 #1\n"])
     _assert_survived(result, "hex float SET")
-    assert result.stdout == b"err 2\n", (
+    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
         f"hex-float value was not rejected: {result.stdout!r}")
 
 
@@ -502,9 +539,9 @@ def test_hex_float_no_longer_bypasses_no_exponents_rule(fuzz_driver):
     b"0x1p0", b"0X1P1", b"0x1.8p3", b"0xAp0", b"0x0p0",
 ])
 def test_hex_float_rejected_for_several_spellings(fuzz_driver, spelling):
-    result = _run(fuzz_driver, [b"SET group.alpha " + spelling + b"\n"])
+    result = _run(fuzz_driver, [b"SET group.alpha " + spelling + b" #1\n"])
     _assert_survived(result, f"hex float spelling {spelling!r}")
-    assert result.stdout == b"err 2\n", (
+    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
         f"hex-float spelling {spelling!r} was not rejected: "
         f"{result.stdout!r}")
 
@@ -522,46 +559,47 @@ def test_leading_whitespace_no_longer_silently_accepted(fuzz_driver):
     literal space here would not exercise this guard -- see this
     module's own docstring point 4 and protocol_handler.cpp's
     isWireSpace() comment for the full reachability analysis."""
-    result = _run(fuzz_driver, [b"WHEELS \t100 100 1000\n"])
+    result = _run(fuzz_driver, [b"WHEELS \t100 100 1000 #1\n"])
     _assert_survived(result, "leading-tab WHEELS field")
-    assert result.stdout == b"err 2\n", (
+    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
         f"leading-whitespace numeric field was not rejected: "
         f"{result.stdout!r}")
 
 
 @pytest.mark.parametrize("line", [
-    b"WHEELS 100 \v100 1000\n",
-    b"SET group.alpha \f1.0\n",
-    b"WHEELS 100 100 \r1000\n",
+    b"WHEELS 100 \v100 1000 #1\n",
+    b"SET group.alpha \f1.0 #1\n",
+    b"WHEELS 100 100 \r1000 #1\n",
 ])
 def test_leading_whitespace_rejected_across_verbs(fuzz_driver, line):
     result = _run(fuzz_driver, [line])
     _assert_survived(result, f"leading-whitespace line {line!r}")
-    assert result.stdout == b"err 2\n", (
+    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
         f"leading-whitespace field in {line!r} was not rejected: "
         f"{result.stdout!r}")
 
 
 def test_stop_id_with_non_digit_byte_is_malformed_no_reply(fuzz_driver):
-    """STOP's id is decoded by a DIFFERENT, stricter parser than
-    WHEELS/SET's ordinary numeric fields (parseIdDigits() in
-    protocol_handler.cpp): spec S8.2's id grammar is exactly
-    `'#' [0-9]+`, so this file pre-scans every byte after the '#' and
-    rejects on the FIRST non-digit -- it never calls strtoul() at all
-    for a string that fails that scan, so the "leading whitespace" hazard
-    the tests above target does not even apply to ids the same way (a
-    stray tab right after '#' is rejected by the manual digit-only
-    pre-check, not because strtoul happened to skip it). This test pins
-    that a whitespace byte in the id position is still correctly
-    rejected -- STOP's id is REQUIRED, so a malformed id means the
-    whole line is malformed with NO reply (there is no other candidate
-    id token to recover against, since the malformed one IS the id
-    slot)."""
+    """Every sequenced verb's id is decoded by a DIFFERENT, stricter
+    parser than WHEELS/SET's ordinary numeric fields (parseIdDigits() in
+    protocol_handler.cpp): the id grammar is exactly `'#' [0-9]+`, so
+    this file pre-scans every byte after the '#' and rejects on the
+    FIRST non-digit -- it never calls strtoul() at all for a string that
+    fails that scan, so the "leading whitespace" hazard the tests above
+    target does not even apply to ids the same way (a stray tab right
+    after '#' is rejected by the manual digit-only pre-check, not
+    because strtoul happened to skip it). This test pins that a
+    whitespace byte in the id position is still correctly rejected --
+    STOP's ONLY field is now its mandatory id (docs/design/protocol.md
+    S8), so a malformed id means the whole line cannot be sequence-
+    classified at all: NO reply, same as any other sequenced verb whose
+    trailing token fails to parse as `#[0-9]+`."""
     result = _run(fuzz_driver, [b"STOP #\t5\n"])
     _assert_survived(result, "whitespace byte inside STOP's id")
     assert result.stdout == b"", (
         f"STOP with a non-digit byte in its id must produce NO reply "
-        f"(no id can be trusted to echo), got: {result.stdout!r}")
+        f"(no id can be trusted to sequence-classify against), got: "
+        f"{result.stdout!r}")
 
 
 def test_nan_inf_get_reply_formatting_is_safe(nan_driver):
@@ -576,22 +614,26 @@ def test_nan_inf_get_reply_formatting_is_safe(nan_driver):
     nan_regression_driver.cpp does: set MockAdapter's GET override to
     NaN/+Inf/-Inf directly, then GET it over the wire.
 
-    Also re-checks the historical GET reply-buffer bug (a 235-byte
-    field name, the near-cap legal maximum per spec S2's 240-byte line
-    cap) on the same buffer, non-regression only. Pure value-formatting
-    logic, unaffected by the colon-to-space grammar migration -- only
-    the wire syntax the driver feeds ("GET <name>" instead of
-    "GET:<name>") changed."""
+    Also re-checks the historical GET reply-buffer bug (a near-cap-length
+    field name, per spec S2's 240-byte line cap) on the same buffer,
+    non-regression only. Pure value-formatting logic, unaffected by the
+    colon-to-space grammar migration -- only the wire syntax the driver
+    feeds ("GET <name>" instead of "GET:<name>") changed. GET is
+    sequenced now (docs/design/protocol.md S8), so each of the four
+    calls carries its own mandatory in-order id and is acked before its
+    own `get` line -- which is also why the long name shrank from 235 to
+    232 bytes (nan_regression_driver.cpp's own comment): the mandatory
+    " #4" suffix has to fit the same 240-byte line together with it."""
     result = subprocess.run(
         [str(nan_driver)], capture_output=True, timeout=10,
         env={**__import__("os").environ, **_SANITIZER_ENV_EXTRA})
     _assert_survived(result, "NaN/Inf/long-name GET regression driver")
     lines = result.stdout.splitlines()
     assert lines == [
-        b"get nan.field 0.000000",
-        b"get posinf.field 4294.967040",
-        b"get neginf.field -4294.967040",
-        b"get " + b"n" * 235 + b" 1.500000",
+        b"ack 1 0", b"get nan.field 0.000000",
+        b"ack 2 0", b"get posinf.field 4294.967040",
+        b"ack 3 0", b"get neginf.field -4294.967040",
+        b"ack 4 0", b"get " + b"n" * 232 + b" 1.500000",
     ], f"unexpected output: {result.stdout!r}"
 
 
@@ -600,9 +642,11 @@ def test_run_debug_driver_survives_and_matches(run_debug_driver):
     output sequence -- both sendDebug()'s own sanitization (embedded
     '\\n'/'\\r' stripped; null/empty/all-newline text all collapse to
     the bare "debug\\n" shape; a too-long text is truncated to the
-    233-byte cap, not overflowed) and RUN's #0-suppresses-a-REGISTERED-
-    ret rule (a configured return value is silently swallowed under #0,
-    but reported normally under a nonzero id)."""
+    233-byte cap, not overflowed) and RUN's ack-then-ret path with a
+    REGISTERED return value, under sanitizers. (The `#0`-suppression
+    scenario this test used to also cover is gone along with `#0`
+    itself -- docs/design/protocol.md §6.3/§2.2 -- see
+    run_debug_driver.cpp's own header comment.)"""
     result = subprocess.run(
         [str(run_debug_driver)], capture_output=True, timeout=10,
         env={**__import__("os").environ, **_SANITIZER_ENV_EXTRA})
@@ -614,8 +658,6 @@ def test_run_debug_driver_survives_and_matches(run_debug_driver):
         b"debug",                  # nullptr -> the SAME case as ""
         b"debug",                  # entirely '\n'/'\r' -> bare too
         b"debug " + b"z" * 233,    # truncated to the 233-byte text cap
-        b"ret 42 #5",              # RUN foo #0's ret was suppressed
-                                   # entirely (nothing between the
-                                   # truncated debug line and this);
-                                   # RUN foo #5 reports normally
+        b"ack 1 0",                # RUN foo #1 -- in order, acked...
+        b"ret 42 #1",              # ...then its own registered ret
     ], f"unexpected output: {result.stdout!r}"

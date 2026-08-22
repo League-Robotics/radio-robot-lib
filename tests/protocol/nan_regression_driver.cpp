@@ -53,26 +53,37 @@ int main() {
   StdoutSink sink;
   Protocol::ProtocolHandler handler(adapter, sink);
 
+  // GET is a SEQUENCED verb now (docs/design/protocol.md §8) -- each
+  // call below needs its own mandatory, in-order id (#1, #2, #3, #4) on
+  // this one handler instance, and each is acked before its own `get`
+  // reply line.
+
   // ---- 1. NaN / +Inf / -Inf through GET's reply-formatting path ----
   adapter.overrideName = "nan.field";
   adapter.overrideValue = std::nanf("");
-  feedLine(handler, "GET nan.field\n");
+  feedLine(handler, "GET nan.field #1\n");
 
   adapter.overrideName = "posinf.field";
   adapter.overrideValue = std::numeric_limits<float>::infinity();
-  feedLine(handler, "GET posinf.field\n");
+  feedLine(handler, "GET posinf.field #2\n");
 
   adapter.overrideName = "neginf.field";
   adapter.overrideValue = -std::numeric_limits<float>::infinity();
-  feedLine(handler, "GET neginf.field\n");
+  feedLine(handler, "GET neginf.field #3\n");
 
-  // ---- 2. A 235-byte GET field name (spec S2's 240-byte line cap is
-  // the only bound on it) through the SAME reply buffer, non-regression
-  // re-check under ASan.
-  std::string longName(235, 'n');
+  // ---- 2. A near-cap-length GET field name (spec S2's 240-byte line
+  // cap is the only bound on it) through the SAME reply buffer,
+  // non-regression re-check under ASan. 232, not the pre-2026-08-21
+  // value of 235: "GET " (4) + name + " #4" (3) + '\n' (1) must still
+  // fit 240 now that the id is mandatory (docs/design/protocol.md S8) --
+  // 235 would overflow the line by 3 bytes and never reach onGet() at
+  // all, silently dropping this whole case (caught by this driver's own
+  // companion test going quiet on its last two lines when this was
+  // first written at 235).
+  std::string longName(232, 'n');
   adapter.overrideName = longName.c_str();
   adapter.overrideValue = 1.5f;
-  feedLine(handler, "GET " + longName + "\n");
+  feedLine(handler, "GET " + longName + " #4\n");
 
   std::fflush(stdout);
   return 0;
