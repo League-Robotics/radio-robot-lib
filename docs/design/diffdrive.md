@@ -105,14 +105,15 @@ Every motion command carries a `lease` — a **duration in `[ms]` from now**,
 clamped to `kLeaseMax`. When it expires the kernel stops. A dead caller cannot
 mean a runaway.
 
-This lines up exactly with the wire's `WHEELS <left> <right> <duration>`,
-where `duration` is a required `[ms]` field with a 5000 ceiling for precisely
+This lines up exactly with the wire's `WHEELS_V <left> <right> <duration>`
+(renamed from `WHEELS`, 2026-08-22 — docs/design/motion-api.md §9.2), where
+`duration` is a required `[ms]` field with a 5000 ceiling for precisely
 the same reason. **`duration` becomes `lease` with no reinterpretation** — the
 one place where the wire and the kernel already agree on a concept without
 anyone having designed it that way.
 
-That agreement is why `WHEELS` is the right verb to build the first end-to-end
-test around, rather than `MOVE`.
+That agreement is why `WHEELS_V` is the right verb to build the first
+end-to-end test around, rather than a body-frame verb like `MOVE_X`.
 
 ### 3.2 `neutral()` and `estop()` are not synonyms — but not for the reason a full robot's numbers suggest
 

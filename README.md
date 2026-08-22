@@ -12,7 +12,7 @@ Two things live here, and they are deliberately independent:
 | **DiffDrive** | a self-contained differential-drive wheel kernel — the control law, four small ports, no chassis geometry, no sensors but the wheel encoders |
 | **Protocol** | a protocol-v6 handler — one ASCII line grammar, parsed by a handler class, dispatched to an adapter class you implement |
 
-They meet in exactly one place: an adapter that turns `WHEELS …` into
+They meet in exactly one place: an adapter that turns `WHEELS_V …` into
 `DifferentialDrive::drive(...)`. That seam is the whole point of the repo, and
 it is the thing this library exists to let us test.
 
@@ -61,13 +61,19 @@ uv run python -m pytest -q
 The acceptance runs with no robot and no serial port:
 
 ```
-feed("WHEELS 100 100 1000 #5\n")  ->  ok #5
+feed("WHEELS_V 100 100 1000 #1\n") ->  ack 1 0 none
 step the kernel                    ->  t frames, counts climbing
 step past 1000 ms                  ->  wheels at zero, lease expired
-feed("ESTOP\n")                    ->  latched zero, no ack
+feed("ESTOP\n")                    ->  estop
 ```
 
-`done` for `WHEELS` was settled: **no**. The handler stays a pure function of
-the bytes fed to it -- no clock, no pending-id table, no state between calls
-beyond a partial line. See [docs/design/protocol.md](docs/design/protocol.md)
-§8-§9 for the reasoning and the full list of known gaps.
+The wire is protocol-v6 plus a reliability layer: every sequenced command
+carries a mandatory, strictly incrementing `#<id>`, acknowledged
+cumulatively (`ack <id> <lastDone> <reason>` / `nack <next> <lastDone>
+<reason>`), and a decode failure NAKs and holds the sequence in place
+rather than silently advancing past a garbled line. `WHEELS`/`onWheels`
+was renamed `WHEELS_V`/`onWheelsV`, joined by five more motion verbs
+(`WHEELS_X`/`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W`) that decode and
+dispatch correctly but have no real effect on `DiffDriveAdapter` (no
+planner). See [docs/design/protocol.md](docs/design/protocol.md) §8-§9 for
+the full reasoning, the resolved ambiguities, and the known gaps.
