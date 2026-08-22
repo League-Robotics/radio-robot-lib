@@ -5,9 +5,16 @@
 implemented; §9 is what the implementation actually found: resolved
 ambiguities, one deliberate omission, and the gaps this work exposed,
 including the 2026-08-20 space/`#id` grammar migration, the 2026-08-21
-addition of `debug` and `RUN` (§6.2/§6.3), and the 2026-08-21 reliability
+addition of `debug` and `RUN` (§6.2/§6.3), the 2026-08-21 reliability
 layer — mandatory sequence ids plus cumulative `ack`/`nack`, replacing the
-undelivered 3×-reply-repeat idea outright (§8).
+undelivered 3×-reply-repeat idea outright (§8) — and the 2026-08-22 changes
+(§8.9): a decode failure now NAKs instead of acking, `ERR_DUPLICATE_ID` is
+deleted, `PING` joins the unsequenced exemption set, `lastDone`/its reason
+move from the handler to the Adapter, every `ack`/`nack` gains a reason
+token, and the six [motion-api.md](motion-api.md) §9.1 verbs
+(`WHEELS_X`/`WHEELS_V`/`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W`, plus `STOP`'s
+own `now` token) are implemented at the wire/handler layer (`WHEELS` is
+renamed `WHEELS_V`).
 
 ---
 
@@ -119,9 +126,10 @@ free-standing correlation token a caller could pick arbitrarily.
 An id is still spelled **`#<n>`** and is still always the **last token** of
 its line — commands and replies alike.
 
-- **Mandatory** on every sequenced verb (`PING ID VER STATUS HELP GET SET
-  TLM WHEELS STOP RUN` — see §8.3 for the two exceptions, `HELLO` and
-  `ESTOP`, which never carry one at all). A sequenced verb arriving with no
+- **Mandatory** on every sequenced verb (`ID VER STATUS HELP GET SET TLM
+  WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP RUN` — see §8.3 for
+  the three exceptions, `HELLO`, `ESTOP`, and (as of 2026-08-22) `PING`,
+  none of which ever carry one at all). A sequenced verb arriving with no
   id is malformed.
 - The digits are bare and unsigned: `#+5`, `#-5`, and `# 5` are all
   malformed — §2's "optionally signed" applies to data fields, not the id,
@@ -141,14 +149,19 @@ its line — commands and replies alike.
   already-accepted id, never executed. There is no way to suppress a reply
   any more, by design — suppression is incompatible with a scheme that must
   see every id to detect gaps.
-- **`ERR_DUPLICATE_ID` (code 11) is now unreachable.** The old design had
-  the *adapter* detect and reject a reused id. Under the new scheme the
-  *handler* itself enforces strict monotonicity before an id ever reaches
-  the adapter — an id is only ever dispatched when it exactly equals
-  `expectedNext_`, which then advances past it, so the adapter can never be
-  handed the same id twice. `Result::kDuplicateId` and its wire code remain
-  declared (removing them is out of this change's scope), but no code path
-  in this library can produce them any more. Flagged in §9.8.
+- **`ERR_DUPLICATE_ID` (code 11) is DELETED (2026-08-22).** The old design
+  had the *adapter* detect and reject a reused id. Under the reliability
+  scheme the *handler* itself enforces strict monotonicity before an id
+  ever reaches the adapter — an id is only ever dispatched when it exactly
+  equals `expectedNext_`, which then advances past it, so the adapter can
+  never be handed the same id twice. `Result::kDuplicateId` was kept
+  declared-but-unreachable through 2026-08-21 (flagged in §9.8); the
+  2026-08-22 pass removed the enumerator and its wire code entirely — it
+  is structurally unreachable, not merely unused, and there is nothing left
+  to keep it declared *for*. **Keep the duplicate-retransmit re-ack logic**
+  (the `id < expectedNext_` → re-ack-without-re-executing row of §8.1's
+  table) — that is a different thing, essential, and unaffected by this
+  removal.
 
 ### 2.3 Malformed-line recovery — superseded by §8.4
 
@@ -229,15 +242,22 @@ fixed field-token array's own storage cap
 
 ## 4. `Adapter` — one class, all the callable methods
 
+**Rewritten 2026-08-22** for the six stakeholder-directed changes. The
+biggest structural change: `lastDone`/its completion reason MOVE here from
+a `ProtocolHandler` field that nothing ever wrote (§8.8), `onWheels`
+renames to `onWheelsV`, five new motion methods join it (one per
+[motion-api.md](motion-api.md) §9.1 verb), `onStop` gains an `immediate`
+argument, and `kDuplicateId` is deleted outright (§2.2).
+
 ```cpp
 namespace Protocol {
 
-// Maps 1:1 onto the wire outcome (docs/design/protocol.md §8, updated
-// 2026-08-21 for the reliability layer): kOk means nothing further is
+// Maps 1:1 onto the wire outcome (§8.2): kOk means nothing further is
 // emitted beyond the ack dispatch() already sent (no more standalone
 // `ok`); every other value means an `err <code> #<id>` follows that same
-// ack (id now LAST, §8.6). kDuplicateId (code 11) is UNREACHABLE as of
-// this change (§2.2/§9.8 item 8) -- kept declared, never produced.
+// ack (id last, §8.6). kDuplicateId is GONE (2026-08-22) -- it was
+// already structurally unreachable (§2.2), and there is nothing left to
+// keep a deleted enumerator declared for.
 enum class Result : uint8_t {
   kOk,             // → (ack alone; no further reply)
   kUnknown,        // → err 1 #<id>   ERR_UNKNOWN
@@ -247,7 +267,17 @@ enum class Result : uint8_t {
   kUnimplemented,  // → err 6 #<id>   ERR_UNIMPLEMENTED
   kNotReady,       // → err 8 #<id>   ERR_NOT_CONFIGURED
   kBusy,           // → err 10 #<id>  ERR_BUSY
-  kDuplicateId,    // → err 11 #<id>  ERR_DUPLICATE_ID -- unreachable (§9.8)
+};
+
+// The reliability layer's completion-reason vocabulary (§8.8, motion-
+// api.md §5.3): the four reasons a motion can finish, plus kNone for
+// "nothing has completed yet" (lastDone() == 0's own pairing).
+enum class DoneReason : uint8_t {
+  kNone,     // → "none"
+  kStop,     // → "stop"     -- the stop condition was met, or stop() ended it
+  kTimeout,  // → "timeout"  -- the backstop fired
+  kEstop,    // → "estop"    -- a panic stop ended it
+  kAborted,  // → "aborted"  -- the caller abandoned it
 };
 
 class Adapter {
@@ -259,11 +289,29 @@ class Adapter {
   virtual uint32_t now() const = 0;                 // [ms] for pong
   virtual void status(StatusFields& out) const = 0;
 
-  // ---- motion (the minimal set: enough to exercise DiffDrive) ----
-  virtual Result onWheels(float left, float right,      // [mm/s] [mm/s]
-                          uint32_t duration,            // [ms]
-                          uint32_t id) = 0;
-  virtual Result onStop(uint32_t id) = 0;
+  // ---- motion: the six verbs (motion-api.md §9.1), plus STOP/ESTOP.
+  // Angles (rotation, omega) arrive already decoded from the wire's
+  // milliradian integers into float milliradians -- degrees-at-the-API
+  // is a LANGUAGE BINDING's conversion, not this seam's.
+  virtual Result onWheelsV(float left, float right,     // [mm/s] [mm/s]
+                           uint32_t duration,            // [ms]
+                           uint32_t id) = 0;             // renamed from onWheels
+  virtual Result onWheelsX(float left, float right,     // [mm] [mm]
+                           float cruise,                 // [mm/s]
+                           uint32_t timeout,              // [ms]
+                           uint32_t id) = 0;
+  virtual Result onMoveX(float distance, float rotation,  // [mm] [mrad]
+                         float cruise, uint32_t timeout,   // [mm/s] [ms]
+                         uint32_t id) = 0;
+  virtual Result onMoveV(float v_x, float omega,           // [mm/s] [mrad/s]
+                         uint32_t duration, uint32_t id) = 0;  // [ms]
+  virtual Result onGoToR(float x, float y, float speed,      // [mm] [mm] [mm/s]
+                        float arrive, uint32_t timeout,       // [mm] [ms]
+                        uint32_t id) = 0;
+  virtual Result onGoToW(float x, float y, float speed,
+                        float arrive, uint32_t timeout,
+                        uint32_t id) = 0;
+  virtual Result onStop(bool immediate, uint32_t id) = 0;  // STOP [now]
   virtual void   onEstop() = 0;    // never sequenced, never queued -- the
                                    // handler replies `estop` itself (§8.3),
                                    // this method's own return is still void
@@ -277,6 +325,11 @@ class Adapter {
   // ---- telemetry ----
   virtual Result onTlm(TlmMode mode) = 0;
 
+  // ---- the reliability layer's completion channel (§8.8, MOVED here
+  // 2026-08-22 from a ProtocolHandler field nothing ever wrote) ----
+  virtual uint32_t lastDone() const = 0;
+  virtual DoneReason lastDoneReason() const = 0;
+
   // ---- invocation by name (§6.3) ----
   virtual Result onRun(const char* name,
                        const char* const* argv, size_t argc,
@@ -288,10 +341,9 @@ class Adapter {
 ```
 
 `kUnimplemented` and `kBusy` are carried for completeness against the wire's
-error-code space even though no verb in this library's scope currently
-produces them — `kUnimplemented` is reserved for a recognized-but-unwired verb,
-`kBusy` for a subsystem refusing because it is mid-motion (neither condition
-arises in a wheel-kernel-only adapter with no queue to be busy about).
+error-code space even though `DiffDriveAdapter` does not itself produce
+them — `kUnimplemented` is reserved for a recognized-but-unwired verb,
+`kBusy` for a subsystem refusing because it is mid-motion.
 
 Returning a `Result` rather than writing a reply is the deliberate choice. It
 means the adapter cannot emit a malformed reply, cannot forget to reply, and
@@ -303,6 +355,25 @@ anything, including an ack (§8.3). The handler itself still replies `estop`
 after calling this — that reply is not this method's own concern; it is
 formatted and sent by `ProtocolHandler`, exactly like every other reply.
 
+`onStop`'s `immediate` flag carries `STOP now`'s own request (motion-
+api.md §3.7/§9.1) — a deceleration CHOICE, not a different verb.
+`DiffDriveAdapter` accepts and ignores it (its `neutral()` was already
+immediate either way, §5.1); an adapter that owns a real ramp is where the
+flag first makes a behavioral difference.
+
+### 4.1 `lastDone()`/`lastDoneReason()` — the reliability layer's
+completion channel, now Adapter-owned
+
+The handler POLLS these two methods fresh every time it formats an
+`ack`/`nack` line (§8.1/§8.5) — no callback, no clock, no cached copy
+anywhere in `ProtocolHandler`. Monotonic contract: a later `lastDone()`
+value implies every earlier id has also completed, since this library's
+motion runs one command at a time, in order. An adapter with no
+completion event of its own (`DiffDriveAdapter`, §8.8.1) returns `0`/
+`kNone` forever — wire-correct, functionally inert on that adapter
+specifically. See §8.8 for the full story, including why this moved off
+the handler.
+
 ---
 
 ## 5. The DiffDrive adapter is where geometry lives
@@ -310,8 +381,8 @@ formatted and sent by `ProtocolHandler`, exactly like every other reply.
 The concrete adapter that closes the loop for testing:
 
 ```
-WHEELS <left> <right> <duration> [#<id>]
-        [mm/s]  [mm/s]   [ms]
+WHEELS_V <left> <right> <duration> #<id>
+          [mm/s]  [mm/s]   [ms]
               │
               ▼   scale by countsPerLength [counts/mm]   ← the robot's geometry
         left, right  [counts/s]
@@ -319,6 +390,15 @@ WHEELS <left> <right> <duration> [#<id>]
               ▼   velocity = (left+right)/2 ,  twist = (right-left)/2
    DifferentialDrive::drive(velocity, twist, lease=duration)
 ```
+
+**Renamed from `WHEELS`/`onWheels` (2026-08-22)** — same fields, same
+meaning; [motion-api.md](motion-api.md) §9.2 confirms `WHEELS` *is*
+`wheels_v`. `DiffDriveAdapter` implements only this one motion verb for
+real. The other five (`WHEELS_X`/`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W`)
+all answer `Result::kUnknown` on `DiffDriveAdapter` specifically — it has
+no planner, which is honest and already documented (this same posture
+`RUN` already takes for an adapter with an empty registration table, §6.3)
+— **not** `kUnimplemented`, a deliberate choice recorded in §9.8.
 
 Three things fall out of this that are worth stating before anyone writes it:
 
@@ -342,16 +422,18 @@ Three things fall out of this that are worth stating before anyone writes it:
 
 ### 5.1 `STOP` and `ESTOP` — what they actually do here
 
-**There is no queue in this library**, because there is no planner — `WHEELS`
-reaches `drive()` directly. So neither verb "waits its turn behind an active
-move"; that framing belongs to a full motion-planner robot (see
-[motion-api.md](motion-api.md), which specifies that layer as something to
-build, not something this library has). What `STOP #<id>` and `ESTOP`
-actually do, traced to the kernel:
+**There is no queue in this library**, because `DiffDriveAdapter` has no
+planner — `WHEELS_V` reaches `drive()` directly, and the other five motion
+verbs answer `kUnknown` on it (§5). So neither `STOP` nor `ESTOP` "waits its
+turn behind an active move" on this adapter; that framing belongs to a full
+motion-planner robot (see [motion-api.md](motion-api.md) §3.7/§9.1, which
+specifies `stop`/`stop(immediate=True)`/`estop` as a richer three-way choice
+this library's own `DiffDriveAdapter` collapses onto one behavior). What
+`STOP [now] #<id>` and `ESTOP` actually do, traced to the kernel:
 
 | verb | adapter call | kernel effect |
 |---|---|---|
-| `STOP #<id>` | `onStop()` → `drive_.neutral()` | writes a neutral command to the mailbox; duty zeroes **this cycle**, immediately — `stageStop()` is a bare `stageDuty(0, 0)`, no ramp |
+| `STOP [now] #<id>` | `onStop(immediate, id)` → `drive_.neutral()` | writes a neutral command to the mailbox; duty zeroes **this cycle**, immediately — `stageStop()` is a bare `stageDuty(0, 0)`, no ramp. `immediate` (the optional `now` token, motion-api.md §3.7/§9.1) is accepted but has no effect here — see §9.8 |
 | `ESTOP` | `onEstop()` → `drive_.estop()` | sets a **latch** that forces the same neutral path from the next cycle regardless of the mailbox's state, and additionally **refuses every new motion command** (`kRefusedEstopped`) until `estopClear()` |
 
 **The two are not distinguished by how fast duty goes to zero — both are
@@ -404,64 +486,77 @@ elsewhere would actively mislead a reader.
 
 ## 6. Verb scope — what this library implements
 
-Enough to test DiffDrive over the wire, and no more.
+Enough to test DiffDrive over the wire, plus the full six-verb motion
+surface [motion-api.md](motion-api.md) §9.1 specifies — the WIRE and
+HANDLER side of all six is implemented; `DiffDriveAdapter` itself only
+gives one of them (`WHEELS_V`) real effect (§5).
 
-**Every row marked "sequenced" below now requires a mandatory `#<id>` —
-see §8.** The reply column shows each verb's own *informational* reply
-only; every sequenced verb ALSO emits the transport-layer `ack`/`nack`
+**Every row marked "sequenced" below requires a mandatory `#<id>` — see
+§8.** The reply column shows each verb's own *informational* reply only;
+every sequenced verb ALSO emits the transport-layer `ack`/`nack`
 described in §8, as a separate line, alongside whatever is shown here.
+**`PING` is unsequenced as of 2026-08-22** — it joins `HELLO`/`ESTOP` in
+never carrying an id (§8.3).
 
 | verb | sequenced? | command | own reply | notes |
 |---|---|---|---|---|
 | `HELLO` | no | — | `device NEZHA2 robot <name> <serial>` | resets the sequence (§8.3) |
-| `PING` | yes | `#id` | `pong <now>` | `now` = robot clock `[ms]` |
+| `PING` | **no** (2026-08-22) | — | `pong <now>` | `now` = robot clock `[ms]`; maximally forgiving, like `ESTOP` — see §8.3, §9.8 |
 | `ID` | yes | `#id` | `id <drivetrain> <profile> <version>` | |
 | `VER` | yes | `#id` | `ver <version>` | |
-| `STATUS` | yes | `#id` | `status ready=1 active=0 connL=1 connR=1 otos=0 wedge=0 flags=<hex> tlm=off next=<n>` | `k=v`, order not guaranteed, unknown keys ignored; `next` added 2026-08-21 (§8.5) |
-| `HELP` | yes | `#id` | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS STOP ESTOP RUN` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
+| `STATUS` | yes | `#id` | `status ready=1 active=0 connL=1 connR=1 otos=0 wedge=0 flags=<hex> tlm=off next=<n>` | `k=v`, order not guaranteed, unknown keys ignored |
+| `HELP` | yes | `#id` | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
 | `GET` | yes | `[name] #id` | `get name value` (one field) or one `get` line per field (bare `GET`) | unknown name → no `get` line, but still acked (§8.1) |
-| `SET` | yes | `name value #id` | — (accepted: none; rejected: `err <code> #<id>`) | `ok` is gone — an in-order `ack` **is** the acceptance (§8.2) |
-| `TLM` | yes | `mode #id` | — | `OFF`/`POSE`/`FULL`/`NOW`/`AUTO`/`BUFFER` decoded; mode-specific behavior beyond persisting the value is the calling application's job; the adapter's own `Result` never surfaces on the wire, matching the pre-2026-08-21 behavior |
-| `WHEELS` | yes | `left right duration #id` | — (accepted: none; rejected: `err <code> #<id>`) | maps onto `drive()` with no planner |
-| `STOP` | yes | `#id` | — (accepted: none; rejected: `err <code> #<id>`) | see §5.1 |
+| `SET` | yes | `name value #id` | — (accepted: none; rejected: `err <code> #<id>`) | an in-order `ack` **is** the acceptance; a value that fails to PARSE is a decode failure (§8.9), not a rejection |
+| `TLM` | yes | `mode #id` | — | `OFF`/`POSE`/`FULL`/`NOW`/`AUTO`/`BUFFER` decoded; an unrecognized mode token is a decode failure (§8.9); the adapter's own `Result` never surfaces on the wire |
+| `WHEELS_X` | yes | `left right cruise timeout #id` | — | per-wheel commanded DISTANCE, bounded by encoder travel + `timeout` (motion-api.md §3.1); `kUnknown` on `DiffDriveAdapter` (§5) |
+| `WHEELS_V` | yes | `left right duration #id` | — | **renamed from `WHEELS`** (2026-08-22) — maps onto `drive()` with no planner (§5) |
+| `MOVE_X` | yes | `distance rotation cruise timeout #id` | — | body displacement + heading (motion-api.md §3.3); `kUnknown` on `DiffDriveAdapter` |
+| `MOVE_V` | yes | `v_x omega duration #id` | — | body twist held for `duration` (motion-api.md §3.4); `kUnknown` on `DiffDriveAdapter` |
+| `GO_TO_R` | yes | `x y speed arrive timeout #id` | — | drive to a robot-frame point (motion-api.md §3.5); `kUnknown` on `DiffDriveAdapter` |
+| `GO_TO_W` | yes | `x y speed arrive timeout #id` | — | drive to a world-frame point (motion-api.md §3.6); `kUnknown` on `DiffDriveAdapter` |
+| `STOP` | yes | `[now] #id` | — (accepted: none; rejected: `err <code> #<id>`) | the optional `now` token (motion-api.md §3.7/§9.1) sits safely before the id since the id is self-marking; see §5.1 |
 | `ESTOP` | **no** | — | `estop` | never sequenced, never nacked, maximally forgiving; see §5.1/§8.3 |
 | `RUN` | yes | `function [arg...] #id` | `ret <value> #<id>` (accepted, function returned a value) / — (accepted, void) / `err <code> #<id>` (rejected) | invocation by name; see §6.3 |
 | — | — | — | `debug <text>` | robot-to-host ONLY, no inbound wire form; see §6.2 |
-| — | — | — | `ack <n> <lastDone>` / `nack <n> <lastDone>` | transport layer, NEW 2026-08-21; see §8 |
+| — | — | — | `ack <n> <lastDone> <reason>` / `nack <n> <lastDone> <reason>` | transport layer; the `<reason>` token is NEW 2026-08-22 — see §8.8 |
 
-| deferred | why |
-|---|---|
-| `MOVE` | needs a planner and a stop-condition evaluator — neither is in this library |
-| `GOTO` | needs a navigator and world-frame odometry |
-| `SEED` `CAL` | need OTOS/odometry this library does not own |
+Angles (`rotation`, `omega`) are milliradian integers on the wire
+(motion-api.md §9.1) — degrees only exist at a language binding, which is
+not this library's concern; the handler decodes them with the ordinary
+signed-integer field parser, the same as any other field.
 
-`MOVE` is the interesting omission. It is the richer verb, but its wheels-kind
-arm would still land on the same `drive()` call — the extra machinery is the
-stop condition and the queue, which belong to an application, not a wheel
-kernel. `WHEELS` reaches the kernel with the least intervening invention,
-which is exactly what a first test wants. See [motion-api.md](motion-api.md)
-for what a layer that adds `MOVE`/`GOTO` back would look like.
+`WHEELS_X` and the four body/positional verbs (`MOVE_X`/`MOVE_V`/
+`GO_TO_R`/`GO_TO_W`) have no prior wire form before 2026-08-22 — they were
+`motion-api.md`'s own proposal, now implemented at the wire/handler layer.
+`SEED`/`CAL` remain deferred: they need OTOS/odometry this library does not
+own.
 
 ### 6.1 Outcomes
 
-**Rewritten 2026-08-21 — see §8 for the full design.** `ok` is deleted:
-acceptance is now signaled by the transport-layer `ack` alone. `done` is
-deleted as a standalone verb: the `lastDone` field carried by every
-`ack`/`nack` is now the completion channel, for whichever future verb
-(`MOVE`) produces a completion event this library's own verbs do not.
+**Rewritten 2026-08-21, updated 2026-08-22 — see §8 for the full design.**
+`ok` is deleted: acceptance is signaled by the transport-layer `ack`
+alone. `done` is deleted as a standalone verb: the `lastDone`/`<reason>`
+pair carried by every `ack`/`nack` is the completion channel.
 
 | reply | meaning |
 |---|---|
-| `ack <n> <lastDone>` | transport: the highest in-order id accepted so far arrived correctly (§8.1) |
-| `nack <n> <lastDone>` | transport: `n` is the next id the robot actually needs — the stream has a gap (§8.1) |
-| `err <code> #<id>` | application: an in-order command's *content* was rejected (§4's `Result` → the code table below). **Field order changed 2026-08-21** — the id is now always the LAST token, matching every other line in this grammar (§8.6); it used to be `err #<id> <code>`, an undocumented exception to the id-is-last rule. |
-| `estop` | `ESTOP` only, NEW 2026-08-21 — confirms the stop executed (§8.3) |
+| `ack <n> <lastDone> <reason>` | transport: the highest in-order id accepted so far arrived correctly (§8.1). `<reason>` (NEW 2026-08-22, §8.8) describes `lastDone` — `none` when `lastDone` is 0 |
+| `nack <n> <lastDone> <reason>` | transport: `n` is the next id the robot actually needs — either a numeric gap, OR (2026-08-22, §8.9) an in-order id whose own content was a DECODE FAILURE and so was never accepted at all |
+| `err <code> #<id>` | application: a command's *content* was rejected — either a MERITS rejection (arrived intact, the adapter's own `Result` refused it, §4) or the "content" half of a decode failure (§8.9). Field order: the id is always the LAST token, matching every other line in this grammar (§8.6). |
+| `estop` | `ESTOP` only — confirms the stop executed (§8.3) |
 | `ret <value> #<id>` | `RUN` only (§6.3) — the invoked function returned a value, emitted IN ADDITION to the `ack` |
 
-A well-formed, in-order command is never "just" accepted or "just" rejected
-on the wire in isolation — every sequenced verb's `ack` is unconditional on
-arrival-in-order, and `err` (when it happens) is a *second*, additional
-line layered on top, not a replacement for it (§8.2).
+**A command is never "just" accepted or "just" rejected in isolation** —
+but which TRANSPORT reply it gets now depends on which of two kinds of
+rejection it is (§8.9, the central 2026-08-22 change):
+
+- **Decoded fine, refused on merit** (e.g. an out-of-range speed): `ack`
+  (it arrived, the sequence advances) **plus** `err <code> #<id>`.
+- **Decode failure** (unknown verb, wrong arity, unparseable field — the
+  line did not arrive intact): `nack <n> <lastDone> <reason>` (the
+  sequence does NOT advance — `n` names the SAME id that just failed)
+  **plus** `err <code> #<id>`.
 
 | code | name | meaning |
 |---|---|---|
@@ -472,7 +567,9 @@ line layered on top, not a replacement for it (§8.2).
 | 6 | `ERR_UNIMPLEMENTED` | recognized, not wired on this build |
 | 8 | `ERR_NOT_CONFIGURED` | refused pre-`ready` |
 | 10 | `ERR_BUSY` | subsystem in motion; retry at rest |
-| 11 | `ERR_DUPLICATE_ID` | **unreachable as of 2026-08-21** — the handler's own sequencing now makes a repeated id structurally impossible to hand to the adapter (§2.2, §9.8) |
+
+Code 11 (`ERR_DUPLICATE_ID`) is **deleted, not merely unreachable, as of
+2026-08-22** — see §2.2/§9.8.
 
 ### 6.2 `debug` — robot-to-host only
 
@@ -664,11 +761,11 @@ covers every earlier id too, which is what lets the scheme survive loss
 with no ring, no per-id storage, and no eviction policy — the entire
 receiver-side state is two numbers.
 
-Handler state, in full:
+Handler state, in full (2026-08-22: `lastDone_` is GONE from this
+list — see §8.8):
 
 ```cpp
 uint32_t expectedNext_ = 1;   // next sequence id expected from the host
-uint32_t lastDone_ = 0;       // most recent completed motion id (§8.5.1)
 bool     gapOutstanding_ = false;  // a nack is currently owed (§8.5)
 ```
 
@@ -684,11 +781,16 @@ only carve-out), is classified into exactly one of three cases:
 
 | inbound id | action | reply |
 |---|---|---|
-| `== expectedNext_` | dispatch to the adapter; `expectedNext_ = id + 1` | `ack <id> <lastDone_>` |
-| `< expectedNext_` | **do NOT re-execute** — a retransmit whose ack was lost | `ack <expectedNext_ - 1> <lastDone_>` |
-| `> expectedNext_` | **discard, do NOT execute** — a gap | `nack <expectedNext_> <lastDone_>` |
+| `== expectedNext_` | decode the verb's own fields FIRST (§8.9); only if that succeeds, dispatch to the adapter and `expectedNext_ = id + 1` | `ack <id> <lastDone> <reason>` on a decode success; `nack <expectedNext_> <lastDone> <reason>` on a decode failure (§8.9) |
+| `< expectedNext_` | **do NOT re-execute** — a retransmit whose ack was lost | `ack <expectedNext_ - 1> <lastDone> <reason>` |
+| `> expectedNext_` | **discard, do NOT execute** — a numeric gap | `nack <expectedNext_> <lastDone> <reason>` |
 
-The middle row is the one easy to get wrong: a resent `WHEELS` (the host
+`<lastDone>`/`<reason>` are read fresh off `Adapter::lastDone()`/
+`lastDoneReason()` (§8.8) every time either reply is formatted — this
+table's middle column used to read a handler-owned `lastDone_` field
+before 2026-08-22.
+
+The middle row is the one easy to get wrong: a resent `WHEELS_V` (the host
 never saw the first ack, so it resends) must **not** drive the wheels a
 second time. The reply for a retransmit echoes the *already-accepted*
 id (`expectedNext_ - 1`), not the resent one — telling the host "I already
@@ -699,7 +801,10 @@ A gap **stalls the stream on purpose**: every subsequent command, however
 well-formed, is discarded and nacked until the missing id arrives, giving
 strict in-order delivery. Because every new command re-triggers the same
 `nack <expectedNext_> ...`, a lost `nack` self-heals — the host will see
-the next one along with the next command it sends.
+the next one along with the next command it sends. **A decode failure on
+an in-order id (§8.9) holds the stream exactly the same way** — the failed
+id itself becomes the thing every subsequent nack keeps asking for, until
+a well-formed line finally supplies it.
 
 `nack` carries **next-expected**, not "last good id": it tells the host
 exactly what to resend with no `+1` inference on either side, and it avoids
@@ -707,49 +812,57 @@ overloading `0` as both "nothing accepted yet" and "resend from here."
 
 ### 8.2 Layering: `ack`/`nack` is transport, `err` is application
 
-`ack`/`nack` answers one question only: *did the bytes arrive, in order?*
-`err` answers a different one: *the command arrived fine — was its content
-accepted?* A message can be perfectly in-order and still be garbage
-(`WHEELS 99999 0 100 #7` is received correctly and rejected on range). So an
-in-order command the adapter (or the handler's own field decode) rejects
-emits **both**: the `ack` (it arrived, the sequence advances) **and**
-`err <code> #<id>` (§6.1) — two lines, and errors are rare in practice. The
+**Updated 2026-08-22 — see §8.9 for the change this section's own
+"unknown verb" paragraph below is superseded by.** `ack`/`nack` answers
+one question only: *did the bytes arrive, in order, INTACT?* `err`
+answers a different one: *was the content accepted, once it was known to
+have arrived?* A message can be perfectly in-order, decode fine, and
+still be garbage on the merits (`WHEELS_V 99999 0 100 #7` decodes cleanly
+and is rejected on range by the adapter). So an in-order command the
+ADAPTER rejects on merit emits **both**: the `ack` (it arrived, decoded,
+the sequence advances) **and** `err <code> #<id>` (§6.1) — two lines. The
 error code is never folded into `ack` itself; that would conflate a
 transport signal with an application one.
 
-This generalizes past the adapter: an **unknown verb**, or a known verb
-with the wrong field count or an unparseable field, is *also* "arrived
-fine, content rejected" as long as its id is in order — it gets an `ack`
-plus an `err` (`ERR_UNKNOWN` or `ERR_BADARG` as appropriate), exactly like
-an adapter-level rejection. See §8.4 for the full malformed-line story,
-including the one case (missing or unparseable id) that genuinely cannot
-be classified this way at all.
+**This does NOT generalize to a handler-level decode failure any more
+(2026-08-22, reversing the pre-2026-08-22 text this paragraph used to
+carry).** An unknown verb, a known verb with the wrong field count, or an
+unparseable field is a DIFFERENT case from a merits rejection — the line
+did not "arrive fine", so it NACKs (§8.9), not acks. See §8.9 for the full
+story and the stakeholder's own rationale for keeping the two distinct.
 
 **Every reply so far bare `ok`/`err` gains a mandatory id, and `ok` itself
-is gone.** `SET`/`WHEELS`/`STOP`/`RUN`(void) success now produces *nothing*
-beyond the `ack` — the ack **is** the acceptance signal. `RUN`'s `ret` is
-the one exception: a returned value is genuinely new information the `ack`
-alone cannot carry, so it is still emitted, **in addition to** the ack, not
-instead of it (§6.3).
+is gone.** `SET`/`WHEELS_V`/`STOP`/`RUN`(void) success now produces
+*nothing* beyond the `ack` — the ack **is** the acceptance signal. `RUN`'s
+`ret` is the one exception: a returned value is genuinely new information
+the `ack` alone cannot carry, so it is still emitted, **in addition to**
+the ack, not instead of it (§6.3).
 
-### 8.3 `ESTOP` and `HELLO` — the exemption set (this library's own call)
+### 8.3 `ESTOP`, `HELLO`, and `PING` — the exemption set
 
-**Sequenced:** `PING ID VER STATUS HELP GET SET TLM WHEELS STOP RUN`.
-**Unsequenced:** `ESTOP` and `HELLO`.
+**Sequenced:** `ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X
+MOVE_V GO_TO_R GO_TO_W STOP RUN`.
+**Unsequenced:** `ESTOP`, `HELLO`, and (as of 2026-08-22) `PING`.
 
 The stakeholder's own framing was "every message must have an ID number" —
-no exceptions stated. Exempting these two is **this file's own call, not
-the stakeholder's**, made because the scheme is structurally unbootstrappable
-and unsafe without them:
+`PING`'s own exemption is a LATER, explicit stakeholder direction
+(2026-08-22, verbatim: *"ESTOP, ping, and HELLO shouldn't require IDs"*),
+not this file's own call the way `ESTOP`/`HELLO`'s exemption originally
+was. All three are exempted because the scheme is structurally
+unbootstrappable and unsafe without them:
 
-- **`HELLO` resets the sequence.** `expectedNext_ = 1`, `lastDone_ = 0`,
+- **`HELLO` resets the sequence.** `expectedNext_ = 1`,
   `gapOutstanding_ = false`, then the banner is emitted — this is the
-  session-start resync a host performs on (re)connect. A verb that resets
-  the sequence cannot itself be *inside* the sequence without a
-  chicken-and-egg problem (what id would the very first `HELLO` carry, and
-  against what would it be checked?). `HELLO`'s own arity is unchanged from
-  before this section (zero fields) — it does not accept a trailing id at
-  all, and a `HELLO` with one is wrong arity, same as any other extra field.
+  session-start resync a host performs on (re)connect. **It does NOT
+  reset the Adapter's own `lastDone()`/`lastDoneReason()`** any more
+  (2026-08-22, §8.8) — that state moved off this class entirely, and a
+  handler-level reset has no business reaching into the Adapter to clear
+  something it does not own. A verb that resets the sequence cannot
+  itself be *inside* the sequence without a chicken-and-egg problem (what
+  id would the very first `HELLO` carry, and against what would it be
+  checked?). `HELLO`'s own arity is unchanged (zero fields) — it does not
+  accept a trailing id at all, and a `HELLO` with one is wrong arity, same
+  as any other extra field.
 - **`ESTOP` is outside the sequence entirely: no id, never sequenced, never
   nacked.** This is safety-critical: if `#4` goes missing and the stream is
   stalled waiting for it, an `ESTOP` sent as `#5` (or with no id at all)
@@ -764,24 +877,36 @@ and unsafe without them:
   token under the tokenizer's own rules, not "ESTOP plus junk"; this
   forgiveness is about content AFTER the verb, not about fuzzy verb
   matching.)
-- **`ESTOP` now REPLIES.** Stakeholder, verbatim: *"Agree about ESTOP, but
+- **`ESTOP` REPLIES.** Stakeholder, verbatim: *"Agree about ESTOP, but
   if it is not acked, it should be acknowledged, with an `estop`
-  response."* This **supersedes** the pre-2026-08-21 rule (recorded as
-  defect D5 at the time) that `ESTOP` never emits a reply under any
-  circumstance. The old rationale was "a panic stop must never queue
-  behind an outbound reply" — satisfied here by **executing the stop
-  before writing the reply**, so the silence was over-strict, not load
-  -bearing. `ESTOP`'s reply is the bare word `estop`, no fields, ever.
+  response."* Executing the stop **before writing the reply** means a
+  panic stop never queues behind an outbound reply. `ESTOP`'s reply is
+  the bare word `estop`, no fields, ever.
+- **`PING` is liveness and must answer even while the stream is stalled on
+  a gap** (2026-08-22, the stakeholder's own words) — the same structural
+  reason `ESTOP` is exempted: a command gated behind a missing id cannot
+  serve as a liveness probe for the very link that id is missing on.
+  `PING`'s own reply (`pong <now>`) is unchanged — it never carried an
+  `ack`/id of its own even before this change, so the exemption is purely
+  about the SEQUENCE GATING, not the reply shape.
+- **Whether `PING` should be maximally forgiving (like `ESTOP`) or strict
+  zero-arity (like `HELLO`) is THIS FILE'S OWN CALL**, not spelled out by
+  the stakeholder's direction — resolved forgiving (§9.8), so an old-style
+  host still appending `#<id>` to `PING` out of habit from before this
+  change keeps working unchanged.
 
 This exemption set is deliberately narrow — flagged here prominently so the
 stakeholder can find and overrule it easily: everything else in this
 library's scope is sequenced, with no other carve-outs.
 
-### 8.4 Malformed-line recovery under mandatory sequencing
+### 8.4 Malformed-line recovery under mandatory sequencing (historical — superseded by §8.9)
 
-The pre-2026-08-21 malformed-line recovery rule (§2.3, historical) is gone.
-In its place, for any line whose verb is neither `ESTOP` nor `HELLO`
-(§8.3) and does not start lowercase (§2.1, unchanged):
+**This whole section describes the 2026-08-21 design, replaced by §8.9's
+2026-08-22 rewrite.** Preserved for the changelog record, the way §8.0/
+§9.2 preserve the eras before them. The pre-2026-08-21 malformed-line
+recovery rule (§2.3, historical) is gone. In its place, for any line whose
+verb is neither `ESTOP` nor `HELLO` (§8.3) and does not start lowercase
+(§2.1, unchanged):
 
 1. **No trailing field at all** (the line was just the verb) → malformed,
    no reply. There is nothing to sequence-check.
@@ -795,55 +920,53 @@ In its place, for any line whose verb is neither `ESTOP` nor `HELLO`
      and **nothing else is examined or executed** — not even whether the
      verb is recognized. A stalled stream costs nothing but the id
      comparison itself.
-   - in order (`== expectedNext_`) → the sequence advances and the `ack`
-     is sent unconditionally; **then**, and only then, the verb is looked
-     up and its fields validated. An unrecognized verb, wrong field count,
-     or an unparseable field at this point behaves exactly like an
-     adapter-level rejection (§8.2): `err <code> #<id>` follows the `ack`,
-     using `ERR_UNKNOWN` (1) for an unrecognized verb or `ERR_BADARG` (2)
-     for anything else. The malformed counter (`malformedCount()`) still
-     increments for these — it tracks content/decode failures
-     specifically, never sequencing outcomes (an out-of-order line is not
-     "malformed", it is merely out of order, and does not increment it).
+   - in order (`== expectedNext_`) → **the sequence advances and the
+     `ack` is sent UNCONDITIONALLY; then, and only then, the verb is
+     looked up and its fields validated.** *(This is exactly the step
+     §8.9 changes: as of 2026-08-22, decoding happens BEFORE the ack/nack
+     decision, not after.)* An unrecognized verb, wrong field count, or
+     an unparseable field at this point behaved exactly like an
+     adapter-level rejection (§8.2, its own pre-2026-08-22 text): `err
+     <code> #<id>` followed the `ack`, using `ERR_UNKNOWN` (1) for an
+     unrecognized verb or `ERR_BADARG` (2) for anything else.
 
-This is a strictly cleaner story than the old id-recovery rule it replaces:
-there is no verb-specific carve-out to remember (the old rule needed one,
-for `ESTOP`) because `ESTOP` is excluded at the top by verb identity, not
-folded into the generic path with an exception bolted on.
+This was a strictly cleaner story than the id-recovery rule it replaced (no
+verb-specific carve-out to remember, since `ESTOP` was excluded at the top
+by verb identity) — but it could not tell a garbled square-tour leg apart
+from a merits-rejected one on the wire, which is exactly the gap §8.9
+closes.
 
 ### 8.5 Periodic emission — piggybacked on telemetry, still no timer
 
 The scheme's loss-survival argument depends on `ack`/`nack` arriving
 *regularly*, not only in direct response to a command — a host that sends
 its last command and then goes quiet would otherwise never learn whether
-that last id actually landed, or what `lastDone_` ended up being.
+that last id actually landed, or what the current `lastDone`/reason ended
+up being.
 
-**`emitTelemetry()` now also emits the current reliability line** on every
-call: `nack <expectedNext_> <lastDone_>` if `gapOutstanding_` is set,
-`ack <expectedNext_ - 1> <lastDone_>` otherwise. Telemetry is already
-periodic and application-driven (§3), so this rides that existing cadence
-for free — **no timer, no clock, and no new entry point are added to the
-handler** to make this happen, which is exactly the property §8.1
-insisted on keeping. It doubles as the retransmit mechanism for a stalled
-stream: as long as telemetry keeps flowing, a gap keeps producing fresh
-`nack`s at the telemetry rate with no extra machinery.
+**`emitTelemetry()` also emits the current reliability line** on every
+call: `nack <expectedNext_> <lastDone> <reason>` if `gapOutstanding_` is
+set, `ack <expectedNext_ - 1> <lastDone> <reason>` otherwise, where
+`<lastDone>`/`<reason>` are read FRESH off `Adapter::lastDone()`/
+`lastDoneReason()` (§8.8) on every single call — there is no cached copy
+anywhere in `ProtocolHandler`. Telemetry is already periodic and
+application-driven (§3), so this rides that existing cadence for free —
+**no timer, no clock, and no new entry point are added to the handler** to
+make this happen, which is exactly the property §8.1 insisted on keeping.
+It doubles as the retransmit mechanism for a stalled stream: as long as
+telemetry keeps flowing, a gap (numeric OR a decode failure, §8.9) keeps
+producing fresh `nack`s at the telemetry rate with no extra machinery.
 
-#### 8.5.1 `lastDone_` — plumbed, not wired, in this library
+#### 8.5.1 The completion channel's own home — see §8.8
 
-`lastDone_` exists in the handler state because the *general* scheme needs
-a completion channel (replacing the deleted `done` verb, §6.1) for whatever
-future verb produces an asynchronous completion event. **This library has
-no such verb.** `WHEELS` has no stop condition and no queue (§5.1); once
-`onWheels()` returns, the command is fully handled from the protocol
-layer's point of view — there is no later moment at which it "completes"
-that this handler could observe without the timer/clock §8.1 explicitly
-rules out. So in this library, **`lastDone_` is initialized to 0, reset to
-0 by `HELLO`, included correctly in every `ack`/`nack`, and never written
-anywhere else.** It is wire-correct (every ack/nack carries a real,
-well-defined value) but functionally inert here. A future library that
-adds `MOVE` (with a real stop condition or timeout) is where this field
-would first be written — see §9.8 for why this is flagged as a resolved
-ambiguity rather than a silent gap.
+This subsection (as it stood through 2026-08-21) described `lastDone_` as
+handler-owned state, "plumbed, not wired" in this library because
+`WHEELS` had no completion event of its own. §8.8 below is the full
+2026-08-22 replacement: the field moved OFF the handler entirely, onto
+`Adapter`, and the "plumbed but inert" story now applies specifically to
+`DiffDriveAdapter`, not to every adapter this library can host — a
+step()-driven test adapter (`tests/protocol/fake_motion_adapter.h`) makes
+it genuinely live for the first time.
 
 ### 8.6 The `err` field-order fix
 
@@ -862,10 +985,98 @@ along with it.
 ### 8.7 Resync and wraparound
 
 `status` gains a **`next=<expectedNext_>`** key (§6) so a reconnecting host
-can resync its own tracking without forcing a full `HELLO` reset — useful
-because a `HELLO` reset also clears `lastDone_`, which a host might not
-want to lose. `status` does **not** also report `lastDone_` — flagged as a
-gap in §9.8, not a considered omission.
+can resync its own tracking without forcing a full `HELLO` reset. As of
+2026-08-22 (§8.8), a `HELLO` reset no longer clears any completion state at
+all — `lastDone()`/`lastDoneReason()` live on the Adapter and are
+untouched by the handler's own reset — so the original motivation for this
+key ("useful because a HELLO reset also clears lastDone_") is narrower
+than it was, but `next=` remains useful on its own merits (resync without
+re-establishing the session). `status` still does **not** also report
+`lastDone`/its reason — flagged as a gap in §9.8, not a considered
+omission.
+
+### 8.8 `lastDone`/`lastDoneReason` move to the Adapter (2026-08-22)
+
+**Stakeholder direction, verbatim:** *"[lastDone] is currently a handler
+counter that nothing ever writes, so it is permanently 0 — wire-correct
+and inert. Replace it with a virtual on `Adapter` that the handler
+POLLS whenever it formats an `ack`/`nack`."*
+
+```cpp
+// Most recently completed motion, for the reliability piggyback. Monotonic:
+// a later value implies every earlier one completed (motion runs one at a
+// time, in order), which is what makes a dropped completion recoverable.
+virtual uint32_t lastDone() const = 0;
+virtual DoneReason lastDoneReason() const = 0;   // see §8.8.1
+```
+
+This removes handler state entirely (`ProtocolHandler` now carries only
+`expectedNext_`/`gapOutstanding_`, §8.1), needs no callback and no clock,
+and makes the field genuinely live once an Adapter that actually completes
+motions drives it — which nothing in this library did before this change.
+`replyAck()`/`replyNack()` call `adapter_.lastDone()`/`lastDoneReason()`
+fresh every time they run; there is no cache.
+
+**A real, undecided design fork this file resolves on its own:** the
+brief settled the VALUE (`lastDone`) but not whether `HELLO`'s own reset
+should reach into the Adapter to clear it too — the pre-2026-08-22 text
+had HELLO reset `lastDone_ = 0` as part of the same call, back when it was
+handler state. **Resolved: no.** `HELLO`'s reset now only touches
+`expectedNext_`/`gapOutstanding_` — state the HANDLER owns. Reaching
+across the seam to clear something the ADAPTER now owns would reintroduce
+exactly the kind of handler-into-adapter coupling this whole move was
+meant to avoid, and there is a real argument that a completed motion
+SHOULD survive a reconnect (the host may be re-establishing a session
+after a dropped link, not asking the robot to forget what it just did). An
+adapter that wants HELLO to also clear its own completion state is free to
+do so from wherever it observes HELLO itself.
+
+#### 8.8.1 `DoneReason` — the conflict the reliability-layer brief didn't settle, and this file's resolution
+
+The reliability change deleted standalone `done` and collapsed it into a
+piggybacked *number* (`lastDone`). But [motion-api.md](motion-api.md) §5.3
+defines FOUR completion **reasons**: `stop`, `timeout`, `estop`,
+`aborted`. A bare number loses the reason, and `estop` vs `stop` is a
+distinction that matters (a program that ended normally vs. one that got
+panic-stopped mid-leg are very different facts for a host to learn).
+
+**Resolved by piggybacking the reason too:** `ack <n> <lastDone> <reason>`
+and `nack <n> <lastDone> <reason>`, where `reason` describes `lastDone`.
+This keeps the loss-tolerance property (a later ack re-carries it) *and*
+the reason vocabulary, at one extra token per ack/nack. `none` is the
+reason when `lastDone` is 0 (nothing has completed yet).
+
+```cpp
+enum class DoneReason : uint8_t {
+  kNone, kStop, kTimeout, kEstop, kAborted,
+};
+```
+
+**This is this library's own resolution of a conflict the reliability-
+layer discussion did not settle — flagged prominently so the stakeholder
+can find and overrule it.** The alternative shapes considered and
+rejected:
+
+- *A separate reason-only reply, not piggybacked* (e.g. a standalone
+  `done #<id> <reason>` line reintroduced) — rejected because it brings
+  back exactly the "the handler must remember outstanding ids and emit a
+  reply later, on its own" problem §8.0/§9.9 already killed the old
+  `done` design over: it would need its own delivery guarantee, which is
+  the whole thing this scheme already provides for `lastDone` itself.
+  Piggybacking the reason onto the SAME line that already survives loss
+  costs one token and buys nothing to re-engineer.
+- *Fold the reason into a wider `lastDone` encoding* (e.g. high bits of a
+  32-bit value) — rejected as needlessly clever for a text protocol whose
+  whole design philosophy (§2) is "every wire value is a base-10 ASCII
+  integer" with no bit-packing anywhere else in the grammar.
+
+**A dependent design point, also resolved here:** does `WHEELS_X`/
+`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W` on `DiffDriveAdapter` answering
+`kUnknown` (§5) rather than `kUnimplemented` cost anything for
+`lastDone`/`DoneReason`? No — a merits rejection never touches
+`lastDone`/`lastDoneReason` at all; those two fields only move when an
+Adapter's own motion genuinely COMPLETES, which never happens for a verb
+that was refused outright.
 
 Ids run **1 .. 999999** by host-side convention. **Modular wraparound is
 explicitly out of scope and not implemented.** A session must reconnect
@@ -878,9 +1089,65 @@ integer `<`/`==`/`>`, so nothing stops a host from counting past it, but
 nothing in the design analysis above holds once it does; this is a
 host-side discipline, not a wire-enforced limit.
 
----
+### 8.9 Decode failure is a NAK (2026-08-22)
 
-## 9. As built — resolved ambiguities and known gaps
+**Stakeholder, verbatim:** *"I think a decode failure is a NAK. The goal
+here is that the movements don't work if you put them out of order... If
+you're driving a square and you've got eight movements you send, and you
+lose a turn, the whole square is wrong. The best thing to do there is to
+NAK and resend from that point on, so we need to make decode failures be
+NAK and err."*
+
+This **reverses** §8.2/§8.4's own pre-2026-08-22 behavior, where a decode
+failure acked and advanced the sequence exactly like a merits rejection.
+Two distinct cases, kept distinct on the wire:
+
+| case | meaning | sequence | reply |
+|---|---|---|---|
+| **decode failure** — unknown verb, bad arity, unparseable field | the line did not arrive intact | **does NOT advance** | `nack <expectedNext_> <lastDone> <reason>` (naming the SAME id, unchanged) **and** `err <code> #<id>` |
+| **adapter rejection** — decoded fine, refused on merit (e.g. out-of-range speed) | arrived intact, refused | **advances** | `ack <id> <lastDone> <reason>` **and** `err <code> #<id>` |
+
+The distinction is the whole point: a corrupted line should be resent
+(resending the merits-rejected line would just be refused again,
+identically, so THAT case still advances and moves on).
+
+**Where the decode now happens.** `dispatch()` still resolves the
+mandatory id first (§8.1's three-way compare, unaffected) — but for the
+`id == expectedNext_` case, it now looks up the verb AND decodes its own
+fields (arity + per-field parseability) **before sending any reply at
+all**. Only once decoding succeeds does the sequence advance and the
+`ack` go out; a decode failure at this point (verb not found, wrong
+field count, an unparseable numeric field, an unrecognized `TLM` mode,
+`STOP`'s trailing token being anything other than the literal `now`, a
+bare `RUN` with no function name, or more raw `RUN` tokens than the
+handler's fixed storage can hold) instead calls a dedicated path that
+NACKs `expectedNext_` (still equal to the failed id, since it was never
+accepted) and sets `gapOutstanding_` so a stalled stream keeps re-nacking
+at the telemetry rate (§8.5) exactly like a numeric gap would, until a
+well-formed line finally supplies the same id. `malformedCount()` still
+increments for a decode failure, exactly as it did before this change.
+
+**What does NOT change:** a numeric gap (`id > expectedNext_`) is still
+classified and replied to WITHOUT ever looking up the verb at all — that
+row of §8.1's table is untouched. A stale retransmit (`id < expectedNext_`)
+is also untouched. Only the `id == expectedNext_` row's own internal
+order changed (decode, then reply — not reply, then decode).
+
+**The hazard this creates, stated plainly:** because a decode failure
+never advances the sequence, **a host that genuinely CONSTRUCTS a
+malformed line (a real bug on the host side, not packet corruption) will
+be NACKed forever on that same id, and the stream wedges.** This is a
+deliberate tradeoff — fail loud and stall rather than silently continue a
+broken sequence — but it means **the host needs its own give-up path**:
+a resend limit, a timeout, or an operator-visible stall detector that
+eventually reconnects (`HELLO`) or aborts the sequence rather than
+retrying the same bad line forever. This library does not, and structurally
+cannot, supply that give-up path itself — it has no clock (§8.1) and no
+notion of "how many times has this been retried," and inventing one would
+reintroduce exactly the timer/pending-state machinery §8.0/§8.5 keep out
+on purpose. Say this to every porter and every host implementation: a
+decode failure is not a transient condition the wire protocol resolves on
+its own; it needs an application-level backstop.
 
 Everything above is design. This section is what the implementation actually
 found, and it is the part to read before extending any of it.
@@ -906,9 +1173,13 @@ general one. This is a resolution the wire grammar does not spell out in one
 place — it is this file's own call, recorded here and in
 `protocol_handler.h`'s own file-header ambiguity note.
 
-**`WHEELS`'s 5000 ms ceiling** is prose at the verb-definition level with no
-stated owner in the grammar. The handler holds no bounds table, so **the
-adapter enforces it** and returns `kRange` above it.
+**`WHEELS_V`'s 5000 ms ceiling** (unchanged by the 2026-08-22 rename) is
+prose at the verb-definition level with no stated owner in the grammar.
+The handler holds no bounds table, so **the adapter enforces it** and
+returns `kRange` above it. The same "handler holds no bounds table"
+posture applies to every OTHER motion verb's own documented bound
+(`WHEELS_X`/`MOVE_X`'s `timeout`, etc.) — none of them are enforced by
+`ProtocolHandler` either.
 
 **The id's own numeric grammar (`'#' [0-9]+`) is stricter than an ordinary
 wire integer field.** §2's general "every wire value is … optionally signed"
@@ -1354,3 +1625,72 @@ property §8.1 protects in the new design (`expectedNext_`/`lastDone_`/
 answers a different question (did the bytes arrive?) than `done` was going
 to (did the motion finish?), and does so without reintroducing the timer
 this section was written to keep out.
+
+### 9.10 The six stakeholder-directed changes (2026-08-22)
+
+Six changes in one pass: decode failure is a NAK (§8.9), `ERR_DUPLICATE_ID`
+deleted (§2.2/§6.1), `PING` unsequenced (§8.3), `lastDone`/its reason move
+to the Adapter (§8.8), the ack/nack reason token (§8.8.1), and the six
+motion-api.md §9.1 verbs implemented at the wire/handler layer (§6,
+`WHEELS` renamed `WHEELS_V`). Ambiguities this pass resolved on its own,
+in the same spirit as §9.8's own list for the pass before it:
+
+1. **`DiffDriveAdapter`'s five unimplemented motion verbs answer
+   `kUnknown`, not `kUnimplemented`.** The ticket driving this pass said
+   so explicitly, and it matches an existing precedent this file already
+   set: `RUN` on an adapter with an empty registration table answers
+   `kUnknown` for every name, "the same wire outcome any name a real
+   registration table would not recognize" (§6.3) — not `kUnimplemented`,
+   even though a real registration table conceivably COULD recognize the
+   name someday. The same reasoning applies here: `DiffDriveAdapter` has
+   no planner at all, so `WHEELS_X`/`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W`
+   are, from its own point of view, simply not verbs it knows anything
+   about — `kUnimplemented` would suggest a build flag or a half-wired
+   feature, when the honest description is "this adapter has no planner,
+   period." A future adapter that DOES have a planner but deliberately
+   ships with one of the six verbs turned off is where `kUnimplemented`
+   would be the correct choice instead.
+2. **`PING`'s own exemption is maximally forgiving, not strict
+   zero-arity.** The stakeholder's direction ("ESTOP, ping, and HELLO
+   shouldn't require IDs") settled that PING is unsequenced but not
+   whether it should tolerate trailing content the way `ESTOP` does or
+   reject it the way `HELLO` does. Resolved forgiving, matching `ESTOP` —
+   see §8.3's own bullet for the reasoning (an old-style host still
+   appending `#<id>` to `PING` out of habit keeps working; liveness must
+   not itself be refusable over a syntax nit, echoing exactly why `ESTOP`
+   is forgiving).
+3. **`HELLO`'s reset no longer touches the Adapter's own completion
+   state.** The pre-2026-08-22 text had `HELLO` reset `lastDone_ = 0` as
+   part of the same call, back when it was handler state (§8.3's old
+   text). Now that it lives on the Adapter (§8.8), `HELLO`'s reset only
+   touches `expectedNext_`/`gapOutstanding_` — see §8.8's own reasoning
+   for why reaching across the seam would be the wrong call.
+4. **`ack`/`nack` is sent BEFORE the verb's own execute step runs, even
+   for a verb (like `STOP`) whose OWN execution can synchronously
+   complete a motion.** This means `STOP`'s own ack reflects
+   `lastDone`/`lastDoneReason` as they stood immediately BEFORE that
+   STOP executed — the completion IT just caused becomes visible
+   starting with the NEXT reply (a later command's ack, or the next
+   telemetry-piggybacked line), not on its own ack. This preserves
+   dispatch()'s uniform "ack always precedes verb execution, for every
+   verb" structure (§8.2/§9.8 item 4 of the pass before this one) rather
+   than special-casing STOP to execute-then-ack. Nothing is ever LOST —
+   the value is not lost, only delayed by one reply — but a host reading
+   `STOP`'s own ack literally should not expect to see the completion it
+   just caused reflected there yet.
+5. **A decode failure's `nack` and `err` share the SAME id, by
+   construction, not by a separate check.** Because a decode failure is
+   only reachable via the `id == expectedNext_` branch (§8.9), the id
+   that failed to decode IS `expectedNext_` at the moment the nack is
+   formatted — there is no separate bookkeeping needed to keep the two
+   numbers in sync, and no way for them to drift apart.
+6. **The decode/execute split is per-verb, not global.** Rather than a
+   single generic "parse this line, then maybe execute" pass,
+   `ProtocolHandler` pairs each verb with its own `decode` function (pure
+   arity/field-parseability check, no adapter call, no sink write) and
+   `execute` function (runs only once decoding has already succeeded, and
+   only after `dispatch()` has already sent the `ack`). The two re-derive
+   the same fields independently rather than threading decoded values
+   between them — a small, deliberate duplication (this is not a hot
+   path) that keeps "what counts as decodable" defined in exactly one
+   place per verb without a shared decoded-argument struct per verb.

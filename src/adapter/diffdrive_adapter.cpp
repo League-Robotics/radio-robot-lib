@@ -168,8 +168,8 @@ void DiffDriveAdapter::status(StatusFields& out) const {
   out.tlm = tlmModeWireName(mode_);
 }
 
-Result DiffDriveAdapter::onWheels(float left, float right, uint32_t duration,
-                                  uint32_t /*id*/) {
+Result DiffDriveAdapter::onWheelsV(float left, float right, uint32_t duration,
+                                   uint32_t /*id*/) {
   // The wire's own ceiling (spec §5.2), enforced here per
   // diffdrive_adapter.h's file header -- the handler holds no bounds
   // table to do this itself.
@@ -192,14 +192,49 @@ Result DiffDriveAdapter::onWheels(float left, float right, uint32_t duration,
   return statusToResult(status);
 }
 
-Result DiffDriveAdapter::onStop(uint32_t /*id*/) {
+Result DiffDriveAdapter::onStop(bool /*immediate*/, uint32_t /*id*/) {
   // STOP -> neutral(): a commanded stop through the full stop path
   // (docs/design/diffdrive.md §3.2). neutral() has no refusal path of
   // its own (it unconditionally replaces the mailbox with a neutral
   // command, even pre-begin/pre-configured/estopped), so this always
   // acks kOk -- matching the kernel's own unconditional acceptance.
+  // `immediate` (STOP's optional `now` token) has no effect here --
+  // see diffdrive_adapter.h's own doc comment on this override: this
+  // kernel's neutral() has always been immediate regardless.
   drive_.neutral();
   return Result::kOk;
+}
+
+Result DiffDriveAdapter::onWheelsX(float /*left*/, float /*right*/,
+                                   float /*cruise*/, uint32_t /*timeout*/,
+                                   uint32_t /*id*/) {
+  // No planner -- see diffdrive_adapter.h's own doc comment on this
+  // override for why kUnknown (not kUnimplemented) is the deliberate
+  // choice here.
+  return Result::kUnknown;
+}
+
+Result DiffDriveAdapter::onMoveX(float /*distance*/, float /*rotation*/,
+                                 float /*cruise*/, uint32_t /*timeout*/,
+                                 uint32_t /*id*/) {
+  return Result::kUnknown;
+}
+
+Result DiffDriveAdapter::onMoveV(float /*v_x*/, float /*omega*/,
+                                 uint32_t /*duration*/, uint32_t /*id*/) {
+  return Result::kUnknown;
+}
+
+Result DiffDriveAdapter::onGoToR(float /*x*/, float /*y*/, float /*speed*/,
+                                 float /*arrive*/, uint32_t /*timeout*/,
+                                 uint32_t /*id*/) {
+  return Result::kUnknown;
+}
+
+Result DiffDriveAdapter::onGoToW(float /*x*/, float /*y*/, float /*speed*/,
+                                 float /*arrive*/, uint32_t /*timeout*/,
+                                 uint32_t /*id*/) {
+  return Result::kUnknown;
 }
 
 void DiffDriveAdapter::onEstop() {

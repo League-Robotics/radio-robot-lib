@@ -1,7 +1,7 @@
 // adapter.h — Protocol::Adapter: the one class a robot implements to sit
 // behind ProtocolHandler (protocol_handler.h), plus the small value types
 // the two exchange. Mirrors the object model in
-// docs/design/protocol.md §1-§3 — that document is the design authority;
+// docs/design/protocol.md §1-§9 — that document is the design authority;
 // this header is its literal implementation, filling in the few shapes
 // (Snapshot/Column, Identity, StatusFields) the design doc names but does
 // not spell out field-by-field.
@@ -11,6 +11,24 @@
 // bit of wire formatting, exactly once per verb. Returning a Result
 // rather than writing a reply means the adapter cannot emit a malformed
 // reply, cannot forget to reply, and cannot invent a reply shape.
+//
+// ---- 2026-08-22 changes (docs/design/protocol.md §8/§9, the "six
+// stakeholder-directed changes") ----
+//
+//   1. `Result::kDuplicateId` is DELETED. It was already unreachable
+//      (the handler's own sequencing guarantees the adapter never sees a
+//      repeated id) — this removes the dead enumerator entirely rather
+//      than keeping it declared-but-unused.
+//   2. `lastDone()`/`lastDoneReason()` move HERE, from a handler field
+//      that nothing ever wrote. The handler now POLLS these two methods
+//      every time it formats an `ack`/`nack` line, instead of owning the
+//      value itself — see the two declarations below for the contract.
+//   3. `onWheels()` is renamed `onWheelsV()` (WHEELS -> WHEELS_V, the
+//      wire rename docs/design/motion-api.md §9.2 mandates), and five
+//      new motion methods join it: `onWheelsX`, `onMoveX`, `onMoveV`,
+//      `onGoToR`, `onGoToW` — one per wire verb in motion-api.md §9.1's
+//      six-verb table. `onStop()` gains an `immediate` argument for
+//      `STOP now` (motion-api.md §3.7/§9.1).
 #pragma once
 
 #include <cstddef>
@@ -18,23 +36,20 @@
 
 namespace Protocol {
 
-// Maps 1:1 onto the wire outcome (docs/design/protocol.md §3; wire codes
-// per spec §8.3). The design doc's own Result sketch names six of these
-// with two left uncommented/elided ("kFull, // -> err:<id>:..."); this is
-// the completed set covering every §8.3 code this library's verbs can
-// produce (5 ERR_DECODE, 7 ERR_OVERSIZE and 9 ERR_NOT_LIVE retire with
-// the binary plane and the boot-only/live split respectively — spec
-// §8.3's own note — so they have no enumerator here).
+// Maps 1:1 onto the wire outcome (docs/design/protocol.md §4; wire codes
+// per spec §6.1). `kDuplicateId` is GONE (2026-08-22, stakeholder
+// change 2): the handler's own strict sequencing already made it
+// unreachable, so the dead enumerator is removed rather than kept for
+// completeness.
 enum class Result : uint8_t {
-  kOk,             // -> ok:<id>
-  kUnknown,        // -> err:<id>:1   ERR_UNKNOWN     no such verb/field name
-  kBadArg,         // -> err:<id>:2   ERR_BADARG      malformed/non-finite, wrong arity
-  kRange,          // -> err:<id>:3   ERR_RANGE       declared bound violated
-  kFull,           // -> err:<id>:4   ERR_FULL        queue full (4 pending)
-  kUnimplemented,  // -> err:<id>:6   ERR_UNIMPLEMENTED recognized, not wired
-  kNotReady,       // -> err:<id>:8   ERR_NOT_CONFIGURED refused pre-`ready`
-  kBusy,           // -> err:<id>:10  ERR_BUSY        subsystem in motion
-  kDuplicateId,    // -> err:<id>:11  ERR_DUPLICATE_ID  spec §8.2
+  kOk,             // -> the ack alone; no further reply
+  kUnknown,        // -> err 1 #<id>   ERR_UNKNOWN
+  kBadArg,         // -> err 2 #<id>   ERR_BADARG
+  kRange,          // -> err 3 #<id>   ERR_RANGE
+  kFull,           // -> err 4 #<id>   ERR_FULL
+  kUnimplemented,  // -> err 6 #<id>   ERR_UNIMPLEMENTED
+  kNotReady,       // -> err 8 #<id>   ERR_NOT_CONFIGURED
+  kBusy,           // -> err 10 #<id>  ERR_BUSY
 };
 
 // TLM subscription modes (spec §6.1). The handler only decodes the wire
@@ -48,6 +63,23 @@ enum class TlmMode : uint8_t {
   kNow,
   kAuto,
   kBuffer,
+};
+
+// The reliability layer's completion-reason vocabulary (docs/design/
+// motion-api.md §5.3, docs/design/protocol.md §8.8): the four reasons a
+// motion can finish, PLUS `kNone` for "nothing has completed yet" —
+// the wire spelling `none` is what `lastDone() == 0` pairs with. A
+// bare completed-id number loses the reason a caller needs to tell an
+// ordinary `stop()` apart from a fault-path `estop()`, so the reason
+// rides alongside the id on every `ack`/`nack` (protocol.md §8.8 — this
+// library's own resolution of a conflict the reliability-layer brief did
+// not settle).
+enum class DoneReason : uint8_t {
+  kNone,     // -> "none" -- lastDone() == 0, nothing has completed yet
+  kStop,     // -> "stop" -- the stop condition was met, or stop() ended it
+  kTimeout,  // -> "timeout" -- the backstop fired
+  kEstop,    // -> "estop" -- a panic stop ended it (the fault path)
+  kAborted,  // -> "aborted" -- the caller abandoned it
 };
 
 // Identity — everything HELLO/ID/VER read off (spec §4). Every pointer
@@ -115,15 +147,71 @@ class Adapter {
   virtual uint32_t now() const = 0;  // [ms] for pong
   virtual void status(StatusFields& out) const = 0;
 
-  // ---- motion (the minimal set: enough to exercise a wheel kernel) ----
-  virtual Result onWheels(float left, float right,  // [mm/s] [mm/s]
-                          uint32_t duration,         // [ms]
-                          uint32_t id) = 0;
-  virtual Result onStop(uint32_t id) = 0;
-  virtual void onEstop() = 0;  // never acked, never queued — spec §8.2
+  // ---- motion: WHEELS_V/WHEELS_X/MOVE_X/MOVE_V/GO_TO_R/GO_TO_W, plus
+  // STOP/ESTOP (docs/design/motion-api.md §9.1's wire mapping). Angles
+  // (rotation, omega) arrive already decoded from the wire's milliradian
+  // integers into float milliradians — the API-level degrees<->wire
+  // milliradians conversion is a LANGUAGE BINDING's job (motion-api.md
+  // §9.1: "degrees at the API, milliradian integers on the wire ... the
+  // conversion lives in the binding, in one place"), not this library's.
+  //
+  // `onWheelsV` is the 2026-08-22 rename of what was `onWheels()` — same
+  // fields, same meaning (motion-api.md §9.2 confirms WHEELS *is*
+  // wheels_v): left/right wheel velocity held for `duration`.
+  virtual Result onWheelsV(float left, float right,  // [mm/s] [mm/s]
+                           uint32_t duration,          // [ms]
+                           uint32_t id) = 0;
+
+  // `onWheelsX`: per-wheel commanded DISTANCE, not velocity — bounded by
+  // encoder travel rather than time (motion-api.md §3.1). `cruise` is
+  // the dominant wheel's own speed ceiling; `timeout` is the required
+  // backstop if the commanded distance is never reached.
+  virtual Result onWheelsX(float left, float right,  // [mm] [mm]
+                           float cruise,               // [mm/s]
+                           uint32_t timeout,            // [ms]
+                           uint32_t id) = 0;
+
+  // `onMoveX`: body displacement + heading change (motion-api.md §3.3).
+  virtual Result onMoveX(float distance,   // [mm]
+                         float rotation,    // [mrad]
+                         float cruise,      // [mm/s]
+                         uint32_t timeout,  // [ms]
+                         uint32_t id) = 0;
+
+  // `onMoveV`: body twist held for `duration` (motion-api.md §3.4).
+  virtual Result onMoveV(float v_x,        // [mm/s]
+                         float omega,       // [mrad/s]
+                         uint32_t duration,  // [ms]
+                         uint32_t id) = 0;
+
+  // `onGoToR`/`onGoToW`: drive to a point in the robot's own frame, or
+  // in world coordinates (motion-api.md §3.5/§3.6). `arrive` is the
+  // arrival tolerance (0 = adapter's configured default); `timeout` is
+  // the required backstop.
+  virtual Result onGoToR(float x, float y,  // [mm] [mm]
+                        float speed,         // [mm/s]
+                        float arrive,        // [mm]
+                        uint32_t timeout,    // [ms]
+                        uint32_t id) = 0;
+  virtual Result onGoToW(float x, float y,  // [mm] [mm]
+                        float speed,         // [mm/s]
+                        float arrive,        // [mm]
+                        uint32_t timeout,    // [ms]
+                        uint32_t id) = 0;
+
+  // `immediate` is `STOP now`'s own flag (motion-api.md §3.7/§9.1: a
+  // deceleration CHOICE, not a different verb) -- false is the ordinary,
+  // jerk-limited "I meant to stop here" case; true is "I need the
+  // distance more than I need the smoothness." An adapter with no ramp
+  // machinery of its own (this library's own DiffDriveAdapter, whose
+  // `neutral()` is already immediate either way — docs/design/
+  // protocol.md §5.1) is free to treat both identically; the flag exists
+  // for adapters that DO have a ramp to choose between.
+  virtual Result onStop(bool immediate, uint32_t id) = 0;
+  virtual void onEstop() = 0;  // never acked, never queued — spec §8.3
 
   // ---- configuration (no storage in the handler — pure delegation,
-  // docs/design/protocol.md §6: which names are valid is entirely the
+  // docs/design/protocol.md §7: which names are valid is entirely the
   // adapter's business) ----
   virtual bool onGet(const char* name, float& out) const = 0;
   virtual Result onSet(const char* name, float value, uint32_t id) = 0;
@@ -133,11 +221,42 @@ class Adapter {
   // ---- telemetry ----
   virtual Result onTlm(TlmMode mode) = 0;
 
-  // ---- RUN: invocation by name (docs/design/protocol.md's RUN
-  // section) ----
+  // ---- the reliability layer's completion channel (2026-08-22,
+  // docs/design/protocol.md §8.8) ----
+  //
+  // MOVED here from a ProtocolHandler field (`lastDone_`) that nothing
+  // ever wrote, because it was handler-owned state with no handler-level
+  // event that could ever set it — the handler has no clock and no
+  // notion of "this motion, which I dispatched some cycles ago, just
+  // finished." An ADAPTER that actually runs a motion to completion (a
+  // planner, a fake test double driving a step() loop) is the only thing
+  // that CAN know when that happens, so it is the thing that should own
+  // the value. The handler now POLLS these two methods every time it
+  // formats an `ack` or `nack` line (docs/design/protocol.md §8.1/§8.5)
+  // — no callback, no clock, no handler-side state to keep in sync.
+  //
+  // Monotonic contract: a LATER value of lastDone() implies every
+  // EARLIER id has also completed — this library's motion runs one
+  // command at a time, in order, so a single scalar plus its reason is
+  // a complete completion record, not just the most recent one. This is
+  // what makes a dropped completion ack recoverable: the NEXT ack/nack
+  // (piggybacked on the next reply, or the next telemetry frame) simply
+  // re-states the same (or a newer) lastDone()/lastDoneReason() pair,
+  // and the host learns everything through that id regardless of which
+  // individual ack carried the news first.
+  //
+  // An adapter with no completion event of its own (this library's own
+  // DiffDriveAdapter, whose WHEELS_V has no stop condition — docs/design/
+  // protocol.md §8.8.1) returns 0 / kNone forever, which is wire-correct
+  // (every ack/nack carries a well-defined value) even though it is
+  // functionally inert on that adapter.
+  virtual uint32_t lastDone() const = 0;
+  virtual DoneReason lastDoneReason() const = 0;
+
+  // ---- invocation by name (docs/design/protocol.md's RUN section) ----
   //
   // The HANDLER holds no function table -- it only parses
-  // "RUN <name> [arg...] [#id]" into a name and the RAW, unconverted
+  // "RUN <name> [arg...] #id" into a name and the RAW, unconverted
   // argument tokens that followed it, and hands them here unchanged.
   // THIS method owns name resolution, per-argument type conversion,
   // invocation, and stringifying any return value. In a dynamic host
@@ -187,7 +306,7 @@ class Adapter {
   //                     output.
   //   hasResult     -- set true ONLY if the target function returned a
   //                     value. A void-returning function leaves this
-  //                     false, and the wire replies bare `ok`/`ok #id`,
+  //                     false, and the wire replies with the ack alone,
   //                     never `ret`.
   // Returns kUnknown for an unregistered name, kBadArg for wrong arity
   // or an argument that fails to convert to its target's declared

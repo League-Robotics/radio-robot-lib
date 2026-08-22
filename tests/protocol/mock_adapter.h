@@ -22,12 +22,25 @@ class MockAdapter : public Protocol::Adapter {
   Protocol::Identity identityToReturn;
   Protocol::StatusFields statusToReturn;
   uint32_t nowToReturn = 0;
-  Protocol::Result wheelsResult = Protocol::Result::kOk;
+  Protocol::Result wheelsResult = Protocol::Result::kOk;   // WHEELS_V
+  Protocol::Result wheelsXResult = Protocol::Result::kOk;
+  Protocol::Result moveXResult = Protocol::Result::kOk;
+  Protocol::Result moveVResult = Protocol::Result::kOk;
+  Protocol::Result goToRResult = Protocol::Result::kOk;
+  Protocol::Result goToWResult = Protocol::Result::kOk;
   Protocol::Result stopResult = Protocol::Result::kOk;
   Protocol::Result setResult = Protocol::Result::kOk;
   Protocol::Result tlmResult = Protocol::Result::kOk;
   Protocol::Result runResult = Protocol::Result::kOk;
   bool runHasResult = false;
+
+  // The reliability layer's completion channel (2026-08-22,
+  // docs/design/protocol.md §8.8) -- now Adapter-owned, polled by the
+  // handler on every ack/nack. A test drives these directly to exercise
+  // the piggyback; the default (0 / kNone) matches this library's own
+  // "nothing has completed yet" wire spelling.
+  uint32_t lastDoneToReturn = 0;
+  Protocol::DoneReason lastDoneReasonToReturn = Protocol::DoneReason::kNone;
   // Text copied verbatim into onRun()'s `result` buffer when
   // runHasResult is true -- a test can point this at a string
   // containing '\n'/'\r' to exercise ProtocolHandler's own sanitize
@@ -57,7 +70,12 @@ class MockAdapter : public Protocol::Adapter {
   mutable int identityCalls = 0;
   mutable int nowCalls = 0;
   mutable int statusCalls = 0;
-  int wheelsCalls = 0;
+  int wheelsCalls = 0;   // WHEELS_V (onWheelsV)
+  int wheelsXCalls = 0;
+  int moveXCalls = 0;
+  int moveVCalls = 0;
+  int goToRCalls = 0;
+  int goToWCalls = 0;
   int stopCalls = 0;
   int estopCalls = 0;
   mutable int getCalls = 0;
@@ -66,11 +84,39 @@ class MockAdapter : public Protocol::Adapter {
   int runCalls = 0;
 
   // ---- last-call arguments ----
-  float lastWheelsLeft = 0.0f;
+  float lastWheelsLeft = 0.0f;    // WHEELS_V
   float lastWheelsRight = 0.0f;
   uint32_t lastWheelsDuration = 0;
   uint32_t lastWheelsId = 0;
+
+  float lastWheelsXLeft = 0.0f;
+  float lastWheelsXRight = 0.0f;
+  float lastWheelsXCruise = 0.0f;
+  uint32_t lastWheelsXTimeout = 0;
+
+  float lastMoveXDistance = 0.0f;
+  float lastMoveXRotation = 0.0f;
+  float lastMoveXCruise = 0.0f;
+  uint32_t lastMoveXTimeout = 0;
+
+  float lastMoveVVx = 0.0f;
+  float lastMoveVOmega = 0.0f;
+  uint32_t lastMoveVDuration = 0;
+
+  float lastGoToRX = 0.0f;
+  float lastGoToRY = 0.0f;
+  float lastGoToRSpeed = 0.0f;
+  float lastGoToRArrive = 0.0f;
+  uint32_t lastGoToRTimeout = 0;
+
+  float lastGoToWX = 0.0f;
+  float lastGoToWY = 0.0f;
+  float lastGoToWSpeed = 0.0f;
+  float lastGoToWArrive = 0.0f;
+  uint32_t lastGoToWTimeout = 0;
+
   uint32_t lastStopId = 0;
+  bool lastStopImmediate = false;
   mutable char lastGetName[64] = {};
   char lastSetName[64] = {};
   float lastSetValue = 0.0f;
@@ -95,7 +141,7 @@ class MockAdapter : public Protocol::Adapter {
     ++statusCalls;
     out = statusToReturn;
   }
-  Protocol::Result onWheels(float left, float right, uint32_t duration,
+  Protocol::Result onWheelsV(float left, float right, uint32_t duration,
                             uint32_t id) override {
     ++wheelsCalls;
     lastWheelsLeft = left;
@@ -104,12 +150,63 @@ class MockAdapter : public Protocol::Adapter {
     lastWheelsId = id;
     return wheelsResult;
   }
-  Protocol::Result onStop(uint32_t id) override {
+  Protocol::Result onWheelsX(float left, float right, float cruise,
+                            uint32_t timeout, uint32_t /*id*/) override {
+    ++wheelsXCalls;
+    lastWheelsXLeft = left;
+    lastWheelsXRight = right;
+    lastWheelsXCruise = cruise;
+    lastWheelsXTimeout = timeout;
+    return wheelsXResult;
+  }
+  Protocol::Result onMoveX(float distance, float rotation, float cruise,
+                           uint32_t timeout, uint32_t /*id*/) override {
+    ++moveXCalls;
+    lastMoveXDistance = distance;
+    lastMoveXRotation = rotation;
+    lastMoveXCruise = cruise;
+    lastMoveXTimeout = timeout;
+    return moveXResult;
+  }
+  Protocol::Result onMoveV(float v_x, float omega, uint32_t duration,
+                           uint32_t /*id*/) override {
+    ++moveVCalls;
+    lastMoveVVx = v_x;
+    lastMoveVOmega = omega;
+    lastMoveVDuration = duration;
+    return moveVResult;
+  }
+  Protocol::Result onGoToR(float x, float y, float speed, float arrive,
+                          uint32_t timeout, uint32_t /*id*/) override {
+    ++goToRCalls;
+    lastGoToRX = x;
+    lastGoToRY = y;
+    lastGoToRSpeed = speed;
+    lastGoToRArrive = arrive;
+    lastGoToRTimeout = timeout;
+    return goToRResult;
+  }
+  Protocol::Result onGoToW(float x, float y, float speed, float arrive,
+                          uint32_t timeout, uint32_t /*id*/) override {
+    ++goToWCalls;
+    lastGoToWX = x;
+    lastGoToWY = y;
+    lastGoToWSpeed = speed;
+    lastGoToWArrive = arrive;
+    lastGoToWTimeout = timeout;
+    return goToWResult;
+  }
+  Protocol::Result onStop(bool immediate, uint32_t id) override {
     ++stopCalls;
     lastStopId = id;
+    lastStopImmediate = immediate;
     return stopResult;
   }
   void onEstop() override { ++estopCalls; }
+  uint32_t lastDone() const override { return lastDoneToReturn; }
+  Protocol::DoneReason lastDoneReason() const override {
+    return lastDoneReasonToReturn;
+  }
   bool onGet(const char* name, float& out) const override {
     ++getCalls;
     std::snprintf(lastGetName, sizeof(lastGetName), "%s", name);

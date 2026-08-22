@@ -6,10 +6,16 @@ documentation will be written from.
 
 **What this is not.** The protocol. [`protocol.md`](protocol.md) stays the wire
 authority for the grammar (spaces, `#id`, case-as-direction, the outcome
-model) and for every verb this library already implements; §9 here proposes
-six *new* verbs that follow those same conventions, not a change to any
-shipped one — `wheels_x`/`move_x`/`move_v`/`go_to_r`/`go_to_w` have no prior
-wire form at all.
+model). **§9's wire mapping is now IMPLEMENTED** (2026-08-22,
+`protocol.md` §6/§8.9) — `WHEELS_X`/`WHEELS_V`/`MOVE_X`/`MOVE_V`/
+`GO_TO_R`/`GO_TO_W` are all real, decoded, dispatched wire verbs, and
+`WHEELS` was renamed `WHEELS_V` to match. What is NOT implemented is the
+kinematics behind five of them: `DiffDriveAdapter` (this library's only
+concrete `Adapter`) has no planner, so it answers `WHEELS_X`/`MOVE_X`/
+`MOVE_V`/`GO_TO_R`/`GO_TO_W` with `kUnknown` — see `protocol.md` §5/§9.8
+item 1 for why that error code specifically. `wheels_x`/`move_x`/`move_v`/
+`go_to_r`/`go_to_w` had no prior wire form before this — this document is
+where their shape was designed.
 
 **Where it sits.** Above the wheel kernel, which is unchanged:
 
@@ -444,9 +450,15 @@ assumed everywhere else.
 - **Roughly 5% of moves are lost silently over the radio.** The enqueue
   acknowledgement is generated locally, so it proves the host spoke, not that
   the robot heard. Confirm motion actually started before believing it.
-- **Ids are unique for the session.** A reused id is `err #<id> 11`
-  (`ERR_DUPLICATE_ID`); under the older protocol it was acknowledged and then
-  silently dropped, which is the footgun that rule exists to close.
+- **Ids are unique for the session and strictly incrementing** — this is
+  now enforced structurally, not by an error code: `protocol.md` §8's
+  reliability layer requires the handler to see a MONOTONIC sequence, so a
+  reused (or reordered) id is either a stale retransmit (re-acked, not
+  re-executed) or a gap (nacked, not executed) — never silently dropped.
+  `ERR_DUPLICATE_ID` (the older protocol's own answer to a reused id) is
+  gone entirely as of 2026-08-22 (`protocol.md` §2.2/§6.1): the handler's
+  own sequencing makes a repeated id structurally impossible to hand to an
+  adapter, so there is no code left to produce.
 - **Exactly one subsystem owns motion at a time.** A `move_*` supersedes a
   `wheels_*` hold; a `wheels_*` clears the planner.
 
@@ -554,6 +566,13 @@ console.log(m.reason);                         // stop | timeout | estop | abort
 ---
 
 ## 9. Harmonizing with the wire
+
+**Implemented 2026-08-22** (`protocol.md` §6/§8.9) — this section's own
+wire mapping and six-verbs-not-one-discriminated-verb decision are no
+longer a proposal, they are what `src/protocol/protocol_handler.cpp`
+actually does. `DiffDriveAdapter` (`src/adapter/`) gives real effect to
+only `wheels_v`; the other five decode and dispatch correctly but answer
+`kUnknown` on that one concrete adapter, for want of a planner.
 
 ### 9.1 The mapping
 

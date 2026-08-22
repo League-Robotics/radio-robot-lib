@@ -10,7 +10,7 @@ fake ports (tests/diffdrive/fake_ports.h) unmodified.
 
 Three things this file exists to prove, each with its own test:
 
-1. **The end-to-end acceptance** (Step 4): WHEELS in as
+1. **The end-to-end acceptance** (Step 4): WHEELS_V in as
    bytes, encoder counts climb in t: frames, the lease expiry stops the
    wheels, ESTOP latches with no ack.
 
@@ -171,11 +171,11 @@ def test_acceptance_wheels_to_lease_expiry_to_estop(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        # feed("WHEELS 100 100 1000 #1\n")  ->  sink contains "ack 1 0"
+        # feed("WHEELS_V 100 100 1000 #1\n")  ->  sink contains "ack 1 0 none"
         # (docs/design/protocol.md S8 -- `ok` is gone, the ack alone is
         # the acceptance signal, and the id is mandatory now).
-        _feed(lib, handle, b"WHEELS 100 100 1000 #1\n")
-        assert _sink_text(lib, handle) == "ack 1 0\n"
+        _feed(lib, handle, b"WHEELS_V 100 100 1000 #1\n")
+        assert _sink_text(lib, handle) == "ack 1 0 none\n"
         lib.paSinkClear(handle)
 
         # Subscribe telemetry so subsequent steps produce t: frames.
@@ -248,8 +248,8 @@ def test_twist_sign_left_and_right_are_not_swapped(tmp_path):
         # PHYSICAL motorLeft port would receive the commanded RIGHT
         # speed (and vice versa) -- backwards, not just off by a sign
         # convention footnote.
-        _feed(lib, handle, b"WHEELS 150 -150 1000 #1\n")
-        assert _sink_text(lib, handle) == "ack 1 0\n"
+        _feed(lib, handle, b"WHEELS_V 150 -150 1000 #1\n")
+        assert _sink_text(lib, handle) == "ack 1 0 none\n"
 
         for _ in range(40):
             lib.paStep(handle)
@@ -283,8 +283,8 @@ def test_lease_expiry_stops_the_wheels_measured_at_the_motor(tmp_path):
     handle = _new_handle(lib)
     try:
         lease_ms = 200
-        _feed(lib, handle, f"WHEELS 200 200 {lease_ms} #1\n".encode("ascii"))
-        assert _sink_text(lib, handle) == "ack 1 0\n"
+        _feed(lib, handle, f"WHEELS_V 200 200 {lease_ms} #1\n".encode("ascii"))
+        assert _sink_text(lib, handle) == "ack 1 0 none\n"
 
         # Well inside the lease: driving, not expired.
         for _ in range(5):
@@ -316,21 +316,21 @@ def test_lease_expiry_stops_the_wheels_measured_at_the_motor(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Supporting coverage: STOP, WHEELS duration ceiling, GET/SET round trip
+# Supporting coverage: STOP, WHEELS_V duration ceiling, GET/SET round trip
 # ---------------------------------------------------------------------------
 
 def test_stop_calls_neutral_and_acks(tmp_path):
     lib = _load_shim(tmp_path)
     handle = _new_handle(lib)
     try:
-        _feed(lib, handle, b"WHEELS 200 200 5000 #1\n")
+        _feed(lib, handle, b"WHEELS_V 200 200 5000 #1\n")
         lib.paSinkClear(handle)
         for _ in range(5):
             lib.paStep(handle)
         assert lib.paMotorAppliedDutyLeft(handle) != 0.0
 
         _feed(lib, handle, b"STOP #2\n")
-        assert _sink_text(lib, handle) == "ack 2 0\n"
+        assert _sink_text(lib, handle) == "ack 2 0 none\n"
         for _ in range(3):
             lib.paStep(handle)
         assert lib.paMotorAppliedDutyLeft(handle) == 0.0
@@ -349,8 +349,8 @@ def test_wheels_duration_over_ceiling_is_rejected(tmp_path):
         # command still ACKs (it arrived, in order); the rejection is a
         # SEPARATE err line, code first now (docs/design/protocol.md
         # S8.2/S8.6).
-        _feed(lib, handle, b"WHEELS 100 100 5001 #1\n")
-        assert _sink_text(lib, handle) == "ack 1 0\nerr 3 #1\n"  # ERR_RANGE
+        _feed(lib, handle, b"WHEELS_V 100 100 5001 #1\n")
+        assert _sink_text(lib, handle) == "ack 1 0 none\nerr 3 #1\n"  # ERR_RANGE
     finally:
         lib.paDestroy(handle)
 
@@ -360,12 +360,12 @@ def test_get_set_wheel_control_field_round_trips(tmp_path):
     handle = _new_handle(lib)
     try:
         _feed(lib, handle, b"SET wheel_control.pid_kp 0.030000 #1\n")
-        assert _sink_text(lib, handle) == "ack 1 0\n"
+        assert _sink_text(lib, handle) == "ack 1 0 none\n"
         lib.paSinkClear(handle)
 
         _feed(lib, handle, b"GET wheel_control.pid_kp #2\n")
         assert _sink_text(lib, handle) == (
-            "ack 2 0\nget wheel_control.pid_kp 0.030000\n")
+            "ack 2 0 none\nget wheel_control.pid_kp 0.030000\n")
         lib.paSinkClear(handle)
 
         # Unknown GET name: still acked (it arrived, in order) but
@@ -373,7 +373,7 @@ def test_get_set_wheel_control_field_round_trips(tmp_path):
         # S6/S8.2 -- no longer "silent" in the sense of no reply at all,
         # since every sequenced command gets an ack now).
         _feed(lib, handle, b"GET wheel_control.nonexistent #3\n")
-        assert _sink_text(lib, handle) == "ack 3 0\n"
+        assert _sink_text(lib, handle) == "ack 3 0 none\n"
     finally:
         lib.paDestroy(handle)
 
@@ -384,11 +384,11 @@ def test_identity_and_status_have_plausible_values(tmp_path):
     try:
         _feed(lib, handle, b"ID #1\n")
         assert _sink_text(lib, handle) == (
-            "ack 1 0\nid differential step4 v6-step4\n")
+            "ack 1 0 none\nid differential step4 v6-step4\n")
         lib.paSinkClear(handle)
 
         _feed(lib, handle, b"VER #2\n")
-        assert _sink_text(lib, handle) == "ack 2 0\nver v6-step4\n"
+        assert _sink_text(lib, handle) == "ack 2 0 none\nver v6-step4\n"
         lib.paSinkClear(handle)
 
         # Output() defaults everything false/0 until the kernel has
@@ -400,7 +400,7 @@ def test_identity_and_status_have_plausible_values(tmp_path):
 
         _feed(lib, handle, b"STATUS #3\n")
         text = _sink_text(lib, handle)
-        assert text.startswith("ack 3 0\nstatus ready=1 active=0 connL=1 connR=1 ")
+        assert text.startswith("ack 3 0 none\nstatus ready=1 active=0 connL=1 connR=1 ")
         assert text.rstrip("\n").endswith(" next=4"), text
     finally:
         lib.paDestroy(handle)

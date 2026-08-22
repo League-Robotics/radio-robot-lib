@@ -123,10 +123,41 @@ class DiffDriveAdapter : public Adapter {
   uint32_t now() const override;  // [ms] — DifferentialDrive::Output::now
   void status(StatusFields& out) const override;
 
-  Result onWheels(float left, float right,  // [mm/s] [mm/s]
-                  uint32_t duration,         // [ms]
-                  uint32_t id) override;
-  Result onStop(uint32_t id) override;   // -> DifferentialDrive::neutral()
+  // WHEELS_V (renamed from WHEELS/onWheels, 2026-08-22 --
+  // docs/design/motion-api.md §9.2 confirms WHEELS *is* wheels_v; same
+  // fields, same meaning, no reinterpretation).
+  Result onWheelsV(float left, float right,  // [mm/s] [mm/s]
+                   uint32_t duration,         // [ms]
+                   uint32_t id) override;
+
+  // The five other motion verbs (docs/design/motion-api.md §9.1) all
+  // need a planner and/or a stop-condition evaluator this library does
+  // not own (docs/design/protocol.md §6's own "deferred" table, carried
+  // forward unchanged) -- every one of them answers kUnknown, the same
+  // wire outcome RUN's own empty registration table already answers
+  // with for any name it does not recognize (adapter.h's onRun() doc:
+  // "an Adapter with no registration table ... has an empty allowlist").
+  // This is honest, not a stub left unfinished: DiffDriveAdapter has no
+  // planner to wire these onto.
+  Result onWheelsX(float left, float right, float cruise, uint32_t timeout,
+                   uint32_t id) override;
+  Result onMoveX(float distance, float rotation, float cruise,
+                 uint32_t timeout, uint32_t id) override;
+  Result onMoveV(float v_x, float omega, uint32_t duration,
+                 uint32_t id) override;
+  Result onGoToR(float x, float y, float speed, float arrive,
+                uint32_t timeout, uint32_t id) override;
+  Result onGoToW(float x, float y, float speed, float arrive,
+                uint32_t timeout, uint32_t id) override;
+
+  // `immediate` (STOP's optional `now` token, motion-api.md §3.7/§9.1)
+  // is accepted but has no behavioral effect here: neutral() has always
+  // been immediate at the kernel level regardless (docs/design/
+  // protocol.md §5.1 -- "both are immediate at the kernel level", there
+  // being no ramp/queue in this library to choose between). A future
+  // adapter that DOES own a ramp is where this flag would first make a
+  // real difference.
+  Result onStop(bool immediate, uint32_t id) override;  // -> neutral()
   void onEstop() override;               // -> DifferentialDrive::estop()
 
   bool onGet(const char* name, float& out) const override;
@@ -135,6 +166,15 @@ class DiffDriveAdapter : public Adapter {
   const char* fieldName(size_t index) const override;
 
   Result onTlm(TlmMode mode) override;
+
+  // This library has no motion queue and no completion event of its own
+  // (docs/design/protocol.md §8.8.1) -- WHEELS_V has no stop condition,
+  // it just holds a velocity for `duration` and lets the lease expire,
+  // which is not a "completion" this adapter can observe. Both always
+  // report the inert default (0 / kNone); wire-correct, functionally
+  // dead on this adapter specifically.
+  uint32_t lastDone() const override { return 0; }
+  DoneReason lastDoneReason() const override { return DoneReason::kNone; }
 
   // RUN: this library registers no callable functions at all -- there is
   // no wheel-kernel operation this adapter exposes by NAME the way

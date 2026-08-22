@@ -239,7 +239,7 @@ ADVERSARIAL_CASES = [
     ("embedded_nul_after_verb", [b"PING\x00extra\n"]),
     ("embedded_nul_in_set_name", [b"SET foo\x00bar 1.0\n"]),
     ("embedded_nul_in_set_value", [b"SET group.alpha 1\x002 #9\n"]),
-    ("embedded_nul_in_wheels_field", [b"WHEELS 1\x0000 100 1000\n"]),
+    ("embedded_nul_in_wheels_field", [b"WHEELS_V 1\x0000 100 1000\n"]),
     ("embedded_nul_in_get_name", [b"GET foo\x00bar\n"]),
     ("embedded_nul_in_id", [b"STOP #1\x002\n"]),
 
@@ -285,11 +285,11 @@ ADVERSARIAL_CASES = [
 
     # ---- space-run stress: the new grammar's own separator, hammered --
     ("huge_space_run_between_fields",
-     [b"WHEELS 100" + b" " * 200 + b"100 1000\n"]),
+     [b"WHEELS_V 100" + b" " * 200 + b"100 1000\n"]),
     ("many_spaces_then_nothing_is_blank",
      [b" " * 239 + b"\n"]),  # all-whitespace line, near the 240-byte cap
-    ("verb_alone_no_trailing_content", [b"WHEELS\n"]),
-    ("verb_then_trailing_spaces_only", [b"WHEELS" + b" " * 50 + b"\n"]),
+    ("verb_alone_no_trailing_content", [b"WHEELS_V\n"]),
+    ("verb_then_trailing_spaces_only", [b"WHEELS_V" + b" " * 50 + b"\n"]),
     ("stop_alone_no_id", [b"STOP\n"]),
     ("stop_then_trailing_spaces_only", [b"STOP" + b" " * 50 + b"\n"]),
 
@@ -304,7 +304,7 @@ ADVERSARIAL_CASES = [
     # ---- \r handling: lone \r, \r\n, \n\r ----
     ("crlf", [b"\r\n"]),
     ("lfcr", [b"\n\r"]),
-    ("cr_mid_field_not_at_terminator", [b"WHEELS \r100 100 1000\n"]),
+    ("cr_mid_field_not_at_terminator", [b"WHEELS_V \r100 100 1000\n"]),
     ("multiple_lone_cr_mid_line", [b"PING\r\r\r\n"]),
 
     # ---- lines at 239 / 240 / 241 bytes, and further over ----
@@ -315,11 +315,11 @@ ADVERSARIAL_CASES = [
 
     # ---- unterminated: partial lines, huge no-terminator blobs,
     # spread across MULTIPLE feed() calls ----
-    ("unterminated_short_fragment", [b"WHEELS 100 100"]),
+    ("unterminated_short_fragment", [b"WHEELS_V 100 100"]),
     ("unterminated_lone_cr", [b"\r"]),
     ("unterminated_4kb_single_call", [b"A" * 4096]),
     ("unterminated_plausible_prefix_then_huge_continuation",
-     [b"WHEELS 100 100 1000", b"B" * 5000]),
+     [b"WHEELS_V 100 100 1000", b"B" * 5000]),
     ("unterminated_split_across_many_small_calls",
      [b"W", b"H", b"E", b"E", b"L", b"S", b" ", b"1" * 300]),
 
@@ -333,13 +333,13 @@ ADVERSARIAL_CASES = [
     # handle's own first in-order id) so these actually reach the
     # field-decode logic under ASan/UBSan, rather than bailing out
     # earlier on "no id at all" (docs/design/protocol.md S8) ----
-    ("wheels_field_all_pluses", [b"WHEELS +100 +100 +1000 #1\n"]),
-    ("wheels_field_leading_zeros", [b"WHEELS 000100 00100 0001000 #1\n"]),
+    ("wheels_field_all_pluses", [b"WHEELS_V +100 +100 +1000 #1\n"]),
+    ("wheels_field_leading_zeros", [b"WHEELS_V 000100 00100 0001000 #1\n"]),
     ("set_value_only_a_sign", [b"SET group.alpha - #1\n"]),
     ("set_value_only_a_dot", [b"SET group.alpha . #1\n"]),
     ("set_value_many_dots", [b"SET group.alpha 1.2.3.4 #1\n"]),
     ("wheels_duration_huge_digit_run",
-     [b"WHEELS 100 100 " + b"9" * 40 + b" #1\n"]),
+     [b"WHEELS_V 100 100 " + b"9" * 40 + b" #1\n"]),
 
     # ---- RUN: open arity, adversarial argument counts/content (spec
     # grammar's RUN section -- the handler only parses, so these mostly
@@ -377,9 +377,9 @@ ADVERSARIAL_CASES = [
     # is now structurally impossible; '\t'/'\v'/'\f'/'\r' remain legal,
     # ordinary field bytes per spec S2's field grammar, and are exactly
     # what isWireSpace() in protocol_handler.cpp still guards against) --
-    ("tab_leading_wheels_field", [b"WHEELS \t100 100 1000\n"]),
+    ("tab_leading_wheels_field", [b"WHEELS_V \t100 100 1000\n"]),
     ("vtab_leading_set_value", [b"SET group.alpha \v1.0\n"]),
-    ("formfeed_leading_wheels_duration", [b"WHEELS 100 100 \f1000\n"]),
+    ("formfeed_leading_wheels_duration", [b"WHEELS_V 100 100 \f1000\n"]),
     ("cr_leading_set_value_not_at_terminator",
      [b"SET group.alpha \r1.0\n"]),
 ]
@@ -478,23 +478,21 @@ def test_embedded_nul_immediately_after_verb_matches_bare_verb(fuzz_driver):
     real '\n') with no malformed-count increment and no sign anything
     was dropped.
 
-    **Re-verified again (2026-08-21) after the reliability layer made
-    PING's id mandatory (docs/design/protocol.md S8):** a bare `PING`
-    with no id at all is now itself malformed (no reply of any kind),
-    so this characterization's OBSERVABLE consequence changed even
-    though its ROOT CAUSE (the C-string truncation at the embedded NUL)
-    did not -- and the mandatory id makes the finding, if anything,
-    MORE striking: there is a perfectly well-formed `#5` sitting right
-    after the embedded NUL in the wire bytes below, and the parser
-    never sees it at all, because `strlen()` already stopped four bytes
-    earlier.
+    **Re-verified a third time (2026-08-22) after PING joined the
+    unsequenced exemption set (docs/design/protocol.md §8.3):** a bare
+    `PING` with no id now answers `pong` unconditionally (it never
+    needed one in the first place, as of this change) -- so the
+    observable consequence of the C-string truncation flipped AGAIN,
+    from "no reply at all" (2026-08-21's mandatory-id era) to "answers
+    exactly like a bare PING would" (now). The root cause -- `strlen()`
+    stopping at the embedded NUL four bytes in, so "extra #5" is never
+    seen at all -- is unchanged across all three eras; only what a
+    truncated, id-less PING DOES with that has moved.
 
     Spec S2's verb grammar (`verb ::= [A-Za-z][A-Za-z0-9_]*`) does not
     admit NUL in a verb at all, so the grammar-correct behavior would be
     to REJECT this line as unparseable -- this C-string-based
-    implementation instead silently accepts it as the shorter verb (and,
-    since that shorter verb then has no visible id at all, the mandatory-
-    id rule makes the whole line malformed with no reply).
+    implementation instead silently accepts it as the shorter verb.
 
     This is exactly the kind of thing a MicroPython or JavaScript port
     would NOT reproduce: `bytes`/`str` equality in Python, and string
@@ -502,16 +500,17 @@ def test_embedded_nul_immediately_after_verb_matches_bare_verb(fuzz_driver):
     included -- `b"PING\x00extra #5" == b"PING"` is `False`. A port that
     otherwise faithfully mirrors this C++ handler's logic would treat
     this exact input as an unknown verb (or a malformed one) carrying a
-    perfectly good id, not as a bare, id-less PING, and that divergence
-    would only surface as a conformance-suite mismatch on inputs no one
+    perfectly good id, not as a bare PING, and that divergence would
+    only surface as a conformance-suite mismatch on inputs no one
     thought to write down -- which is why it is written down here."""
     result = _run(fuzz_driver, [b"PING\x00extra #5\n"])
     _assert_survived(result, "embedded NUL immediately after a verb name")
-    assert result.stdout == b"", (
-        f"expected this to (surprisingly) dispatch as a BARE, id-less "
-        f"PING and therefore produce no reply at all, got: "
-        f"{result.stdout!r} -- if this now differs, the C-string "
-        f"dispatch behavior changed and this test needs updating")
+    assert result.stdout == b"pong 0\n", (
+        f"expected this to (surprisingly) dispatch as a BARE PING and "
+        f"therefore reply 'pong 0' (the fuzz driver's MockAdapter never "
+        f"calls phSetNow, so now() defaults to 0), got: {result.stdout!r} "
+        f"-- if this now differs, the C-string dispatch behavior changed "
+        f"and this test needs updating")
 
 
 # ---------------------------------------------------------------------------
@@ -525,13 +524,14 @@ def test_hex_float_no_longer_bypasses_no_exponents_rule(fuzz_driver):
     for 'e'/'E', never 'x'/'X', so this slipped through as if it were
     an ordinary decimal literal. Must now be rejected as malformed
     (err code 2, ERR_BADARG), the same as any other unparseable value,
-    and must NOT have reached the adapter's onSet(). A mandatory id
-    (docs/design/protocol.md S8) is required to reach handleSet()'s own
-    value-decode step at all -- the line is acked (it arrived, in
-    order) before the value-decode failure produces the err."""
+    and must NOT have reached the adapter's onSet(). This is a HANDLER-
+    level decode failure (the value field never parses), so as of
+    2026-08-22 (docs/design/protocol.md S8.9, "decode failure is a
+    NAK") it NACKS and does NOT advance the sequence -- it does not ack
+    then err, the pre-2026-08-22 shape."""
     result = _run(fuzz_driver, [b"SET group.alpha 0x1.8p3 #1\n"])
     _assert_survived(result, "hex float SET")
-    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
+    assert result.stdout == b"nack 1 0 none\nerr 2 #1\n", (
         f"hex-float value was not rejected: {result.stdout!r}")
 
 
@@ -541,7 +541,7 @@ def test_hex_float_no_longer_bypasses_no_exponents_rule(fuzz_driver):
 def test_hex_float_rejected_for_several_spellings(fuzz_driver, spelling):
     result = _run(fuzz_driver, [b"SET group.alpha " + spelling + b" #1\n"])
     _assert_survived(result, f"hex float spelling {spelling!r}")
-    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
+    assert result.stdout == b"nack 1 0 none\nerr 2 #1\n", (
         f"hex-float spelling {spelling!r} was not rejected: "
         f"{result.stdout!r}")
 
@@ -549,9 +549,11 @@ def test_hex_float_rejected_for_several_spellings(fuzz_driver, spelling):
 def test_leading_whitespace_no_longer_silently_accepted(fuzz_driver):
     """A leading TAB in a numeric field used to sail through
     strtol/strtoul/strtof, which all skip leading whitespace per the C
-    standard -- silently accepting "WHEELS \\t100 100 1000" as left=100.
-    Must now be rejected as malformed (ERR_BADARG), matching this
-    file's own "strict, whole field consumed" contract.
+    standard -- silently accepting "WHEELS_V \\t100 100 1000" as
+    left=100. Must now be rejected as malformed (ERR_BADARG), matching
+    this file's own "strict, whole field consumed" contract -- and, as
+    of 2026-08-22, this is a NACK (a handler-level decode failure), not
+    an ack-then-err.
 
     This is deliberately a TAB, not a leading SPACE: under the space
     grammar a leading space can never reach a field decoder at all (the
@@ -559,22 +561,22 @@ def test_leading_whitespace_no_longer_silently_accepted(fuzz_driver):
     literal space here would not exercise this guard -- see this
     module's own docstring point 4 and protocol_handler.cpp's
     isWireSpace() comment for the full reachability analysis."""
-    result = _run(fuzz_driver, [b"WHEELS \t100 100 1000 #1\n"])
-    _assert_survived(result, "leading-tab WHEELS field")
-    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
+    result = _run(fuzz_driver, [b"WHEELS_V \t100 100 1000 #1\n"])
+    _assert_survived(result, "leading-tab WHEELS_V field")
+    assert result.stdout == b"nack 1 0 none\nerr 2 #1\n", (
         f"leading-whitespace numeric field was not rejected: "
         f"{result.stdout!r}")
 
 
 @pytest.mark.parametrize("line", [
-    b"WHEELS 100 \v100 1000 #1\n",
+    b"WHEELS_V 100 \v100 1000 #1\n",
     b"SET group.alpha \f1.0 #1\n",
-    b"WHEELS 100 100 \r1000 #1\n",
+    b"WHEELS_V 100 100 \r1000 #1\n",
 ])
 def test_leading_whitespace_rejected_across_verbs(fuzz_driver, line):
     result = _run(fuzz_driver, [line])
     _assert_survived(result, f"leading-whitespace line {line!r}")
-    assert result.stdout == b"ack 1 0\nerr 2 #1\n", (
+    assert result.stdout == b"nack 1 0 none\nerr 2 #1\n", (
         f"leading-whitespace field in {line!r} was not rejected: "
         f"{result.stdout!r}")
 
@@ -630,10 +632,10 @@ def test_nan_inf_get_reply_formatting_is_safe(nan_driver):
     _assert_survived(result, "NaN/Inf/long-name GET regression driver")
     lines = result.stdout.splitlines()
     assert lines == [
-        b"ack 1 0", b"get nan.field 0.000000",
-        b"ack 2 0", b"get posinf.field 4294.967040",
-        b"ack 3 0", b"get neginf.field -4294.967040",
-        b"ack 4 0", b"get " + b"n" * 232 + b" 1.500000",
+        b"ack 1 0 none", b"get nan.field 0.000000",
+        b"ack 2 0 none", b"get posinf.field 4294.967040",
+        b"ack 3 0 none", b"get neginf.field -4294.967040",
+        b"ack 4 0 none", b"get " + b"n" * 232 + b" 1.500000",
     ], f"unexpected output: {result.stdout!r}"
 
 
@@ -658,6 +660,6 @@ def test_run_debug_driver_survives_and_matches(run_debug_driver):
         b"debug",                  # nullptr -> the SAME case as ""
         b"debug",                  # entirely '\n'/'\r' -> bare too
         b"debug " + b"z" * 233,    # truncated to the 233-byte text cap
-        b"ack 1 0",                # RUN foo #1 -- in order, acked...
+        b"ack 1 0 none",           # RUN foo #1 -- in order, acked...
         b"ret 42 #1",              # ...then its own registered ret
     ], f"unexpected output: {result.stdout!r}"

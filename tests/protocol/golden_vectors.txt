@@ -1,19 +1,23 @@
 # golden_vectors.txt -- cross-language conformance fixture (see
-# docs/design/protocol.md S9.4's "archetype" framing), for the C++
-# handler under tests/protocol/test_protocol_harness.py::test_golden_vectors.
+# docs/design/protocol.md's "archetype" framing), for the C++ handler
+# under tests/protocol/test_protocol_harness.py::test_golden_vectors.
 #
-# Rewritten 2026-08-21 for the reliability layer (mandatory sequence ids
-# plus cumulative ack/nack, docs/design/protocol.md S8) -- every vector's
-# SHAPE changed again: `ok` is gone (an in-order `ack` IS the acceptance),
-# `err`'s field order flipped to `err <code> #<id>` (S8.6), ids are now
-# MANDATORY on every sequenced verb instead of optional, `#0` no longer
-# suppresses anything, and ESTOP now replies `estop` instead of nothing.
+# Rewritten 2026-08-22 for the six stakeholder-directed changes
+# (docs/design/protocol.md §8.9): a decode failure (unknown verb, wrong
+# arity, unparseable field) now NACKs and does NOT advance the sequence
+# -- only a merits rejection (a well-formed line the ADAPTER refuses)
+# still acks-then-errs; `ERR_DUPLICATE_ID` is gone; `PING` joins
+# `HELLO`/`ESTOP` as unsequenced (no id, always answers); every
+# `ack`/`nack` now carries a THIRD token, the completion reason
+# (`none`/`stop`/`timeout`/`estop`/`aborted`) alongside the id and
+# `lastDone`; and `WHEELS` is renamed `WHEELS_V`, joined by five new
+# motion verbs (`WHEELS_X`/`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W`) from
+# docs/design/motion-api.md §9.1.
 #
 # Every vector below is either a literal example written alongside the
 # handler as it was built, or a mechanical instance of a format the
-# design states generically (e.g. "ack <n> <lastDone>") -- not authored
-# afterward to match the implementation's output. Each vector cites its
-# source in a comment.
+# design states generically -- not authored afterward to match the
+# implementation's output. Each vector cites its source in a comment.
 #
 # ---- format (this fixture file's own, invented for this harness) ----
 #
@@ -26,422 +30,413 @@
 #                                  sink must be EMPTY after every ACTION
 #                                  in the block runs
 #
-# The sink is cleared at the start of each block (not between actions
-# within one block -- this is what lets a multi-frame TLM example
-# assert thdr: appears once while t: repeats). SETUP is NOT reset
-# between blocks -- each block below re-states whatever SETUP it
-# needs, so blocks stay independently readable even though the driver
-# does not literally recreate the adapter each time.
-#
-# IMPORTANT: every block runs on a FRESH handle (test_golden_vectors
-# creates one handle for the whole file, but see below) -- see this
-# file's own note at the top of the reliability-layer blocks for how
-# sequencing state is handled across blocks.
+# The sink is cleared at the start of each block. SETUP is NOT reset
+# between blocks -- each block re-states whatever SETUP it needs.
 #
 # SETUP keys:
 #   identity <name> <serial> <drivetrain> <profile> <version>
 #   now <uint32>
 #   status <ready> <active> <connL> <connR> <otos> <wedge> <flags> <tlm>
-#     (ready/active/connL/connR/otos/wedge are 0 or 1; flags is decimal,
-#     formatted as hex on the wire; tlm is the literal lowercase word)
 #   getoverride <name> <value>
-#   setresult <ordinal>   -- Protocol::Result's declaration-order ordinal,
-#                             see test_protocol_harness.py's RESULT_* map
+#   setresult <ordinal>       -- Protocol::Result's declaration-order
+#                                 ordinal, see test_protocol_harness.py's
+#                                 RESULT_* map
+#   wheelsresult <ordinal>    -- WHEELS_V's own Result
+#   stopresult <ordinal>
+#   runresult / runhasresult / runresulttext
+#   lastdone <uint32>         -- Adapter::lastDone() (2026-08-22)
+#   lastdonereason <ordinal>  -- Adapter::lastDoneReason()'s
+#                                 declaration-order ordinal, see
+#                                 test_protocol_harness.py's DONE_* map
 #
-# EMIT column spec: one or more "<name>:<hex0or1>:<value>" tokens (this
-# is the FIXTURE FILE's own SETUP/EMIT sub-syntax, unrelated to the wire
-# grammar -- it is never fed through feed(), only unpacked in Python and
-# passed to phEmitTelemetry()).
+# EMIT column spec: one or more "<name>:<hex0or1>:<value>" tokens.
 #
 # ---- sequencing note ----
 #
-# Every block below is run against a HANDLE THAT HAS JUST BEEN RESET
-# (test_golden_vectors sends a fresh "HELLO\n" -- itself unsequenced --
-# at the top of every block, which resets expectedNext_ to 1 and
-# lastDone_ to 0, docs/design/protocol.md S8.3). This is what lets every
-# block below use "#1" as its first (and often only) sequenced id without
-# the blocks needing to coordinate a running counter between them. Where
-# a block needs MULTIPLE sequenced commands, they use "#1", "#2", ... in
-# order, exactly as a real host pipelining commands would.
+# Every block below runs against a HANDLE THAT HAS JUST BEEN RESET
+# (test_golden_vectors sends a fresh "HELLO\n" at the top of every
+# block, resetting expectedNext_ to 1). `lastdone`/`lastdonereason` are
+# SETUP on the mock adapter directly (not reset by HELLO -- HELLO no
+# longer touches the Adapter's own completion state at all, docs/design/
+# protocol.md §8.9), so a block that wants a non-default reason states
+# it explicitly every time, same as `wheelsresult` etc.
 
-# ---- 4. Session verbs ----
+# ---- Session verbs ----
 
-# HELLO's reply FORMAT is spec S4's literal
-# "device NEZHA2 robot <name> <serial>" -- name/serial themselves are
-# not given a concrete example in the spec text, so this harness's own
-# fixed test identity fills them in. HELLO itself is unsequenced and
-# carries no id (docs/design/protocol.md S8.3).
+# HELLO's reply FORMAT is spec's literal
+# "device NEZHA2 robot <name> <serial>". HELLO is unsequenced and
+# carries no id (docs/design/protocol.md §8.3).
 SETUP identity testbot SN001 differential tovez 6.0.0
 IN HELLO
 OUT device NEZHA2 robot testbot SN001
 
-# PING's reply value mirrors spec S10.2's own literal REPL transcript
-# (">>> p(\"PING\")" -> "pong 38472"), updated for the mandatory id
-# (docs/design/protocol.md S8) -- ack precedes PING's own reply
-# (S9.8 item 4).
+# PING (2026-08-22): unsequenced, no id, no ack -- just the bare `pong`
+# reply. This is the change from before: PING used to require a
+# mandatory id and get an `ack` line of its own; now it answers
+# immediately regardless of sequence state, exactly like ESTOP.
 SETUP now 38472
-IN PING #1
-OUT ack 1 0
+IN PING
 OUT pong 38472
 
-# ID's FORMAT is spec S4's literal "id <drivetrain> <profile> <version>";
-# values are this harness's fixed test identity (same SETUP as HELLO).
+# PING tolerates (and ignores) trailing content, including something
+# that LOOKS like an old-style id -- maximally forgiving, matching
+# ESTOP's own posture (this file's own resolved ambiguity, protocol_
+# handler.h's ambiguity note #4).
+SETUP now 111
+IN PING #7
+OUT pong 111
+
+# ID's FORMAT is "id <drivetrain> <profile> <version>"; ack now carries
+# lastDone/reason too.
 SETUP identity testbot SN001 differential tovez 6.0.0
 IN ID #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT id differential tovez 6.0.0
 
-# VER's FORMAT is spec S4's literal "ver <version>".
 SETUP identity testbot SN001 differential tovez 6.0.0
 IN VER #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT ver 6.0.0
 
-# STATUS's reply is spec S4's own literal worked example line, verbatim
-# down to the field order -- "status ready=1 active=0 connL=1 connR=1
-# otos=1 wedge=0 flags=<hex> tlm=pose". flags=216 is chosen deliberately
-# to equal spec S6.2's own telemetry example flags value (0xd8), tying
-# the two examples together instead of picking an arbitrary number.
-# `next=1` (docs/design/protocol.md S8.7) reports expectedNext_ as it
-# stood AFTER this very STATUS was accepted (id 1 -> expectedNext_ 2).
+# STATUS's reply is spec's own literal worked example line, verbatim
+# down to the field order.
 SETUP status 1 0 1 1 1 0 216 pose
 IN STATUS #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT status ready=1 active=0 connL=1 connR=1 otos=1 wedge=0 flags=d8 tlm=pose next=2
 
-# HELP is "generated by walking the verb table at runtime" (spec S4);
-# this is that table's exact content for this library's in-scope verb
-# subset (docs/design/protocol.md S5/S6.2), in spec S3.1's own table
-# order -- unaffected by the reliability layer (no new commands added).
+# HELP lists every verb, generated by walking the same table dispatch()
+# uses -- includes the six-verb motion set, WHEELS_V (not WHEELS), and
+# both PING and ESTOP even though neither is looked up through this
+# table for real dispatch.
 IN HELP #1
-OUT ack 1 0
-OUT help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS STOP ESTOP RUN
+OUT ack 1 0 none
+OUT help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN
 
-# ---- 2. Grammar rules that are easy to miss ----
+# ---- Grammar rules that are easy to miss ----
 
-# "A run of spaces is ONE separator" (spec S2) -- extra spaces between
-# WHEELS's tokens still parse as exactly 3 data fields plus the mandatory
-# id, not extra empty ones.
+# "A run of spaces is ONE separator" -- extra spaces between WHEELS_V's
+# tokens still parse as exactly 3 data fields plus the mandatory id.
 SETUP wheelsresult 0
-IN WHEELS   100   100   1000   #1
-OUT ack 1 0
+IN WHEELS_V   100   100   1000   #1
+OUT ack 1 0 none
 
-# Leading and trailing whitespace on the line is ignored (spec S2).
+# Leading and trailing whitespace on the line is ignored.
 SETUP now 999
-IN    PING #1
-OUT ack 1 0
+IN    PING
 OUT pong 999
 
-# Blank-line and all-whitespace-line silence (spec S2: "A blank or
-# all-whitespace line is ignored silently ... it does not count
-# malformed") are NOT expressed as vectors in this text file -- a wire
-# line consisting of ONLY trailing whitespace is exactly the kind of
-# content an editor's "trim trailing whitespace on save" setting
-# silently destroys, which would quietly turn "feed an all-space line"
-# into "feed an empty IN action" with no visible diff. That behavior is
-# tested instead in test_protocol_harness.py
-# (test_blank_line_is_silently_ignored_not_malformed and
-# test_all_whitespace_line_is_silently_ignored_not_malformed), as an
-# explicit Python string literal where the whitespace is unambiguous.
+# ---- The reliability layer: mandatory ids, ack/nack, ack/nack's
+# reason token, `#0` no longer suppressing anything ----
 
-# ---- 8. The reliability layer (docs/design/protocol.md S8): mandatory
-# ids, ack/nack, `ok`/`err`'s new shapes ----
-
-# SET's own worked example (spec S7.1, updated 2026-08-21): the id is no
-# longer optional, and acceptance is the `ack` alone -- no `ok` line
-# exists any more.
+# SET's own worked example: the ack alone is the acceptance signal.
 SETUP setresult 0
 IN SET wheel_control.pid_kp 0.03 #1
-OUT ack 1 0
+OUT ack 1 0 none
 
-# The same SET, now rejected (kRange, ordinal 3): the ack still fires
-# (it arrived, in order) and the err follows, code first, id last
-# (S8.6's field-order fix -- this used to be "err #9 3").
+# The same SET, now rejected on MERITS (kRange, ordinal 3): a merits
+# rejection still ACKS (it arrived, in order, decoded fine) -- the err
+# follows, code first, id last.
 SETUP setresult 3
 IN SET wheel_control.pid_kp 0.03 #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 3 #1
 
-# `#0` no longer suppresses anything (S2.2, S6.3) -- since expectedNext_
-# starts at 1, id 0 is unconditionally a stale retransmit: NOT executed,
-# acked against 0 (nothing accepted yet on a freshly-reset handle).
+# `#0` is unconditionally a stale retransmit on a freshly-reset handle
+# (expectedNext_ starts at 1) -- acked against 0, nothing accepted yet.
 SETUP setresult 0
 IN SET wheel_control.pid_kp 0.03 #0
-OUT ack 0 0
-
-# Spec S8.2 (historical)'s "a reused id is err #<id> 11" no longer has a
-# wire vector: ERR_DUPLICATE_ID is UNREACHABLE as of 2026-08-21 (S2.2,
-# S9.8 item 8) -- the handler's own sequencing makes a repeated id
-# structurally impossible to hand to the adapter, so there is no line to
-# demonstrate here any more.
+OUT ack 0 0 none
 
 # A sequenced verb with NO id at all is malformed -- no reply of any
-# kind (S8.4 item 1).
-IN PING
+# kind (the id itself could not be resolved, so there is nothing to
+# nack against either).
+IN PING_TYPO
 OUT NONE
 
-# ---- 8.3 Error-code coverage: every REACHABLE code Result can produce
-# (adapter.h; docs/design/protocol.md S6.1) has at least one wire vector
-# in this fixture -- codes 1 and 3 already had one each above; this
-# block adds the remaining five (2, 4, 6, 8, 10) so a port author working
-# from golden_vectors.txt alone sees every code the handler can emit.
-# Code 11 (ERR_DUPLICATE_ID) is deliberately absent -- see above. SET is
-# the vehicle for the adapter-Result codes since it is the one verb
-# whose outcome is entirely the adapter's Result, unfiltered by any
-# handler-level bounds table (S6: "the handler holds no field table, no
-# bounds"). Every vector below is its own block (a fresh HELLO reset),
-# so every id is #1.
+# The ack/nack reason token reflects whatever the Adapter currently
+# reports -- exercised directly here (2026-08-22, docs/design/
+# protocol.md §8.8: "the ack/nack piggyback rides along"). ID is the
+# vehicle (rather than STATUS, whose own reply line would otherwise need
+# repeating in full here) since its own reply never varies with
+# lastDone/lastDoneReason.
+SETUP identity testbot SN001 differential tovez 6.0.0
+SETUP lastdone 7
+SETUP lastdonereason 1
+IN ID #1
+OUT ack 1 7 stop
+OUT id differential tovez 6.0.0
 
-# ERR_UNKNOWN (Result::kUnknown, ordinal 1) -- "no such verb or field
-# name". GET has no way to produce this on the wire (S6) so SET is the
-# only verb that can.
+SETUP identity testbot SN001 differential tovez 6.0.0
+SETUP lastdone 12
+SETUP lastdonereason 3
+IN ID #1
+OUT ack 1 12 estop
+OUT id differential tovez 6.0.0
+
+# Reset back to the default for every block below -- SETUP is NOT
+# reset between blocks (this file's own header note), so the two
+# demonstration vectors above would otherwise "poison" every later
+# block's own expected ack/nack reason token.
+SETUP lastdone 0
+SETUP lastdonereason 0
+IN HELP #1
+OUT ack 1 0 none
+OUT help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN
+
+# ---- Error-code coverage: every REACHABLE code Result can produce has
+# at least one wire vector. Code 11 (ERR_DUPLICATE_ID) no longer exists
+# on Protocol::Result at all (2026-08-22) -- there is nothing left to
+# demonstrate. SET is the vehicle for the adapter-Result codes since its
+# outcome is entirely the adapter's Result. Every vector below is its
+# own block, so every id is #1.
+
 SETUP setresult 1
 IN SET no.such.field 1.0 #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 1 #1
 
-# ERR_BADARG (Result::kBadArg, ordinal 2) -- "malformed/non-finite
-# argument, wrong arity". Two DIFFERENT sources produce this same code:
-# the handler's OWN value decode failing before onSet() is ever called
-# (shown here), and the adapter itself returning kBadArg for a
-# well-formed value it rejects on other grounds (both wire-identical,
-# by design -- S6).
+# ERR_BADARG via a HANDLER-level decode failure -- this is now a NACK,
+# not an ack+err (2026-08-22's central behavior change): the value
+# field never parses, so the line never "arrived intact", and the
+# sequence does NOT advance.
 SETUP setresult 0
 IN SET wheel_control.pid_kp notanumber #1
-OUT ack 1 0
+OUT nack 1 0 none
 OUT err 2 #1
 
-# ERR_FULL (Result::kFull, ordinal 4) -- "queue full (4 pending)".
 SETUP setresult 4
 IN SET wheel_control.pid_kp 0.03 #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 4 #1
 
-# ERR_UNIMPLEMENTED (Result::kUnimplemented, ordinal 5) -- "recognized,
-# not wired on this build".
 SETUP setresult 5
 IN SET wheel_control.pid_kp 0.03 #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 6 #1
 
-# ERR_NOT_CONFIGURED (Result::kNotReady, ordinal 6) -- "refused pre-ready".
 SETUP setresult 6
 IN SET wheel_control.pid_kp 0.03 #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 8 #1
 
-# ERR_BUSY (Result::kBusy, ordinal 7) -- "subsystem in motion; retry at
-# rest".
 SETUP setresult 7
 IN SET wheel_control.pid_kp 0.03 #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 10 #1
 
-# ---- 5. Motion ----
+# ---- Motion: the six verbs (docs/design/motion-api.md §9.1) ----
 
-# The end-to-end acceptance criterion this whole repo exists to prove,
-# run one step early because the handler alone is enough to show it:
-#   feed("WHEELS 100 100 1000 #1\n") -> sink contains "ack 1 0"
+# WHEELS_V (renamed from WHEELS, 2026-08-22 -- docs/design/motion-api.md
+# §9.2 confirms WHEELS *is* wheels_v; same fields, same meaning).
 SETUP wheelsresult 0
-IN WHEELS 100 100 1000 #1
-OUT ack 1 0
+IN WHEELS_V 100 100 1000 #1
+OUT ack 1 0 none
 
-# WHEELS rejected: ERR_RANGE (Result::kRange, ordinal 3) -- e.g. the
-# adapter enforcing spec S5.2's 5000 ms ceiling (protocol_handler.h
-# ambiguity note #1: the handler itself does not enforce it).
 SETUP wheelsresult 3
-IN WHEELS 100 100 9000 #1
-OUT ack 1 0
+IN WHEELS_V 100 100 9000 #1
+OUT ack 1 0 none
 OUT err 3 #1
 
-# STOP's own worked shape: accepted -> the ack alone, nothing more
-# (`ok` is gone).
+# WHEELS_X: per-wheel commanded DISTANCE, not velocity -- has no prior
+# wire form at all before this change.
+SETUP wheelsxresult 0
+IN WHEELS_X -100 100 200 5000 #1
+OUT ack 1 0 none
+
+SETUP wheelsxresult 3
+IN WHEELS_X 100 100 200 5000 #1
+OUT ack 1 0 none
+OUT err 3 #1
+
+# MOVE_X: body displacement + heading change. rotation is a milliradian
+# INTEGER on the wire (docs/design/motion-api.md §9.1) -- 1571 mrad is
+# approximately pi/2 (a 90-degree turn), decoded as an ordinary signed
+# field, no different from any other integer.
+SETUP movexresult 0
+IN MOVE_X 400 1571 200 5000 #1
+OUT ack 1 0 none
+
+SETUP movexresult 1
+IN MOVE_X 400 -1571 200 5000 #1
+OUT ack 1 0 none
+OUT err 1 #1
+
+# MOVE_V: body twist, held for `duration`.
+SETUP movevresult 0
+IN MOVE_V 150 0 1000 #1
+OUT ack 1 0 none
+
+SETUP movevresult 2
+IN MOVE_V 150 500 1000 #1
+OUT ack 1 0 none
+OUT err 2 #1
+
+# GO_TO_R / GO_TO_W: identical wire shape, different frame -- the
+# handler does not distinguish them beyond the verb name itself.
+SETUP gotorresult 0
+IN GO_TO_R 300 -150 150 10 5000 #1
+OUT ack 1 0 none
+
+SETUP gotowresult 0
+IN GO_TO_W 300 -150 150 10 5000 #1
+OUT ack 1 0 none
+
+# ---- STOP: the ack alone on success; the optional `now` token
+# (docs/design/motion-api.md §3.7/§9.1) sits safely before the id since
+# the id is self-marking ----
+
 SETUP stopresult 0
 IN STOP #1
-OUT ack 1 0
+OUT ack 1 0 none
 
-# STOP rejected: ERR_BUSY (Result::kBusy, ordinal 7).
+SETUP stopresult 0
+IN STOP now #1
+OUT ack 1 0 none
+
 SETUP stopresult 7
 IN STOP #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 10 #1
 
-# STOP with no id at all is malformed -- STOP has no OTHER field, so
-# there is nothing left once the (missing) id is accounted for.
-IN STOP
-OUT NONE
+# A token that ISN'T the literal "now" is wrong arity -- a HANDLER-level
+# decode failure, so this NACKS (2026-08-22), not acks-then-errs.
+IN STOP later #1
+OUT nack 1 0 none
+OUT err 2 #1
 
-# ESTOP: docs/design/protocol.md S8.3 -- outside the sequence entirely,
-# maximally forgiving, and NOW REPLIES `estop` (superseding the old
-# "never acked" rule). Executed before the reply is written.
+# ESTOP: unsequenced, maximally forgiving, replies `estop`. Executed
+# before the reply is written.
 IN ESTOP
 OUT estop
 
-# ESTOP tolerates trailing junk, including something that LOOKS like a
-# sequence id -- it is never treated as one, and the stop still executes
-# and replies exactly the same way.
 IN ESTOP #5
 OUT estop
 
-# ---- Unknown verb / wrong arity under mandatory sequencing
-# (docs/design/protocol.md S8.4) ----
+# ---- Decode failure is a NAK (2026-08-22, docs/design/protocol.md
+# §8.9) -- the central behavior change this fixture exists to pin. Two
+# distinct cases, kept distinct: a decode failure (the line did not
+# arrive intact) NACKS and does NOT advance the sequence; a merits
+# rejection (SET's own unknown-field-name vector above) ACKS and
+# advances. ----
 
-# A totally UNKNOWN verb, in order, still gets an ack (it arrived fine)
-# plus an err (its content -- an unrecognized verb -- is rejected).
+# A totally UNKNOWN verb, in order: a decode failure -- NACK (naming
+# THIS SAME id, since it was never accepted) plus err. Compare against
+# the pre-2026-08-22 behavior this fixture used to show here: "ack 1 0"
+# followed by "err 1 #1" -- that shape is GONE.
 IN FROB 1 2 3 #1
-OUT ack 1 0
+OUT nack 1 0 none
 OUT err 1 #1
 
-# The same recovery on a KNOWN verb with wrong arity -- PING takes zero
-# data fields, so one extra field makes the line malformed; still acked
-# (in order) plus errored.
-IN PING extra #1
-OUT ack 1 0
+# The same recovery on a KNOWN verb with wrong arity -- ID takes zero
+# data fields, so one extra field is a decode failure too. Resending
+# the SAME id, now well-formed (still in the SAME block, so the
+# sequence state carries over), is what actually advances the sequence
+# -- proving the NACK really did hold #1 in place rather than silently
+# consuming it.
+IN ID extra #1
+IN ID #1
+OUT nack 1 0 none
 OUT err 2 #1
+OUT ack 1 0 none
+OUT id differential tovez 6.0.0
 
 # A sequenced verb whose only field is a MALFORMED id (no leading '#',
-# or non-digit content after one) cannot be sequence-classified at all --
-# no reply of any kind, matching the "no id at all" case exactly.
+# or non-digit content after one) cannot be sequence-classified at
+# all -- no reply of any kind, unaffected by this change (there is no
+# id to nack against).
 IN FROB notanid
 OUT NONE
 
-# ---- 6. Telemetry ----
+# ---- Telemetry ----
 
-# Spec S6.2's own literal worked example, verbatim in content:
-#   thdr seq now flags x y h ox oy oh
-#   t 412 38472 d8 -1234 892 1571 -1240 889 1573
-#   t 413 38504 d8 -1198 901 1571 -1205 898 1572
-# Two EMITs in one block: thdr is due once (column set has never been
-# seen), then t on every call thereafter -- PLUS the reliability layer's
-# own periodic line (docs/design/protocol.md S8.5), appended after each
-# frame. This handle has just been HELLO-reset and never accepted any
-# sequenced command, so expectedNext_ - 1 == 0 and lastDone_ == 0 on both
-# calls -- "ack 0 0" both times, proving the piggyback fires even with
-# nothing yet accepted.
+# Two EMITs in one block: thdr is due once, then t on every call
+# thereafter -- PLUS the reliability layer's own periodic line, now
+# carrying the reason token too. This handle has just been HELLO-reset
+# and never accepted any sequenced command, so "ack 0 0 none" both
+# times.
 EMIT seq:0:412 now:0:38472 flags:1:216 x:0:-1234 y:0:892 h:0:1571 ox:0:-1240 oy:0:889 oh:0:1573
 EMIT seq:0:413 now:0:38504 flags:1:216 x:0:-1198 y:0:901 h:0:1571 ox:0:-1205 oy:0:898 oh:0:1572
 OUT thdr seq now flags x y h ox oy oh
 OUT t 412 38472 d8 -1234 892 1571 -1240 889 1573
-OUT ack 0 0
+OUT ack 0 0 none
 OUT t 413 38504 d8 -1198 901 1571 -1205 898 1572
-OUT ack 0 0
+OUT ack 0 0 none
 
-# The same piggyback, but after a real command has been accepted first --
-# proves the "ack expectedNext_ - 1" arm reflects a REAL accepted id, not
-# just the boot-time 0.
+# The same piggyback, but after a real command has been accepted first.
 SETUP wheelsresult 0
-IN WHEELS 100 100 1000 #1
+IN WHEELS_V 100 100 1000 #1
 EMIT seq:0:1 now:0:2 x:0:3
-OUT ack 1 0
+OUT ack 1 0 none
 OUT thdr seq now x
 OUT t 1 2 3
-OUT ack 1 0
+OUT ack 1 0 none
 
-# The nack arm: a gap left outstanding by an out-of-order command keeps
-# producing nack at the telemetry rate until the gap is filled (docs/
-# design/protocol.md S8.5) -- here id #5 arrives on a freshly-reset
-# handle (expectedNext_ == 1), so it is a gap; the SAME missing id (1)
-# is what the periodic line keeps asking for. No fresh `thdr` here: the
-# column set ("seq now x") is IDENTICAL to the block just above, and
-# thdr/column-change tracking is NOT part of what a per-block HELLO
-# resets (only the reliability layer's own sequencing state is) -- see
-# test_golden_vectors' own docstring.
-IN WHEELS 100 100 1000 #5
+# The nack arm: a gap left outstanding keeps producing nack at the
+# telemetry rate until the gap is filled.
+IN WHEELS_V 100 100 1000 #5
 EMIT seq:0:1 now:0:2 x:0:3
-OUT nack 1 0
+OUT nack 1 0 none
 OUT t 1 2 3
-OUT nack 1 0
+OUT nack 1 0 none
 
-# ---- 7. debug: robot-to-host only, a rest-of-line verb like `help`'s
-# own reply, closing the v5 DBG:-flood incident structurally (a
-# lowercase-led inbound line can never dispatch as a command, spec S2.1)
-# -- entirely unaffected by the reliability layer, debug never carries
-# an id ----
+# ---- debug: robot-to-host only, unaffected by any of these changes ----
 
-# The DEBUG action drives ProtocolHandler::sendDebug() directly (an
-# unsolicited emission, like sendBanner/sendReady -- NOT fed through
-# feed(), because there is no wire form a host ever sends this on).
 DEBUG something happened
 OUT debug something happened
 
-# sendDebug("") and sendDebug(nullptr) are the SAME case and both emit
-# the bare "debug\n" line -- no trailing space before the terminator.
-# This fixture's own DEBUG action syntax has no way to spell a literal
-# nullptr (unlike the Python test suite, which calls the shim directly),
-# so this vector only covers the empty-string arm; the nullptr arm is
-# tests/protocol/test_protocol_harness.py's own
-# test_send_debug_null_and_empty_text_are_the_same_case.
 DEBUG
 OUT debug
 
-# A debug line fed back in as if it were INBOUND (e.g. an echo on a
-# shared radio channel, or another robot's own debug output) is dropped
-# SILENTLY -- it is lowercase-led, so it can never dispatch as a command
-# (spec S2.1) -- and does NOT count malformed.
 IN debug something happened
 OUT NONE
 
-# ---- 8. RUN: invocation by name (docs/design/protocol.md's RUN
-# section) -- the handler only parses; the adapter resolves the name,
-# converts arguments, invokes, and stringifies any return value. The id
-# is now mandatory and is stripped centrally before handleRun() ever
-# runs (S6.3, 2026-08-21) ----
+# ---- RUN: invocation by name -- unaffected in its OWN merits-rejection
+# codes (unknown function / bad arg are still the adapter's own call,
+# same as SET's unknown-field-name case), but its structural decode
+# failures (no function name at all; too many raw tokens) NOW NACK
+# rather than ack-then-err ----
 
-# Zero arguments, target function returns nothing (a void return --
-# adapter signals this by leaving hasResult false): the ack alone, same
-# as any other accepted id-carrying command with nothing further to say.
 SETUP runresult 0
 SETUP runhasresult 0
 IN RUN blink #1
-OUT ack 1 0
+OUT ack 1 0 none
 
-# Positional arguments, target function RETURNS a value: `ret <value>
-# #<id>`, emitted IN ADDITION to the ack -- a result is reported even
-# though the command also "succeeded" in the ack sense.
 SETUP runresult 0
 SETUP runhasresult 1
 SETUP runresulttext 42
 IN RUN add 19 23 #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT ret 42 #1
 
-# `#0` -- no longer special (S6.3) -- is unconditionally a stale
-# retransmit on a freshly-reset handle: the function does NOT run
-# (this fixture format can't observe the adapter's own call count
-# directly, but tests/protocol/test_protocol_harness.py's
-# test_run_id_zero_is_a_stale_retransmit_never_executes asserts it), and
-# the wire carries the ordinary retransmit ack, not a `ret`.
 SETUP runresult 0
 SETUP runhasresult 1
 SETUP runresulttext 42
 IN RUN add 19 23 #0
-OUT ack 0 0
+OUT ack 0 0 none
 
-# Unknown function name -- ERR_UNKNOWN (Result::kUnknown, ordinal 1),
-# the same code SET's own unknown-name arm produces (S8.3, historical
-# numbering) -- acked (in order) plus errored.
+# Unknown function name -- a MERITS rejection (the adapter's own call,
+# RUN's grammar was satisfied), so this still acks then errs.
 SETUP runresult 1
 IN RUN no_such_function #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 1 #1
 
-# Wrong arity, or an argument that will not convert to its target's
-# declared type -- ERR_BADARG (Result::kBadArg, ordinal 2), the
-# adapter's own call, not the handler's (the handler holds no arity
-# table for any registered function).
 SETUP runresult 2
 IN RUN add one two #1
-OUT ack 1 0
+OUT ack 1 0 none
 OUT err 2 #1
 
 # RUN with NO function name at all, but a well-formed id that consumes
-# the line's only field: still acked (it arrived, in order) plus errored
-# -- there is no function name left once the id is accounted for.
+# the line's only field -- a STRUCTURAL decode failure now (2026-08-22):
+# there is no function name left once the id is accounted for, so this
+# NACKS, it does not ack-then-err.
 IN RUN #1
-OUT ack 1 0
+OUT nack 1 0 none
 OUT err 2 #1
 
-# The bare-verb arm of the same rule: nothing at all after RUN, so there
-# is no id to sequence-check against either -- no reply of any kind.
+# The bare-verb arm of the same rule: nothing at all after RUN, so
+# there is no id to sequence-check against either -- no reply of any
+# kind, unaffected by this change.
 IN RUN
 OUT NONE

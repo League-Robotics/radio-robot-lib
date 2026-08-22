@@ -137,13 +137,42 @@ void phSetStatus(void* handle, int ready, int active, int connL, int connR,
 // `result` is Protocol::Result's DECLARATION-ORDER ordinal (adapter.h),
 // not a wire error code -- see test_protocol_harness.py's RESULT_*
 // constants, which mirror that same order.
-void phSetWheelsResult(void* handle, int result) {
+void phSetWheelsResult(void* handle, int result) {  // WHEELS_V
   static_cast<Handle*>(handle)->adapter.wheelsResult =
+      static_cast<Protocol::Result>(result);
+}
+void phSetWheelsXResult(void* handle, int result) {
+  static_cast<Handle*>(handle)->adapter.wheelsXResult =
+      static_cast<Protocol::Result>(result);
+}
+void phSetMoveXResult(void* handle, int result) {
+  static_cast<Handle*>(handle)->adapter.moveXResult =
+      static_cast<Protocol::Result>(result);
+}
+void phSetMoveVResult(void* handle, int result) {
+  static_cast<Handle*>(handle)->adapter.moveVResult =
+      static_cast<Protocol::Result>(result);
+}
+void phSetGoToRResult(void* handle, int result) {
+  static_cast<Handle*>(handle)->adapter.goToRResult =
+      static_cast<Protocol::Result>(result);
+}
+void phSetGoToWResult(void* handle, int result) {
+  static_cast<Handle*>(handle)->adapter.goToWResult =
       static_cast<Protocol::Result>(result);
 }
 void phSetStopResult(void* handle, int result) {
   static_cast<Handle*>(handle)->adapter.stopResult =
       static_cast<Protocol::Result>(result);
+}
+// `reason` is Protocol::DoneReason's DECLARATION-ORDER ordinal
+// (adapter.h) -- see test_protocol_harness.py's DONE_* constants.
+void phSetLastDone(void* handle, uint32_t lastDone) {
+  static_cast<Handle*>(handle)->adapter.lastDoneToReturn = lastDone;
+}
+void phSetLastDoneReason(void* handle, int reason) {
+  static_cast<Handle*>(handle)->adapter.lastDoneReasonToReturn =
+      static_cast<Protocol::DoneReason>(reason);
 }
 void phSetSetResult(void* handle, int result) {
   static_cast<Handle*>(handle)->adapter.setResult =
@@ -184,11 +213,97 @@ uint32_t phLastWheelsId(void* handle) {
   return static_cast<Handle*>(handle)->adapter.lastWheelsId;
 }
 
+int phWheelsXCalls(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.wheelsXCalls;
+}
+float phLastWheelsXLeft(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastWheelsXLeft;
+}
+float phLastWheelsXRight(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastWheelsXRight;
+}
+float phLastWheelsXCruise(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastWheelsXCruise;
+}
+uint32_t phLastWheelsXTimeout(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastWheelsXTimeout;
+}
+
+int phMoveXCalls(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.moveXCalls;
+}
+float phLastMoveXDistance(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastMoveXDistance;
+}
+float phLastMoveXRotation(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastMoveXRotation;
+}
+float phLastMoveXCruise(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastMoveXCruise;
+}
+uint32_t phLastMoveXTimeout(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastMoveXTimeout;
+}
+
+int phMoveVCalls(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.moveVCalls;
+}
+float phLastMoveVVx(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastMoveVVx;
+}
+float phLastMoveVOmega(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastMoveVOmega;
+}
+uint32_t phLastMoveVDuration(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastMoveVDuration;
+}
+
+int phGoToRCalls(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.goToRCalls;
+}
+float phLastGoToRX(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToRX;
+}
+float phLastGoToRY(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToRY;
+}
+float phLastGoToRSpeed(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToRSpeed;
+}
+float phLastGoToRArrive(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToRArrive;
+}
+uint32_t phLastGoToRTimeout(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToRTimeout;
+}
+
+int phGoToWCalls(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.goToWCalls;
+}
+float phLastGoToWX(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToWX;
+}
+float phLastGoToWY(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToWY;
+}
+float phLastGoToWSpeed(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToWSpeed;
+}
+float phLastGoToWArrive(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToWArrive;
+}
+uint32_t phLastGoToWTimeout(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastGoToWTimeout;
+}
+
 int phStopCalls(void* handle) {
   return static_cast<Handle*>(handle)->adapter.stopCalls;
 }
 uint32_t phLastStopId(void* handle) {
   return static_cast<Handle*>(handle)->adapter.lastStopId;
+}
+int phLastStopImmediate(void* handle) {
+  return static_cast<Handle*>(handle)->adapter.lastStopImmediate ? 1 : 0;
 }
 
 int phEstopCalls(void* handle) {
