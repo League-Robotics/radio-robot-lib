@@ -154,9 +154,10 @@ class DiffDriveAdapter : public Adapter {
   // is accepted but has no behavioral effect here: neutral() has always
   // been immediate at the kernel level regardless (docs/design/
   // protocol.md §5.1 -- "both are immediate at the kernel level", there
-  // being no ramp/queue in this library to choose between). A future
-  // adapter that DOES own a ramp is where this flag would first make a
-  // real difference.
+  // being no ramp/queue in THIS ADAPTER to choose between -- a property
+  // of DiffDriveAdapter having no planner, not a limit the protocol
+  // imposes on every adapter). A future adapter that DOES own a ramp is
+  // where this flag would first make a real difference.
   Result onStop(bool immediate, uint32_t id) override;  // -> neutral()
   void onEstop() override;               // -> DifferentialDrive::estop()
 
@@ -167,12 +168,17 @@ class DiffDriveAdapter : public Adapter {
 
   Result onTlm(TlmMode mode) override;
 
-  // This library has no motion queue and no completion event of its own
+  // THIS ADAPTER has no motion queue and no completion event of its own
   // (docs/design/protocol.md §8.8.1) -- WHEELS_V has no stop condition,
   // it just holds a velocity for `duration` and lets the lease expire,
   // which is not a "completion" this adapter can observe. Both always
   // report the inert default (0 / kNone); wire-correct, functionally
-  // dead on this adapter specifically.
+  // dead on this adapter specifically. This is DiffDriveAdapter's own
+  // property (no planner), NOT a statement about the protocol's own
+  // guarantees -- an adapter that owns a planner (tests/protocol/
+  // fake_motion_adapter.h) queues motion commands and runs them to
+  // completion one at a time, in arrival order, making these two
+  // methods genuinely live.
   uint32_t lastDone() const override { return 0; }
   DoneReason lastDoneReason() const override { return DoneReason::kNone; }
 

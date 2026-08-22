@@ -17,33 +17,45 @@ cumulative `ack` retires every earlier buffered command in one shot,
 and a `nack` triggers an automatic resend of everything still buffered
 from the named id forward, in order.
 
----- A real gap this file's own existence exposed (read before pipelining
-motion commands against FakeMotionAdapter/DiffDriveAdapter) ----
+---- Ordered execution is guaranteed -- pipeline motion commands freely
+against a real queue (corrected 2026-08-22) ----
 
-The reliability layer's pipelining guarantee ("never block waiting for
-an ack") and this repo's own motion adapters' complete absence of a
-queue (docs/design/protocol.md S5.1: "there is no queue in this
-library") are in tension, and nothing on the WIRE says so. Every motion
-verb's own adapter method (`onWheelsV`/`onMoveX`/...) unconditionally
-overwrites whatever motion was previously "active" -- there is no
-`ERR_BUSY` refusal for arriving mid-move (`Result::kBusy` exists in the
-wire's own error-code space, S6.1's code 10, but neither
-`FakeMotionAdapter` nor `DiffDriveAdapter` ever returns it). So
-pipelining TWO motion commands ahead of the first one's own completion
-is wire-legal, decodes fine, sequences and acks correctly -- and
-STILL silently discards the first command's own motion effect the
-instant the second one dispatches, because `beginMotion()` just
-clobbers `activeId`/`activeKind` with no queue behind it. A caller
-resending a multi-command backlog after a `nack` hits this exact
-seam: the resend burst delivers every buffered id back-to-back with no
-pacing, so on a queue-less adapter only the LAST one in that burst
-actually gets to run. **For a queue-less adapter, wait for
-`wait_for_done()` on one motion command before sending the next --
-pipelining is safe (and intended) for order-independent commands
-(GET/SET/STATUS/PING), not for a sequence of motions on this repo's
-own test adapters.** See `tests/host/robot_v6/test_reliability.py`'s
-own paired tests (one pipelined-and-clobbered, one paced-and-clean) for
-this pinned down as an executable example rather than only prose.
+An earlier version of this file reported the opposite here: that the
+reliability layer's pipelining guarantee ("never block waiting for an
+ack") was in tension with this repo's own motion adapters having no
+queue, and that pipelining two motion commands ahead of the first one's
+own completion could silently discard the first one's motion effect.
+That was a defect in `FakeMotionAdapter` (`tests/protocol/
+fake_motion_adapter.h`), not a protocol design gap. Stakeholder,
+verbatim, correcting it: "The system absolutely does give you ordered
+execution. The Reliability Layer's job is to get commands to the Motion
+Layer. The Motion Layer will execute them in order... You have to
+explicitly replace things. You can't put them out of order."
+
+`FakeMotionAdapter` now owns a real, fixed-capacity FIFO motion queue: a
+motion command arriving while one is already active QUEUES behind it
+and later runs to its own completion, in turn -- it never supersedes
+the running one. This class's own pipelining (`send()` never blocking,
+an automatic unpaced resend of a whole buffered backlog after a `nack`)
+is exactly what the stakeholder's own scenario needs and is now safe to
+rely on for a sequence of motions, not just for order-independent
+commands (GET/SET/STATUS/PING). See
+`tests/host/robot_v6/test_reliability.py`'s own flagship scenario (eight
+pipelined motion commands, one dropped and resent, all eight completing
+exactly once in order) for this proven as an executable example.
+
+`DiffDriveAdapter` (`src/adapter/`) is a DIFFERENT case, correctly
+described the same way both before and after this correction: its one
+implemented verb, `WHEELS_V`, is a continuous velocity HOLD with no stop
+condition and no completion event of its own (`lastDone()` always
+reports 0/`none`) -- each new `WHEELS_V` is *meant* to immediately
+replace the held velocity, by design, the same way a joystick's current
+reading always overrides its previous one. There is nothing to queue
+there and nothing gets silently discarded by pipelining WHEELS_V against
+it; the concern this section describes applies to adapters that
+implement bounded, completing motions (this repo's own
+`FakeMotionAdapter`), not to `DiffDriveAdapter`'s own teleport-style
+hold.
 """
 
 from __future__ import annotations

@@ -108,6 +108,16 @@ int fmEstopCalls(void* handle) {
   return static_cast<Handle*>(handle)->adapter.estopCalls;
 }
 
+// ---- the motion queue (2026-08-22) --------------------------------------
+
+int fmQueuedCount(void* handle) {
+  return static_cast<int>(static_cast<Handle*>(handle)->adapter.queuedCount());
+}
+uint32_t fmQueuedIdAt(void* handle, int offset) {
+  return static_cast<Handle*>(handle)->adapter.queuedIdAt(
+      static_cast<size_t>(offset));
+}
+
 void fmEmitTelemetryIfActive(void* handle) {
   Handle* h = static_cast<Handle*>(handle);
   h->handler.emitTelemetry(h->adapter.buildSnapshot());

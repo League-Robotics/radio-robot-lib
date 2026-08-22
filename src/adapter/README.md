@@ -26,16 +26,25 @@ of the others and hold the one thing neither of them is allowed to know
   them real effect. `kUnknown`, not `kUnimplemented`, matching the same
   posture `RUN`'s own empty registration table already takes (see below).
 - **`STOP [now]`** → `neutral()`, immediate regardless of the `now`
-  flag (there is no ramp to choose between), no queue (there is none).
+  flag (there is no ramp to choose between). No queue **on this adapter**
+  (see below) — a property of `DiffDriveAdapter` having no planner, not a
+  limit the protocol imposes on every adapter.
   **`ESTOP`** → `estop()`, latched, never acked. Neither ramps — see
   `docs/design/protocol.md` §5.1 for why they are not "smooth vs instant"
   and diffdrive.md §3.2 for the kernel-level detail.
 - **`lastDone()`/`lastDoneReason()`** → always `0`/`kNone`. This adapter
-  has no queue and no completion event of its own (`WHEELS_V` has no stop
-  condition), so the reliability layer's completion channel
-  (`docs/design/protocol.md` §8.8) is wire-correct but permanently inert
-  here — see `tests/protocol/fake_motion_adapter.h` for an adapter that
-  makes it genuinely live.
+  has no queue and no completion event of its own (`WHEELS_V` is a
+  continuous velocity hold with no stop condition — each new `WHEELS_V` is
+  *meant* to immediately replace the held velocity, not queue behind it),
+  so the reliability layer's completion channel (`docs/design/protocol.md`
+  §8.8) is wire-correct but permanently inert here. This is `DiffDriveAdapter`'s
+  own property, not the protocol's: `tests/protocol/fake_motion_adapter.h`
+  is a different, planner-shaped `Adapter` that queues motion commands and
+  runs them to completion one at a time, in arrival order, making the same
+  completion channel genuinely live — see that file's own header comment.
+  The reliability layer guarantees ordered DELIVERY of commands to
+  whichever adapter is wired in; whether that adapter then queues or holds
+  is the adapter's own choice, not something the wire dictates.
 - **`GET`/`SET`** → 15 `wheel_control.*` fields, mapped 1:1 onto
   `DifferentialDrive::Config`'s plain-float members. Pure delegation: no
   field table lives here beyond a name→member-offset map, and no value

@@ -6,18 +6,26 @@ real sim subprocess: deterministic step() pacing, no wall clock).
 
 The stakeholder's own acceptance scenario is
 test_dropped_command_in_a_square_tour_is_nacked_and_resent_and_completes
-below. Read reliability.py's own module docstring FIRST -- it documents
-a real, non-obvious interaction this test file's own development
-surfaced: pipelining more than one MOTION command ahead of its own
-completion, against an adapter with no queue (this repo's own
-FakeMotionAdapter/DiffDriveAdapter, docs/design/protocol.md S5.1), lets
-a later command's dispatch silently clobber an earlier one's still-
-running motion before it can finish -- including inside an AUTOMATIC
-resend burst, since `_maybe_resend_from()` fires a whole backlog with
-no pacing between lines. `test_pipelining_two_motions_...` below pins
-that down in isolation; the flagship test avoids it entirely by
-probing recovery with STATUS (which cannot clobber a motion) rather
-than with a second motion command.
+below: eight motion commands (four legs, four turns), one dropped mid-
+sequence, nacked, resent, and every one of the eight completing exactly
+once, in arrival order.
+
+**Corrected 2026-08-22** -- an earlier version of this file reported the
+opposite as a protocol design defect: that pipelining a second MOTION
+command ahead of the first one's own completion let the later one
+silently clobber the earlier one's still-running motion, because
+FakeMotionAdapter had no queue. Stakeholder, verbatim, on that report:
+"The system absolutely does give you ordered execution. The Reliability
+Layer's job is to get commands to the Motion Layer. The Motion Layer
+will execute them in order... You have to explicitly replace things."
+That was right, and the bug was in the test double, not the protocol --
+FakeMotionAdapter (tests/protocol/fake_motion_adapter.h) now owns a real
+FIFO motion queue: a command arriving while one is active QUEUES behind
+it and later runs to its own completion, in turn. Every test below,
+including the one that used to be named
+`test_pipelining_two_motions_past_an_unpaced_resend_lets_the_later_one_clobber_the_earlier`,
+now demonstrates queuing/ordering rather than working around its
+absence.
 """
 
 from __future__ import annotations
@@ -123,18 +131,22 @@ def test_single_motion_command_acks_then_reports_done(inner):
 # THE FLAGSHIP SCENARIO. Stakeholder, verbatim: "If you're driving a
 # square and you've got eight movements you send, and you lose a turn,
 # the whole square is wrong. The best thing to do there is to NAK and
-# resend from that point on."
+# resend from that point on." Eight movements, four legs and four turns
+# -- the stakeholder's own example, spelled out literally rather than
+# reduced to four.
 #
-# Each leg is driven to full completion (ack AND lastDone) before the
-# next is SENT. When leg 3 is lost, recovery is triggered by probing
-# with STATUS rather than blindly sending leg 4 -- a STATUS probe
-# cannot clobber leg 3's motion once the automatic resend re-delivers
-# it (only another motion verb could -- see the paired characterization
-# test below), so this is the safe way to surface the nack. The
-# result satisfies the dispatch's own three-part acceptance criterion
-# in the strongest sense: the host detects the nack, resends from the
-# missing id, and every leg's motion genuinely completes, in order,
-# exactly once.
+# This is the REAL scenario now, not a STATUS-probe workaround: recovery
+# from the drop is triggered by sending the very NEXT MOTION COMMAND
+# (movement 4), not a side probe -- FakeMotionAdapter's real FIFO queue
+# means that command QUEUES behind movement 3's own resend instead of
+# clobbering it, exactly as the stakeholder insisted the system already
+# guarantees. Movements 5-8 are pipelined in pairs (sent before the
+# first of the pair has even been stepped) purely to keep exercising the
+# queue rather than pacing every single command one at a time. The
+# result satisfies the dispatch's own three-part acceptance criterion in
+# the strongest sense: the host detects the nack, resends from the
+# missing id, and all eight movements genuinely complete, in order,
+# exactly once, each producing its own lastDone/lastDoneReason.
 # ---------------------------------------------------------------------------
 
 def test_dropped_command_in_a_square_tour_is_nacked_and_resent_and_completes(inner):
@@ -142,61 +154,93 @@ def test_dropped_command_in_a_square_tour_is_nacked_and_resent_and_completes(inn
     session = Session(transport)
     inner.set_steps_to_complete(1)
 
-    legs = [(100, 100), (100, -100), (150, 150), (150, -150)]  # 4 of the "8"
+    # Four legs and four turns -- all eight of the stakeholder's own
+    # "eight movements" example, each with distinct left/right speeds so
+    # a reordering or aliasing bug would be visible, not just "some
+    # WHEELS_V ran".
+    movements = [
+        (100, 100), (100, -100), (150, 150), (150, -150),
+        (200, 200), (200, -200), (250, 250), (250, -250),
+    ]
 
-    id1 = session.send("WHEELS_V", *legs[0], 500)
+    id1 = session.send("WHEELS_V", *movements[0], 500)
     _drive_and_settle(inner, session, id1)
     assert session.last_done == id1
 
-    id2 = session.send("WHEELS_V", *legs[1], 500)
+    id2 = session.send("WHEELS_V", *movements[1], 500)
     _drive_and_settle(inner, session, id2)
     assert session.last_done == id2
 
-    # Leg 3 -- DROPPED before it ever reaches the fake robot.
-    id3 = session.send("WHEELS_V", *legs[2], 500)
-    assert transport.dropped_outbound, "leg 3's own line must have been dropped"
+    # Movement 3 -- DROPPED before it ever reaches the fake robot.
+    id3 = session.send("WHEELS_V", *movements[2], 500)
+    assert transport.dropped_outbound, "movement 3's own line must have been dropped"
     assert not session.wait_for_ack(id3, timeout=0.3), (
-        "leg 3 was never delivered -- nothing can ack it yet")
-    assert inner.active() is False, "leg 3 must not have started running"
+        "movement 3 was never delivered -- nothing can ack it yet")
+    assert inner.active() is False, "movement 3 must not have started running"
 
-    # Probe with STATUS, not the next motion -- this surfaces the nack
-    # (id > expectedNext_) without risking the automatic resend's OWN
-    # burst clobbering leg 3's motion the instant it restarts.
-    probe_id = session.send("STATUS")
-    session.pump(0.3)  # observe nack(3) and let Session auto-resend id3+probe_id
+    # Recover with the NEXT REAL MOTION COMMAND, not a STATUS dodge --
+    # sending it surfaces the nack (id > expectedNext_) exactly the same
+    # way a probe would, and once the automatic resend restarts movement
+    # 3, movement 4's own resend QUEUES behind it instead of clobbering
+    # it.
+    id4 = session.send("WHEELS_V", *movements[3], 500)
+    session.pump(0.3)  # observe nack(3); Session auto-resends id3 and id4
 
-    assert inner.active_id() == id3, (
-        "the automatic resend must have reached the fake robot with "
-        "leg 3's OWN id, and the STATUS probe resent alongside it must "
-        "not have disturbed it (STATUS has no motion side effect)")
+    assert inner.active_id() == id3, "the resend must restart movement 3 with its own id"
 
     _drive_and_settle(inner, session, id3)
-    assert session.last_done == id3, "leg 3 must complete before leg 4 is even sent"
-    assert session.wait_for_ack(probe_id, timeout=1.0)
-
-    # Leg 4, the tour's last movement, now runs normally.
-    id4 = session.send("WHEELS_V", *legs[3], 500)
+    assert session.last_done == id3
+    assert inner.active_id() == id4, (
+        "movement 4 must now be running -- QUEUED behind movement 3, "
+        "never clobbering it")
     _drive_and_settle(inner, session, id4)
-
     assert session.last_done == id4
-    assert session.highest_acked == id4
+
+    # Movements 5-8: pipelined two at a time (sent before the first of
+    # each pair is even stepped) to keep proving the queue works, not
+    # just recovering from a drop.
+    id5 = session.send("WHEELS_V", *movements[4], 500)
+    id6 = session.send("WHEELS_V", *movements[5], 500)
+    session.pump(0.3)
+    assert inner.active_id() == id5, "movement 5 runs first"
+    _drive_and_settle(inner, session, id5)
+    assert session.last_done == id5
+    assert inner.active_id() == id6, "movement 6 QUEUED behind movement 5"
+    _drive_and_settle(inner, session, id6)
+    assert session.last_done == id6
+
+    id7 = session.send("WHEELS_V", *movements[6], 500)
+    id8 = session.send("WHEELS_V", *movements[7], 500)
+    session.pump(0.3)
+    assert inner.active_id() == id7, "movement 7 runs first"
+    _drive_and_settle(inner, session, id7)
+    assert session.last_done == id7
+    assert inner.active_id() == id8, "movement 8 QUEUED behind movement 7"
+    _drive_and_settle(inner, session, id8)
+    assert session.last_done == id8
+
+    # lastDone advanced MONOTONICALLY through all eight movements, each
+    # producing its own completion -- exactly what "the Motion Layer
+    # will execute them in order" means, proven end to end.
+    assert session.last_done == id8
+    assert session.highest_acked == id8
     assert session.pending_count == 0
 
 
-def test_pipelining_two_motions_past_an_unpaced_resend_lets_the_later_one_clobber_the_earlier(
+def test_pipelining_two_motions_past_an_unpaced_resend_queues_the_later_one_behind_the_earlier(
         inner):
-    """The characterization the module docstring promises: if the
-    RECOVERY probe is a second MOTION command instead of STATUS -- i.e.
-    both the lost command and its follow-up are still pending when the
-    nack fires -- FakeMotionAdapter's own lack of a queue means the
-    automatic resend's LAST line to arrive is the one left "active";
-    an EARLIER one in the same burst can be dispatched and acked and
-    then immediately overwritten before it ever gets a step(). This is
-    not a Session bug: the ACK stream is still perfectly correct (every
-    id acked in order, `highest_acked` tracks correctly) -- it is an
-    emergent property of pairing an automatic multi-item resend with a
-    queue-less adapter, which is exactly why the flagship test above
-    probes with STATUS instead."""
+    """FakeMotionAdapter now owns a real FIFO motion queue (see its own
+    file header), so this is no longer a characterization of a clobber
+    bug: even when the automatic resend's two lines dispatch back to
+    back with no step() in between, the SECOND one QUEUES behind the
+    first rather than overwriting it. Both motions run to completion, in
+    order, each producing its own lastDone/lastDoneReason -- exactly
+    what the stakeholder's own correction insisted the system already
+    guarantees: "The Motion Layer will execute them in order... You
+    have to explicitly replace things. You can't put them out of
+    order." The ACK stream was never the problem here (every id was
+    always acked in order, `highest_acked` always tracked correctly);
+    what changed is that the motion EFFECT now matches it."""
     transport = LossyTransport(inner, drop_outbound={1})
     session = Session(transport)
     inner.set_steps_to_complete(5)  # long enough that neither leg would
@@ -208,18 +252,29 @@ def test_pipelining_two_motions_past_an_unpaced_resend_lets_the_later_one_clobbe
 
     session.pump(0.3)  # nack(1) arrives on id2's own reply; Session
                         # resends BOTH id1 and id2, back to back, with
-                        # no step() in between -- id1 dispatches and is
-                        # immediately overwritten by id2's own dispatch.
-    assert inner.active_id() == id2, (
-        "id2's own resend clobbers id1's still-just-started motion "
-        "before id1 ever advances -- the documented characterization")
+                        # no step() in between -- id1 dispatches and
+                        # STAYS active; id2 queues behind it.
+    assert inner.active_id() == id1, (
+        "id1 remains the ACTIVE motion -- id2's resend queues behind "
+        "it instead of clobbering it")
 
-    inner.step()
-    assert session.wait_for_ack(id2, timeout=1.0)
+    for _ in range(5):  # stepsToComplete
+        inner.step()
+    inner.emit_telemetry()
+    session.pump(0.3)
+    assert session.last_done == id1, "id1 completes FIRST, on its own"
+    assert session.last_done_reason == "stop"
+    assert inner.active_id() == id2, "id2 is now the active motion, promoted from the queue"
+
+    for _ in range(5):  # stepsToComplete
+        inner.step()
+    inner.emit_telemetry()
+    session.pump(0.3)
+    assert session.last_done == id2, "id2 completes SECOND, with its own done"
     assert session.highest_acked == 2, (
-        "the ACK stream is still correct even though id1's motion "
-        "effect was superseded -- both ids were, individually, "
-        "delivered, decoded, and acked in order")
+        "the ACK stream was always correct -- both ids were, "
+        "individually, delivered, decoded, and acked in order -- and "
+        "now the motion effect matches it: neither was superseded")
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +329,11 @@ def test_dropped_nack_self_heals_via_a_later_commands_own_nack(inner):
     session.pump(0.3)
     assert transport.dropped_inbound, "the first nack(3) must have been dropped"
     assert session.pending_count == 2, "no resend must have happened yet"
-    assert inner.active_id() == id2, (
-        "leg 2 (never stepped to completion in this test) must still be "
-        "the active motion -- leg 3 must not have run at all")
+    assert inner.active_id() == id1, (
+        "leg 1 (never stepped to completion in this test) remains the "
+        "active motion -- leg 2 QUEUES behind it now instead of "
+        "clobbering it, and leg 3 must not have run (or even been "
+        "queued) at all")
 
     # A further, unrelated well-formed command re-triggers a FRESH
     # nack(3) (docs/design/protocol.md S8.1: "every subsequent
@@ -284,8 +341,11 @@ def test_dropped_nack_self_heals_via_a_later_commands_own_nack(inner):
     session.send("STATUS")
     session.pump(0.3)
 
-    assert inner.active_id() == id3, "the resend must now have reached the adapter"
-    _drive_and_settle(inner, session, id3)
+    # id3's resend reaches the adapter and QUEUES behind legs 1 and 2
+    # (neither has been stepped to completion in this test) instead of
+    # clobbering them -- draining all three in arrival order (steps=3)
+    # is exactly what proves the resend actually landed.
+    _drive_and_settle(inner, session, id3, steps=3)
     assert session.last_done == id3
 
 

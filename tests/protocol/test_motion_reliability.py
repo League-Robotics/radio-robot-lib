@@ -132,6 +132,11 @@ def _load_shim(tmp_path):
     lib.fmEmitTelemetryIfActive.argtypes = [ctypes.c_void_p]
     lib.fmEmitTelemetryIfActive.restype = None
 
+    lib.fmQueuedCount.argtypes = [ctypes.c_void_p]
+    lib.fmQueuedCount.restype = ctypes.c_int
+    lib.fmQueuedIdAt.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.fmQueuedIdAt.restype = ctypes.c_uint32
+
     return lib
 
 
@@ -526,5 +531,196 @@ def test_garbled_motion_command_is_nacked_not_acked_and_never_executes(tmp_path)
         _feed(lib, handle, "WHEELS_V 100 -100 500 #2\n")
         assert lib.fmActiveId(handle) == 2
         assert _sink_lines(lib, handle) == [_ack_line(2, 1, DONE_STOP)]
+    finally:
+        lib.fmDestroy(handle)
+
+
+# ---------------------------------------------------------------------------
+# 6. The motion queue (2026-08-22). Stakeholder, verbatim, correcting an
+# earlier report that treated the absence of a queue as an open protocol
+# design question: "Well, then put a fucking motion queue in it... The
+# system absolutely does give you ordered execution... You have to
+# explicitly replace things. You can't put them out of order."
+#
+# FakeMotionAdapter (fake_motion_adapter.h) now owns a real, fixed-
+# capacity FIFO: a motion command arriving while one is active QUEUES
+# behind it rather than superseding it, a full queue is refused with
+# `Result::kFull` (ERR_FULL), and STOP/ESTOP both drain the queued
+# remainder (rather than letting it silently continue) when they end
+# the active motion -- see that file's own header comment for the full
+# rationale, especially why STOP/ESTOP drain while forceAbort() does not.
+# ---------------------------------------------------------------------------
+
+def test_queued_motions_run_to_completion_in_arrival_order_not_just_the_last(tmp_path):
+    """Three motions dispatched back to back, with no step() in
+    between: the second and third QUEUE behind the first rather than
+    clobbering it, and each produces its OWN lastDone/lastDoneReason in
+    turn as step() drains them -- not just the last one dispatched."""
+    lib = _load_shim(tmp_path)
+    handle = lib.fmCreate()
+    try:
+        lib.fmSetStepsToComplete(handle, 1)
+        _feed(lib, handle, "WHEELS_V 100 100 500 #1\n")
+        assert lib.fmActiveId(handle) == 1
+        assert lib.fmQueuedCount(handle) == 0
+
+        _feed(lib, handle, "WHEELS_V 150 150 500 #2\n")
+        assert lib.fmActiveId(handle) == 1, "id1 stays active -- id2 queues"
+        assert lib.fmQueuedCount(handle) == 1
+        assert lib.fmQueuedIdAt(handle, 0) == 2
+
+        _feed(lib, handle, "WHEELS_V 200 200 500 #3\n")
+        assert lib.fmActiveId(handle) == 1, "id1 is still active -- id3 queues too"
+        assert lib.fmQueuedCount(handle) == 2
+        assert lib.fmQueuedIdAt(handle, 0) == 2
+        assert lib.fmQueuedIdAt(handle, 1) == 3
+
+        lib.fmStep(handle)  # completes id1, promotes id2
+        assert lib.fmLastDone(handle) == 1
+        assert lib.fmLastDoneReason(handle) == DONE_STOP
+        assert lib.fmActiveId(handle) == 2
+        assert lib.fmQueuedCount(handle) == 1
+
+        lib.fmStep(handle)  # completes id2, promotes id3
+        assert lib.fmLastDone(handle) == 2
+        assert lib.fmActiveId(handle) == 3
+        assert lib.fmQueuedCount(handle) == 0
+
+        lib.fmStep(handle)  # completes id3, nothing left
+        assert lib.fmLastDone(handle) == 3
+        assert lib.fmActive(handle) == 0
+        assert lib.fmQueuedCount(handle) == 0
+    finally:
+        lib.fmDestroy(handle)
+
+
+def test_queue_full_returns_err_full_and_leaves_the_queue_undisturbed(tmp_path):
+    """Filling the queue to its fixed capacity (kMaxQueueDepth == 5,
+    behind the one active motion) and sending one more must be refused
+    with `ERR_FULL` (wire code 4) -- a MERITS rejection, so the sequence
+    still advances (ack AND err, docs/design/protocol.md §8.9), but the
+    existing active motion and queue contents are completely
+    undisturbed."""
+    lib = _load_shim(tmp_path)
+    handle = lib.fmCreate()
+    try:
+        lib.fmSetStepsToComplete(handle, 10)  # long-lived -- nothing
+                                               # completes on its own here
+        _feed(lib, handle, "WHEELS_V 100 100 500 #1\n")
+        assert lib.fmActiveId(handle) == 1
+
+        for i in range(2, 7):  # ids 2..6 -- five more, filling the queue
+            _feed(lib, handle, f"WHEELS_V {100 + i} {100 + i} 500 #{i}\n")
+        assert lib.fmQueuedCount(handle) == 5, "queue must be at capacity"
+        lib.fmSinkClear(handle)
+
+        # id7 -- the queue has no room left.
+        _feed(lib, handle, "WHEELS_V 999 999 500 #7\n")
+        assert _sink_lines(lib, handle) == [_ack_line(7, 0, DONE_NONE), "err 4 #7"]
+        assert lib.fmQueuedCount(handle) == 5, "the queue must be UNCHANGED"
+        assert lib.fmActiveId(handle) == 1, "the active motion must be UNCHANGED"
+        for offset, expected_id in enumerate(range(2, 7)):
+            assert lib.fmQueuedIdAt(handle, offset) == expected_id, (
+                "no queued entry may have been disturbed by the refusal")
+    finally:
+        lib.fmDestroy(handle)
+
+
+def test_stop_drains_the_queued_remainder(tmp_path):
+    """STOP completes the ACTIVE motion (reason kStop) and DRAINS
+    whatever is still queued behind it -- this file's own resolution of
+    "what happens to the rest of the plan when the host says stop":
+    draining, not letting it silently continue, matches "you have to
+    explicitly replace things" (fake_motion_adapter.h's own header
+    comment has the full rationale). The drained motions never run and
+    produce no completion event of their own."""
+    lib = _load_shim(tmp_path)
+    handle = lib.fmCreate()
+    try:
+        lib.fmSetStepsToComplete(handle, 10)
+        _feed(lib, handle, "WHEELS_V 100 100 500 #1\n")
+        _feed(lib, handle, "WHEELS_V 150 150 500 #2\n")
+        _feed(lib, handle, "WHEELS_V 200 200 500 #3\n")
+        assert lib.fmActiveId(handle) == 1
+        assert lib.fmQueuedCount(handle) == 2
+
+        _feed(lib, handle, "STOP #4\n")
+        assert lib.fmActive(handle) == 0, "STOP must end the active motion"
+        assert lib.fmLastDone(handle) == 1, "only leg 1 (the active one) completes"
+        assert lib.fmLastDoneReason(handle) == DONE_STOP
+        assert lib.fmQueuedCount(handle) == 0, "legs 2 and 3 must be DRAINED"
+
+        # Stepping after a drain does nothing -- there is nothing left
+        # to run, and legs 2/3 never get their own completion.
+        for _ in range(10):
+            lib.fmStep(handle)
+        assert lib.fmActive(handle) == 0
+        assert lib.fmLastDone(handle) == 1
+    finally:
+        lib.fmDestroy(handle)
+
+
+def test_estop_completes_active_and_clears_the_queue(tmp_path):
+    """The ticket's own named scenario, extended to the queue: "a panic
+    stop must not leave five legs armed to run afterwards." ESTOP
+    completes the active motion with reason kEstop AND clears every
+    motion still queued behind it, same as STOP but for the fault
+    path."""
+    lib = _load_shim(tmp_path)
+    handle = lib.fmCreate()
+    try:
+        lib.fmSetStepsToComplete(handle, 10)
+        _feed(lib, handle, "MOVE_X 400 0 200 5000 #1\n")
+        _feed(lib, handle, "MOVE_X 400 0 200 5000 #2\n")
+        _feed(lib, handle, "MOVE_X 400 0 200 5000 #3\n")
+        lib.fmStep(handle)
+        assert lib.fmActiveId(handle) == 1
+        assert lib.fmQueuedCount(handle) == 2
+        lib.fmSinkClear(handle)
+
+        _feed(lib, handle, "ESTOP\n")
+        assert _sink_lines(lib, handle) == ["estop"]
+        assert lib.fmActive(handle) == 0, "the in-flight move must have ended"
+        assert lib.fmLastDone(handle) == 1
+        assert lib.fmLastDoneReason(handle) == DONE_ESTOP
+        assert lib.fmQueuedCount(handle) == 0, (
+            "legs 2 and 3 must be cleared -- not left armed to run once "
+            "the estop is cleared")
+        assert lib.fmEstopCalls(handle) == 1
+
+        # Nothing left to run.
+        for _ in range(10):
+            lib.fmStep(handle)
+        assert lib.fmActive(handle) == 0
+        assert lib.fmLastDone(handle) == 1
+    finally:
+        lib.fmDestroy(handle)
+
+
+def test_forceabort_completes_only_the_active_motion_and_the_queue_continues(tmp_path):
+    """Unlike STOP/ESTOP, forceAbort() (the test-only stand-in for "the
+    host-side caller abandoned it", motion-api.md §5.1) abandons only
+    the ONE active motion -- it is not a request to cancel the whole
+    plan, so whatever is queued behind it is promoted and runs
+    normally."""
+    lib = _load_shim(tmp_path)
+    handle = lib.fmCreate()
+    try:
+        lib.fmSetStepsToComplete(handle, 10)
+        _feed(lib, handle, "WHEELS_V 100 100 500 #1\n")
+        _feed(lib, handle, "WHEELS_V 150 150 500 #2\n")
+        assert lib.fmActiveId(handle) == 1
+        assert lib.fmQueuedCount(handle) == 1
+
+        lib.fmForceAbort(handle)
+        assert lib.fmLastDone(handle) == 1
+        assert lib.fmLastDoneReason(handle) == DONE_ABORTED
+        assert lib.fmActiveId(handle) == 2, "id2 is promoted -- the queue continues"
+        assert lib.fmQueuedCount(handle) == 0
+
+        for _ in range(10):  # id2 was accepted while stepsToComplete==10
+            lib.fmStep(handle)
+        assert lib.fmLastDone(handle) == 2
+        assert lib.fmLastDoneReason(handle) == DONE_STOP
     finally:
         lib.fmDestroy(handle)

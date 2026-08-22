@@ -422,14 +422,21 @@ Three things fall out of this that are worth stating before anyone writes it:
 
 ### 5.1 `STOP` and `ESTOP` — what they actually do here
 
-**There is no queue in this library**, because `DiffDriveAdapter` has no
+**There is no queue in `DiffDriveAdapter`** specifically, because it has no
 planner — `WHEELS_V` reaches `drive()` directly, and the other five motion
-verbs answer `kUnknown` on it (§5). So neither `STOP` nor `ESTOP` "waits its
-turn behind an active move" on this adapter; that framing belongs to a full
-motion-planner robot (see [motion-api.md](motion-api.md) §3.7/§9.1, which
-specifies `stop`/`stop(immediate=True)`/`estop` as a richer three-way choice
-this library's own `DiffDriveAdapter` collapses onto one behavior). What
-`STOP [now] #<id>` and `ESTOP` actually do, traced to the kernel:
+verbs answer `kUnknown` on it (§5). This is a property of that one concrete
+adapter, not a limit the wire or the reliability layer impose: an adapter
+that DOES own a planner (this library's own `tests/protocol/
+fake_motion_adapter.h`, built to exercise exactly this) queues motion
+commands and runs them to completion one at a time, in arrival order — see
+§8.8's own monotonic-`lastDone` contract, which is stated for `Adapter` in
+general and assumes exactly that ordering guarantee. So neither `STOP` nor
+`ESTOP` "waits its turn behind an active move" on `DiffDriveAdapter`; that
+framing belongs to a full motion-planner robot (see
+[motion-api.md](motion-api.md) §3.7/§9.1, which specifies
+`stop`/`stop(immediate=True)`/`estop` as a richer three-way choice
+`DiffDriveAdapter` collapses onto one behavior). What `STOP [now] #<id>` and
+`ESTOP` actually do, traced to the kernel:
 
 | verb | adapter call | kernel effect |
 |---|---|---|
