@@ -9,3 +9,10 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# src/host/robot_v6 is an importable package with no installable build
+# (this repo has no [build-system] -- everything else is exercised via
+# ctypes shims over a compiled .so, not `import`). pytest's own native
+# `pythonpath` ini option (core since pytest 7) is the smallest wiring
+# that makes `import robot_v6` work from tests without adding a
+# packaging/build-backend story this repo does not otherwise need.
+pythonpath = ["src/host"]

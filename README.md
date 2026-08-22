@@ -16,6 +16,15 @@ They meet in exactly one place: an adapter that turns `WHEELS_V …` into
 `DifferentialDrive::drive(...)`. That seam is the whole point of the repo, and
 it is the thing this library exists to let us test.
 
+A third thing lives here too, one layer up: **`robot_v6`**, a Python
+protocol-v6 HOST client (the codec, a `Transport` abstraction over TCP/pipe/
+serial, and the caller-side half of the reliability layer), plus **`tools/sim`**,
+a compiled host binary that speaks the real wire grammar with no robot
+attached — together these make the host side of this protocol testable
+end to end with no hardware at all. See
+[src/host/robot_v6/](src/host/robot_v6/) and
+[tools/sim/README.md](tools/sim/README.md).
+
 ## Layout
 
 ```
@@ -24,6 +33,10 @@ src/
     diffdrive/          the kernel + its fidelity gate, as extracted
     protocol-v6/        generated v6 tables + the generator (historical)
     protocol-v5-ref/    how parsing/config/telemetry are done today
+  host/
+    robot_v6/          the Python v6 HOST client -- codec, Transport, Session
+tools/
+  sim/                a compiled host binary speaking v6 with no robot attached
 docs/
   design/
     diffdrive.md          what the kernel is and what it demands of a caller
@@ -57,6 +70,7 @@ uv run python -m pytest -q
 | DiffDrive | the kernel, lifted with its fidelity gate | byte-identical to what it was extracted from; held duty-for-duty against `golden_ref_drive` |
 | Protocol | the handler -- feed()/dispatch/reply formatting | golden-vector conformance, adversarial input under ASan+UBSan, chunk-split equivalence |
 | Adapter | `DiffDriveAdapter`, the link between them | end to end through bytes, no robot, no serial port |
+| `robot_v6` | the Python v6 host client — codec, `Transport` (socket/pipe/stdio/serial), `Session` (sequencing, pipelining, cumulative ack/nack, resend-on-nack) | unit tests plus a lossy-transport square-tour scenario, and end to end against the real `tools/sim` binary over `--stdio` |
 
 The acceptance runs with no robot and no serial port:
 
