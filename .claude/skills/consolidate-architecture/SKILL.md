@@ -1,0 +1,1 @@
+/Volumes/Proj/proj/RobotProjects/radio-robot-lib/.agents/skills/consolidate-architecture/SKILL.md
