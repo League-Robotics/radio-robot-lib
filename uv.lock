@@ -79,8 +79,8 @@ wheels = [
 
 [[package]]
 name = "radio-robot-lib"
-version = "0.1.0"
-source = { virtual = "." }
+version = "0.20260822.1"
+source = { editable = "." }
 dependencies = [
     { name = "pytest" },
 ]

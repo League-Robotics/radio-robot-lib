@@ -7,12 +7,35 @@ dependencies = [
     "pytest>=8.0",
 ]
 
+[project.scripts]
+rogo = "rogo.cli:main"
+
+# 001-002: this repo's first [build-system] table, added solely to make
+# `[project.scripts]` (the `rogo` console script) installable. Minimal
+# hatchling backend -- no dynamic versioning, no extra build hooks.
+# CRITICAL: this must NOT disturb pytest's own `pythonpath = ["src/host"]`
+# import path below, which every existing robot_v6/protocol/diffdrive/
+# adapter test still relies on and which predates this table entirely --
+# verified by running the full suite after adding this (see ticket
+# 001-002's own report). `packages` lists both host packages explicitly
+# since they live under src/host/<pkg>, not this project's own top-level
+# src/ (hatchling's default wheel layout expects src/<name>/, which this
+# repo's own src/ tree -- shared with C++ diffdrive/protocol/adapter code
+# built by other means entirely -- does not follow).
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/host/rogo", "src/host/robot_v6"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# src/host/robot_v6 is an importable package with no installable build
-# (this repo has no [build-system] -- everything else is exercised via
-# ctypes shims over a compiled .so, not `import`). pytest's own native
-# `pythonpath` ini option (core since pytest 7) is the smallest wiring
-# that makes `import robot_v6` work from tests without adding a
-# packaging/build-backend story this repo does not otherwise need.
+# src/host/robot_v6 (and, as of 001-002, src/host/rogo) are importable
+# packages independent of the [build-system] table above -- everything
+# else in this repo is exercised via ctypes shims over a compiled .so,
+# not `import`. pytest's own native `pythonpath` ini option (core since
+# pytest 7) is the smallest wiring that makes `import robot_v6`/`import
+# rogo` work from tests without depending on an editable/wheel install
+# of this project at all -- unaffected by [build-system]'s addition.
 pythonpath = ["src/host"]
