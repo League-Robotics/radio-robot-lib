@@ -1,9 +1,12 @@
 ---
 id: '006'
 title: Add Unix-socket and stdio-pipe daemon transports with robot-name socket resolution
-status: open
-use-cases: [SUC-001, SUC-003]
-depends-on: ["005"]
+status: done
+use-cases:
+- SUC-001
+- SUC-003
+depends-on:
+- '005'
 github-issue: ''
 issue: rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
 completes_issue: true
@@ -34,20 +37,20 @@ hello/identify response where possible, overridable by flag; for a
 
 ## Acceptance Criteria
 
-- [ ] `rogo serve` listens on a Unix socket at
+- [x] `rogo serve` listens on a Unix socket at
       `$XDG_RUNTIME_DIR/rogo/<name>.sock` when `XDG_RUNTIME_DIR` is
       set, else `~/.rogo/run/<name>.sock`; the containing directory is
       created with 0700 permissions if it does not exist.
-- [ ] Two daemons started against two differently-named robots produce
+- [x] Two daemons started against two differently-named robots produce
       two distinct socket paths and can run concurrently without
       colliding.
-- [ ] `rogo serve` can instead run in stdio-pipe mode (a documented
+- [x] `rogo serve` can instead run in stdio-pipe mode (a documented
       flag/argument), speaking the identical framed protocol over
       stdin/stdout with no socket created.
-- [ ] Robot-name resolution follows the hello/identify-response-first,
+- [x] Robot-name resolution follows the hello/identify-response-first,
       flag-override-second, fixed-default-for-`--sim`-third order
       described above.
-- [ ] A client (this ticket's own test, or ticket 008's real client)
+- [x] A client (this ticket's own test, or ticket 008's real client)
       can connect to either transport and complete one request/reply
       exchange.
 

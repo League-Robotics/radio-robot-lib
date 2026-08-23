@@ -59,6 +59,44 @@ see `rogo.connection`.
   `stdio` transport (no network surface at all); `--listen` opts into
   TCP, restricted to loopback unless paired with `--allow-remote`.
 
+## The daemon's two transports (`rogo.daemon`)
+
+`rogo.daemon` (sprint 003) holds one robot/relay/sim connection open for
+a process's whole lifetime and serves it to any number of clients over
+a framed JSON request/reply wire (`rogo.daemon_protocol`), with an
+estop-priority queue so any client's halt jumps ahead of another
+client's in-flight command (`DaemonServer`, ticket 005). It exposes
+that server core over two interchangeable listener transports — same
+protocol, different I/O — plus the robot-name resolution that decides
+what the Unix-socket transport's file is named. (No `rogo serve` CLI
+subcommand exists yet — see "No `rogo serve` daemon" below; these are
+today library-level building blocks a later sprint 003 ticket wires up.)
+
+- **Unix domain socket (production)** — `UnixSocketListener` binds a
+  socket at `$XDG_RUNTIME_DIR/rogo/<name>.sock` when that env var is
+  set, else `~/.rogo/run/<name>.sock` (`daemon.default_socket_dir()`/
+  `daemon.socket_path_for_name()`); the containing directory is created
+  with owner-only (`0700`) permissions if missing
+  (`daemon.ensure_socket_dir()`). `<name>` is the target's resolved
+  robot name, so two differently-named robots on one host run two
+  independent, independently-discoverable daemons with no collision.
+  Multiple clients may connect at once, each on its own thread — an MCP
+  session and a CLI invocation can share one robot through the same
+  socket.
+- **stdio pipe (tests/embedding)** — `daemon.run_stdio_pipe(server)`
+  speaks the identical framed protocol over the process's own
+  stdin/stdout, with no socket file created at all. This is how a test
+  forks the daemon as a subprocess and exchanges real wire-protocol
+  request/reply lines against it with no `tools/sim` process or Unix
+  socket involved — see `tests/host/rogo/test_daemon_transports.py`.
+  Output is always flushed line-by-line (ticket 003-001's fix), so a
+  reader on the far end of the pipe never waits on a block buffer.
+
+**Robot-name resolution** (`daemon.resolve_robot_name()`) — an explicit
+override, if given, wins immediately; otherwise the target's own
+`HELLO`/`device` banner supplies the name (protocol.md#8.3); a `--sim`
+target with neither falls back to a fixed default (`"sim"`).
+
 ## What was deliberately not ported, and why
 
 See sprint.md's Design Rationale (Decisions 3-5) and Scope's "Out of
@@ -72,11 +110,15 @@ argument, are repeated here:
   (robot-frame only — world-frame `go_to_w` stays unavailable until a
   pose source exists, `specification.md#13`); `rogo calibrate` ports
   only elite's fully self-contained manual/tape-measure mode.
-- **No `rogo serve` daemon.** Elite's multi-client TCP relay exists to
-  work around one platform hazard (macOS resets the robot when its
-  serial port closes); `robot_v6.transport.SocketTransport` already
-  lets any client connect directly to a robot, relay, or `tools/sim`
-  with no Rogo-specific relay in between.
+- **No `rogo serve` daemon (sprint 001 decision, superseded by sprint
+  003).** Sprint 001 left this out because `robot_v6.transport.
+  SocketTransport` already lets any client connect directly to a
+  robot, relay, or `tools/sim` with no relay in between — but a direct
+  connection still means every client owns and closes its own
+  connection, which resets the robot on macOS (DTR/HUPCL) between
+  invocations. Sprint 003 rebuilds `rogo serve` on this repo's v6 stack
+  for exactly that reason; see "The daemon's two transports" above for
+  what exists so far.
 - **No digital/analog port, gripper, color/line-sensor, or OTOS/pose
   commands.** `DiffDriveAdapter` doesn't expose any of this hardware
   surface, and this sprint is host-side only (no firmware changes) —
