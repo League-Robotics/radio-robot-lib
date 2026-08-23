@@ -1,9 +1,13 @@
 ---
 id: '005'
 title: Implement rogo calibrate (manual distance/turns)
-status: open
-use-cases: [SUC-003]
-depends-on: ["001", "002", "003"]
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '001'
+- '002'
+- '003'
 github-issue: ''
 issue: import-rogo-cli-adapt-robot-radio-to-v6-host.md
 completes_issue: true
@@ -29,18 +33,18 @@ behavior (`_prompt_save`).
 
 ## Acceptance Criteria
 
-- [ ] `rogo calibrate turns [--speed] [--trials N]` runs N manual trials
+- [x] `rogo calibrate turns [--speed] [--trials N]` runs N manual trials
       (prompt → spin via `WHEELS_V` → prompt for the operator's measured
       degrees), computes an updated `rotational_slip`, and prompts to
       save.
-- [ ] `rogo calibrate distance [--distance] [--speed] [--trials N]` runs
+- [x] `rogo calibrate distance [--distance] [--speed] [--trials N]` runs
       the equivalent straight-line manual trial sequence.
-- [ ] On confirmation, the result is written to the active robot's file
+- [x] On confirmation, the result is written to the active robot's file
       in `config/robots/`; declining leaves the file untouched.
-- [ ] A computed value outside a defined sane range is rejected with a
+- [x] A computed value outside a defined sane range is rejected with a
       clear message and not persisted (mirrors `motion-api#2.1`'s
       trackwidth-bending caution).
-- [ ] Tests drive a full calibration run against `tools/sim` with
+- [x] Tests drive a full calibration run against `tools/sim` with
       scripted (non-interactive) operator input, writing only to a
       fixture config file copy — never the real `config/robots/` files.
 

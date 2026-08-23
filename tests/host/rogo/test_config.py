@@ -89,6 +89,30 @@ def test_load_robot_config_prefers_calibration_group_when_present(tmp_path):
     assert cfg.rotational_slip == 1.10
 
 
+def test_load_robot_config_distance_scale_defaults_to_none(tmp_path):
+    # No staged config/robots/*.json file carries distance_scale under
+    # either shape today (ticket 005's own field, not an elite import) --
+    # absence must mean "uncalibrated", not a crash.
+    path = _write_json(tmp_path / "no_scale.json", {"geometry": {"trackwidth": 128}})
+    cfg = config.load_robot_config(path)
+    assert cfg.distance_scale is None
+
+
+def test_load_robot_config_falls_back_to_geometry_distance_scale(tmp_path):
+    path = _write_json(tmp_path / "geo_scale.json", {"geometry": {"distance_scale": 0.98}})
+    cfg = config.load_robot_config(path)
+    assert cfg.distance_scale == 0.98
+
+
+def test_load_robot_config_prefers_calibration_group_distance_scale_when_present(tmp_path):
+    path = _write_json(tmp_path / "both_scale.json", {
+        "calibration": {"distance_scale": 1.05},
+        "geometry": {"distance_scale": 0.98},
+    })
+    cfg = config.load_robot_config(path)
+    assert cfg.distance_scale == 1.05
+
+
 def test_load_robot_config_ignores_non_numeric_trackwidth_instead_of_crashing(tmp_path):
     path = _write_json(tmp_path / "weird.json", {"geometry": {"trackwidth": "not-a-number"}})
     cfg = config.load_robot_config(path)
@@ -163,7 +187,8 @@ def test_save_robot_config_round_trips_rotational_slip(tmp_path):
     cfg = config.load_robot_config(path)
     updated = config.RobotConfig(
         name=cfg.name, uid=cfg.uid, common_name=cfg.common_name,
-        trackwidth_mm=cfg.trackwidth_mm, rotational_slip=1.05, path=cfg.path,
+        trackwidth_mm=cfg.trackwidth_mm, rotational_slip=1.05,
+        distance_scale=cfg.distance_scale, path=cfg.path,
     )
     config.save_robot_config(updated)
 
@@ -182,7 +207,8 @@ def test_save_robot_config_with_none_slip_leaves_existing_value_untouched(tmp_pa
     cfg = config.load_robot_config(path)
     unchanged = config.RobotConfig(
         name=cfg.name, uid=cfg.uid, common_name=cfg.common_name,
-        trackwidth_mm=cfg.trackwidth_mm, rotational_slip=None, path=cfg.path,
+        trackwidth_mm=cfg.trackwidth_mm, rotational_slip=None,
+        distance_scale=cfg.distance_scale, path=cfg.path,
     )
     config.save_robot_config(unchanged)
     on_disk = json.loads(path.read_text())
@@ -193,9 +219,35 @@ def test_save_robot_config_creates_geometry_group_if_absent(tmp_path):
     path = _write_json(tmp_path / "robot.json", {"identity": {"robot_name": "bare"}})
     cfg = config.RobotConfig(
         name="bare", uid=None, common_name=None, trackwidth_mm=None,
-        rotational_slip=1.2, path=path,
+        rotational_slip=1.2, distance_scale=None, path=path,
     )
     config.save_robot_config(cfg)
     on_disk = json.loads(path.read_text())
     assert on_disk["geometry"]["rotational_slip"] == 1.2
     assert on_disk["identity"] == {"robot_name": "bare"}
+
+
+def test_save_robot_config_round_trips_distance_scale_independently_of_slip(tmp_path):
+    # rotational_slip and distance_scale are written independently --
+    # a caller updating one (e.g. `rogo calibrate distance`) must not
+    # disturb the other (e.g. an existing rotational_slip from a prior
+    # `rogo calibrate turns` run).
+    path = _write_json(tmp_path / "robot.json", {
+        "geometry": {"trackwidth": 128, "rotational_slip": 0.93},
+    })
+    cfg = config.load_robot_config(path)
+    updated = config.RobotConfig(
+        name=cfg.name, uid=cfg.uid, common_name=cfg.common_name,
+        trackwidth_mm=cfg.trackwidth_mm, rotational_slip=cfg.rotational_slip,
+        distance_scale=1.02, path=cfg.path,
+    )
+    config.save_robot_config(updated)
+
+    on_disk = json.loads(path.read_text())
+    assert on_disk["geometry"]["distance_scale"] == 1.02
+    assert on_disk["geometry"]["rotational_slip"] == 0.93  # untouched
+    assert on_disk["geometry"]["trackwidth"] == 128  # untouched
+
+    reloaded = config.load_robot_config(path)
+    assert reloaded.distance_scale == 1.02
+    assert reloaded.rotational_slip == 0.93

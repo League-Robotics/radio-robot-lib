@@ -42,7 +42,7 @@ from robot_v6.codec import Reply
 from robot_v6.reliability import Session
 from robot_v6.transport import TransportClosed
 
-from . import config, connection, turn_model
+from . import calibrate, config, connection, turn_model
 
 _DEFAULT_TIMEOUT = 3.0  # [s] -- generous for a local subprocess/socket/serial hop
 _DEFAULT_TURN_SPEED_MM_S = 200.0  # matches elite's own `p_turn --speed` default
@@ -623,6 +623,77 @@ def cmd_config_set(args: argparse.Namespace) -> int:
         conn.transport.close()
 
 
+# ---------------------------------------------------------------------------
+# calibrate turns/distance -- the manual/tape-measure trial sequence
+# (sprint.md's Design Rationale Decision 4: `--auto` camera mode does not
+# port). This module stays a thin router even here: all trial
+# sequencing, prompting, and residual/save logic lives in
+# `rogo.calibrate` (its own module docstring); `cli.py`'s job is just
+# resolving the connection/config and translating the returned exit code.
+# ---------------------------------------------------------------------------
+
+def cmd_calibrate_turns(args: argparse.Namespace) -> int:
+    """`rogo calibrate turns [--speed] [--trials N]` -- see
+    `rogo.calibrate.calibrate_turns()` for the full flow."""
+    if args.speed <= 0:
+        print(f"error: --speed must be > 0, got {args.speed}", file=sys.stderr)
+        return 2
+    if args.trials <= 0:
+        print(f"error: --trials must be > 0, got {args.trials}", file=sys.stderr)
+        return 2
+
+    cfg = config.load_active_robot()
+    if cfg is None:
+        print(
+            "error: no active robot config found "
+            "(config/robots/active_robot.json) -- can't calibrate",
+            file=sys.stderr,
+        )
+        return 1
+
+    conn = connection.resolve(args)
+    try:
+        return calibrate.calibrate_turns(conn.session, cfg, args.trials, args.speed)
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
+def cmd_calibrate_distance(args: argparse.Namespace) -> int:
+    """`rogo calibrate distance [--distance] [--speed] [--trials N]` --
+    see `rogo.calibrate.calibrate_distance()` for the full flow."""
+    if args.speed <= 0:
+        print(f"error: --speed must be > 0, got {args.speed}", file=sys.stderr)
+        return 2
+    if args.distance <= 0:
+        print(f"error: --distance must be > 0, got {args.distance}", file=sys.stderr)
+        return 2
+    if args.trials <= 0:
+        print(f"error: --trials must be > 0, got {args.trials}", file=sys.stderr)
+        return 2
+
+    cfg = config.load_active_robot()
+    if cfg is None:
+        print(
+            "error: no active robot config found "
+            "(config/robots/active_robot.json) -- can't calibrate",
+            file=sys.stderr,
+        )
+        return 1
+
+    conn = connection.resolve(args)
+    try:
+        return calibrate.calibrate_distance(
+            conn.session, cfg, args.trials, args.distance, args.speed)
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rogo",
@@ -715,6 +786,41 @@ def build_parser() -> argparse.ArgumentParser:
     # that stays float rather than int, unlike goto's five.
     p_config_set.add_argument("value", type=float, help="new value for the field")
     p_config_set.set_defaults(func=cmd_config_set)
+
+    p_calibrate = sub.add_parser(
+        "calibrate",
+        help="Run a manual, tape-measure-verified calibration trial sequence")
+    calibrate_sub = p_calibrate.add_subparsers(dest="calibrate_command", required=True)
+
+    p_cal_turns = calibrate_sub.add_parser(
+        "turns",
+        help="Calibrate rotational_slip: rogo calibrate turns [--speed] [--trials N]")
+    connection.add_target_arguments(p_cal_turns)
+    p_cal_turns.add_argument(
+        "--speed", type=float, default=calibrate.DEFAULT_TURN_SPEED_MM_S,
+        help=f"wheel speed magnitude in mm/s (default: {calibrate.DEFAULT_TURN_SPEED_MM_S:g})")
+    p_cal_turns.add_argument(
+        "--trials", type=int, default=calibrate.DEFAULT_TURN_TRIALS,
+        help=f"number of manual trials (default: {calibrate.DEFAULT_TURN_TRIALS})")
+    p_cal_turns.set_defaults(func=cmd_calibrate_turns)
+
+    p_cal_distance = calibrate_sub.add_parser(
+        "distance",
+        help="Calibrate distance_scale: rogo calibrate distance "
+             "[--distance] [--speed] [--trials N]")
+    connection.add_target_arguments(p_cal_distance)
+    p_cal_distance.add_argument(
+        "--distance", type=float, default=calibrate.DEFAULT_DISTANCE_TARGET_MM,
+        help=f"target distance per trial in mm "
+             f"(default: {calibrate.DEFAULT_DISTANCE_TARGET_MM:g})")
+    p_cal_distance.add_argument(
+        "--speed", type=float, default=calibrate.DEFAULT_DISTANCE_SPEED_MM_S,
+        help=f"wheel speed magnitude in mm/s "
+             f"(default: {calibrate.DEFAULT_DISTANCE_SPEED_MM_S:g})")
+    p_cal_distance.add_argument(
+        "--trials", type=int, default=calibrate.DEFAULT_DISTANCE_TRIALS,
+        help=f"number of manual trials (default: {calibrate.DEFAULT_DISTANCE_TRIALS})")
+    p_cal_distance.set_defaults(func=cmd_calibrate_distance)
 
     return parser
 

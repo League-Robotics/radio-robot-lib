@@ -24,6 +24,17 @@ rather than treats as bugs:
    `geometry.rotational_slip` (today's actual shape) -- exactly the
    "tolerate whichever subset of fields is actually present" instruction
    this ticket was given, not a schema this module gets to assume.
+2b. `distance_scale` (ticket 005, `rogo.calibrate`'s straight-line
+   calibration equivalent of `rotational_slip`) is a field NO staged
+   file carries under EITHER shape today -- there is no elite precedent
+   for its name at all (elite's own distance calibration adjusted
+   `otos_linear_scale`/`mm_per_wheel_deg_*`, both dropped per sprint.md's
+   Implementation Plan for depending on calibration data this repo has
+   no source for). It follows `rotational_slip`'s own two-shape
+   tolerance (`calibration.distance_scale` first, `geometry.distance_scale`
+   fallback) purely for consistency with its sibling field, and defaults
+   to `None` -- "uncalibrated, treat as identity (1.0)" -- exactly like a
+   file that has never been through `rogo calibrate distance`.
 3. `active_robot.json`'s own `path` field is copied verbatim from
    elite too, and points at elite's own layout (`data/robots/<name>.json`),
    not this repo's (`config/robots/<name>.json`). Only the file's
@@ -50,6 +61,7 @@ class RobotConfig:
     common_name: str | None
     trackwidth_mm: float | None
     rotational_slip: float | None
+    distance_scale: float | None
     path: Path
 
 
@@ -102,12 +114,17 @@ def _parse_robot_config(data: dict, path: Path) -> RobotConfig:
     if rotational_slip is None:
         rotational_slip = geometry.get("rotational_slip")  # today's actual shape
 
+    distance_scale = calibration.get("distance_scale")
+    if distance_scale is None:
+        distance_scale = geometry.get("distance_scale")  # mirrors rotational_slip's own shape
+
     return RobotConfig(
         name=_as_str_or_none(identity.get("robot_name")),
         uid=_as_str_or_none(identity.get("uid")),
         common_name=_as_str_or_none(identity.get("common_name")),
         trackwidth_mm=_as_float_or_none(geometry.get("trackwidth")),
         rotational_slip=_as_float_or_none(rotational_slip),
+        distance_scale=_as_float_or_none(distance_scale),
         path=path,
     )
 
@@ -155,12 +172,15 @@ def load_active_robot(config_dir: Path | str | None = None) -> RobotConfig | Non
 
 
 def save_robot_config(config: RobotConfig) -> None:
-    """Persist `config`'s `rotational_slip` back into the JSON file at
-    `config.path`, round-tripping every other field in that file
-    verbatim (no field this module doesn't understand is ever dropped).
-    Used by the calibration flow (ticket 005) to write back an updated
-    slip value; a `None` `rotational_slip` leaves the file's existing
-    value untouched rather than clearing it.
+    """Persist `config`'s `rotational_slip`/`distance_scale` back into
+    the JSON file at `config.path`, round-tripping every other field in
+    that file verbatim (no field this module doesn't understand is ever
+    dropped). Used by the calibration flow (ticket 005) to write back an
+    updated slip/scale value; a `None` value leaves the file's existing
+    value (if any) untouched rather than clearing it -- this is how a
+    caller writes back just ONE of the two fields (e.g. `rogo calibrate
+    turns` only ever touches `rotational_slip`) without disturbing the
+    other.
     """
     data = _read_json(config.path)
     if not isinstance(data, dict):
@@ -171,4 +191,6 @@ def save_robot_config(config: RobotConfig) -> None:
         data["geometry"] = geometry
     if config.rotational_slip is not None:
         geometry["rotational_slip"] = config.rotational_slip
+    if config.distance_scale is not None:
+        geometry["distance_scale"] = config.distance_scale
     config.path.write_text(json.dumps(data, indent=2) + "\n")
