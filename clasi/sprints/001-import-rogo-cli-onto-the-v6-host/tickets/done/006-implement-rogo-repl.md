@@ -1,9 +1,13 @@
 ---
 id: '006'
 title: Implement rogo repl
-status: open
-use-cases: [SUC-004]
-depends-on: ["001", "002", "003"]
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '001'
+- '002'
+- '003'
 github-issue: ''
 issue: import-rogo-cli-adapt-robot-radio-to-v6-host.md
 completes_issue: true
@@ -25,15 +29,15 @@ binary-envelope translator.
 
 ## Acceptance Criteria
 
-- [ ] `rogo repl "drive 100 100 --ms 200" stop` against `tools/sim` runs
+- [x] `rogo repl "drive 100 100 --ms 200" stop` against `tools/sim` runs
       both commands over one connection and exits 0.
-- [ ] Piped stdin (`cat script.rogo | rogo repl`) and the bare
+- [x] Piped stdin (`cat script.rogo | rogo repl`) and the bare
       interactive prompt (`rogo repl`) both dispatch through the same
       command parser as the argument-list mode — no separate grammar to
       maintain.
-- [ ] The connection closes cleanly on EOF, Ctrl-C, or an explicit
+- [x] The connection closes cleanly on EOF, Ctrl-C, or an explicit
       `quit`/`exit` command.
-- [ ] Tests cover all three input modes against `tools/sim`.
+- [x] Tests cover all three input modes against `tools/sim`.
 
 ## Implementation Plan
 

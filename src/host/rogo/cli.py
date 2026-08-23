@@ -13,9 +13,16 @@ sprint.md's Design Rationale Decision 3: the aprilcam camera closed loop
 from elite does NOT port, and `go_to_w`'s world-frame variant stays
 unavailable until a pose source exists, specification.md#13) and
 `config get`/`config set` (pure `GET`/`SET` wire delegation,
-protocol.md#7, via `robot_v6.motion`'s wrappers). Later tickets extend
-this module's subcommand table (`calibrate`/`repl`/`mcp`) without
-changing this shape.
+protocol.md#7, via `robot_v6.motion`'s wrappers). Ticket 005 added
+`calibrate turns`/`calibrate distance` (delegating trial sequencing to
+`rogo.calibrate`). Ticket 006 (this module's current state) adds `repl`
+-- each `cmd_*()` above is split into a non-session "validate/prepare"
+step and a session-only `_run_*()`/`_dispatch_*()` body precisely so
+`rogo.repl`'s per-line dispatch (`_dispatch_repl_line()` below) can
+reuse the SAME per-verb logic against one already-open `Session`,
+without `cmd_*()`'s own per-invocation `connection.resolve()`/`close()`
+pair running once per repl line. Later tickets extend this module's
+subcommand table (`mcp`) without changing this shape.
 
 **The stakeholder's soft-warning decision (sprint 001
 stakeholder_approval gate), binding for `drive --mm`:** a command that
@@ -42,7 +49,7 @@ from robot_v6.codec import Reply
 from robot_v6.reliability import Session
 from robot_v6.transport import TransportClosed
 
-from . import calibrate, config, connection, turn_model
+from . import calibrate, config, connection, repl, turn_model
 
 _DEFAULT_TIMEOUT = 3.0  # [s] -- generous for a local subprocess/socket/serial hop
 _DEFAULT_TURN_SPEED_MM_S = 200.0  # matches elite's own `p_turn --speed` default
@@ -196,6 +203,24 @@ def _print_config_set_error(name: str, err: Reply) -> None:
         print(f"error: SET {name} rejected -- err {code}", file=sys.stderr)
 
 
+def _run_hello(session: Session) -> int:
+    """`hello`'s session-only body -- shared by `cmd_hello()` (resolves
+    its own throwaway connection, direct-CLI use) and `rogo.repl`'s
+    per-line dispatch (reuses the repl's own already-open `Session`,
+    ticket 006: "holds one Session open for the whole repl lifetime")."""
+    session.send_unsequenced("HELLO")
+    replies = _pump_until(
+        session, lambda rs: any(r.verb == "device" for r in rs))
+    banner = next((r for r in replies if r.verb == "device"), None)
+    if banner is None:
+        print("no device banner received", file=sys.stderr)
+        return 1
+    fields = list(banner.fields) + ["?"] * max(0, 4 - len(banner.fields))
+    role, common_name, name, serial = fields[:4]
+    print(f"role={role} common_name={common_name} name={name} serial={serial}")
+    return 0
+
+
 def cmd_hello(args: argparse.Namespace) -> int:
     """Send `HELLO`, print the resulting `device` banner. The
     simplest possible round trip: no sequencing, no motion, just proof
@@ -204,22 +229,26 @@ def cmd_hello(args: argparse.Namespace) -> int:
     emitted on connect, so this also verifies re-sending it works)."""
     conn = connection.resolve(args)
     try:
-        conn.session.send_unsequenced("HELLO")
-        replies = _pump_until(
-            conn.session, lambda rs: any(r.verb == "device" for r in rs))
-        banner = next((r for r in replies if r.verb == "device"), None)
-        if banner is None:
-            print("no device banner received", file=sys.stderr)
-            return 1
-        fields = list(banner.fields) + ["?"] * max(0, 4 - len(banner.fields))
-        role, common_name, name, serial = fields[:4]
-        print(f"role={role} common_name={common_name} name={name} serial={serial}")
-        return 0
+        return _run_hello(conn.session)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
     finally:
         conn.transport.close()
+
+
+def _run_stop(session: Session) -> int:
+    """`stop`'s session-only body -- see `_run_hello()`'s own docstring
+    for why this split exists (shared by `cmd_stop()` and
+    `rogo.repl`)."""
+    seq_id = motion.stop(session)
+    acked = session.wait_for_ack(seq_id, timeout=_DEFAULT_TIMEOUT)
+    if acked:
+        print(f"STOP acked (#{seq_id})")
+        return 0
+    print(f"STOP sent (#{seq_id}) but not acked within "
+          f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+    return 1
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -229,14 +258,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
     `hello`'s unsequenced one."""
     conn = connection.resolve(args)
     try:
-        seq_id = motion.stop(conn.session)
-        acked = conn.session.wait_for_ack(seq_id, timeout=_DEFAULT_TIMEOUT)
-        if acked:
-            print(f"STOP acked (#{seq_id})")
-            return 0
-        print(f"STOP sent (#{seq_id}) but not acked within "
-              f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
-        return 1
+        return _run_stop(conn.session)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
@@ -394,10 +416,13 @@ def _cmd_drive_stream(
     return 1
 
 
-def cmd_drive(args: argparse.Namespace) -> int:
-    """`rogo drive <L> <R> [--ms N | --mm N | stream] [--resend MS]` --
-    dispatch to the three (bare mode folds into `stream`'s own loop, per
-    `_cmd_drive_stream()`'s own docstring) shapes this ticket implements."""
+def _validate_drive_args(args: argparse.Namespace) -> int | None:
+    """`drive`'s own argument validation, fails fast before ever
+    resolving a target -- extracted out of `cmd_drive()` so `rogo.repl`'s
+    per-line dispatch can run the identical checks against a line's own
+    parsed `Namespace` without resolving (or needing) a connection of its
+    own. Returns an exit code on failure, `None` when the arguments are
+    well-formed."""
     stream_kw = getattr(args, "stream_kw", None)
     if stream_kw is not None and stream_kw != "stream":
         print(f"error: unexpected positional argument {stream_kw!r} -- "
@@ -412,17 +437,35 @@ def cmd_drive(args: argparse.Namespace) -> int:
     if args.resend <= 0:
         print(f"error: --resend must be > 0, got {args.resend}", file=sys.stderr)
         return 2
+    return None
+
+
+def _dispatch_drive_mode(session: Session, args: argparse.Namespace) -> int:
+    """`drive`'s session-only body -- picks the `--mm`/`--ms`/stream
+    shape and runs it against an already-open `session`. Assumes
+    `_validate_drive_args(args)` already returned `None` (both
+    `cmd_drive()` and `rogo.repl`'s dispatch call it first)."""
+    if args.mm is not None:
+        return _cmd_drive_mm(session, args.left, args.right, args.mm)
+    if args.ms is not None:
+        return _cmd_drive_ms(session, args.left, args.right, args.ms)
+    # Neither --ms nor --mm: literal 'stream' or bare `drive <L> <R>`
+    # both mean "hold this velocity until told otherwise" -- the same
+    # WHEELS_V-keepalive loop either way.
+    return _cmd_drive_stream(session, args.left, args.right, args.resend)
+
+
+def cmd_drive(args: argparse.Namespace) -> int:
+    """`rogo drive <L> <R> [--ms N | --mm N | stream] [--resend MS]` --
+    dispatch to the three (bare mode folds into `stream`'s own loop, per
+    `_cmd_drive_stream()`'s own docstring) shapes this ticket implements."""
+    error = _validate_drive_args(args)
+    if error is not None:
+        return error
 
     conn = connection.resolve(args)
     try:
-        if args.mm is not None:
-            return _cmd_drive_mm(conn.session, args.left, args.right, args.mm)
-        if args.ms is not None:
-            return _cmd_drive_ms(conn.session, args.left, args.right, args.ms)
-        # Neither --ms nor --mm: literal 'stream' or bare `drive <L> <R>`
-        # both mean "hold this velocity until told otherwise" -- the same
-        # WHEELS_V-keepalive loop either way.
-        return _cmd_drive_stream(conn.session, args.left, args.right, args.resend)
+        return _dispatch_drive_mode(conn.session, args)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
@@ -435,15 +478,18 @@ def cmd_drive(args: argparse.Namespace) -> int:
 # WHEELS_V call (sprint.md's SUC-001).
 # ---------------------------------------------------------------------------
 
-def cmd_turn(args: argparse.Namespace) -> int:
-    """`rogo turn <degrees> [--speed]` -- compute `(cmd_l, cmd_r,
-    duration_ms)` from the active robot's `trackwidth`/`rotational_slip`
-    (falling back to a no-slip estimate when `rotational_slip` is
-    absent, per `turn_model.compute_turn()`'s own docstring) and issue
-    one `WHEELS_V` call."""
-    if args.speed <= 0:
-        print(f"error: --speed must be > 0, got {args.speed}", file=sys.stderr)
-        return 2
+def _prepare_turn(degrees: float, speed: float) -> tuple[int, tuple[int, int, int] | None]:
+    """`turn`'s non-session preparation -- validate `speed`, load the
+    active robot config, and run `turn_model.compute_turn()` -- shared
+    by `cmd_turn()` (direct CLI) and `rogo.repl`'s per-line dispatch, so
+    a repl line reloads the active config exactly like a fresh `rogo
+    turn` invocation would (matching direct-CLI behavior 1:1 rather than
+    caching the config for the whole repl lifetime). Returns `(exit_code,
+    None)` on any failure (the message is already printed), or `(0,
+    (cmd_l, cmd_r, duration_ms))` on success."""
+    if speed <= 0:
+        print(f"error: --speed must be > 0, got {speed}", file=sys.stderr)
+        return 2, None
 
     cfg = config.load_active_robot()
     if cfg is None or cfg.trackwidth_mm is None:
@@ -452,35 +498,56 @@ def cmd_turn(args: argparse.Namespace) -> int:
             "(config/robots/active_robot.json) -- can't compute a turn",
             file=sys.stderr,
         )
-        return 1
+        return 1, None
 
     try:
         cmd_l, cmd_r, duration_ms = turn_model.compute_turn(
-            args.degrees, args.speed, cfg.trackwidth_mm, cfg.rotational_slip)
+            degrees, speed, cfg.trackwidth_mm, cfg.rotational_slip)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return 2, None
+
+    return 0, (cmd_l, cmd_r, duration_ms)
+
+
+def _run_turn(session: Session, degrees: float, cmd_l: int, cmd_r: int, duration_ms: int) -> int:
+    """`turn`'s session-only body -- one `WHEELS_V` call using the
+    `(cmd_l, cmd_r, duration_ms)` `_prepare_turn()` already computed.
+    See `_run_hello()`'s own docstring for why this split exists."""
+    seq_id = motion.wheels_v(session, cmd_l, cmd_r, duration_ms)
+    acked, err = _await_ack_and_err(session, seq_id)
+    if not acked:
+        print(f"WHEELS_V sent (#{seq_id}) but not acked within "
+              f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+        return 1
+    if err is not None:
+        _print_soft_warning("WHEELS_V", seq_id, err)
+        return 0
+    done = session.wait_for_done(
+        seq_id, timeout=duration_ms / 1000.0 + _DEFAULT_TIMEOUT)
+    if done is None:
+        print(f"WHEELS_V acked (#{seq_id}) but never completed within timeout",
+              file=sys.stderr)
+        return 1
+    print(f"turn {degrees:+.1f}deg -> WHEELS_V {cmd_l} {cmd_r} {duration_ms} "
+          f"(#{seq_id}), done reason={done.reason}")
+    return 0
+
+
+def cmd_turn(args: argparse.Namespace) -> int:
+    """`rogo turn <degrees> [--speed]` -- compute `(cmd_l, cmd_r,
+    duration_ms)` from the active robot's `trackwidth`/`rotational_slip`
+    (falling back to a no-slip estimate when `rotational_slip` is
+    absent, per `turn_model.compute_turn()`'s own docstring) and issue
+    one `WHEELS_V` call."""
+    exit_code, params = _prepare_turn(args.degrees, args.speed)
+    if params is None:
+        return exit_code
+    cmd_l, cmd_r, duration_ms = params
 
     conn = connection.resolve(args)
     try:
-        seq_id = motion.wheels_v(conn.session, cmd_l, cmd_r, duration_ms)
-        acked, err = _await_ack_and_err(conn.session, seq_id)
-        if not acked:
-            print(f"WHEELS_V sent (#{seq_id}) but not acked within "
-                  f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
-            return 1
-        if err is not None:
-            _print_soft_warning("WHEELS_V", seq_id, err)
-            return 0
-        done = conn.session.wait_for_done(
-            seq_id, timeout=duration_ms / 1000.0 + _DEFAULT_TIMEOUT)
-        if done is None:
-            print(f"WHEELS_V acked (#{seq_id}) but never completed within timeout",
-                  file=sys.stderr)
-            return 1
-        print(f"turn {args.degrees:+.1f}deg -> WHEELS_V {cmd_l} {cmd_r} {duration_ms} "
-              f"(#{seq_id}), done reason={done.reason}")
-        return 0
+        return _run_turn(conn.session, args.degrees, cmd_l, cmd_r, duration_ms)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
@@ -511,47 +578,64 @@ def _goto_default_timeout_ms(x: int, y: int, speed_mm_s: int) -> int:
     return max(1000, int(round(eta_ms * _STREAM_LEASE_MULTIPLE)))
 
 
-def cmd_goto(args: argparse.Namespace) -> int:
-    """`rogo goto <x> <y> [--speed] [--arrive] [--timeout]` -- one
-    `GO_TO_R` call. Reports the adapter's ACTUAL reply via the same
-    `_await_ack_and_err()`/`_print_soft_warning()` path `drive --mm`/
-    `turn` already use for `DiffDriveAdapter`'s documented `kUnknown`
-    planner gap (UC-002/UC-003) -- never a false "arrived" claim: an
-    ack only means the call was ACCEPTED, and `done reason=...`
-    (`wait_for_done()`'s own outcome, printed verbatim) is the only
-    arrival signal this function ever manufactures."""
-    if args.speed <= 0:
-        print(f"error: --speed must be > 0, got {args.speed}", file=sys.stderr)
-        return 2
-    timeout_ms = (
-        args.timeout if args.timeout is not None
-        else _goto_default_timeout_ms(args.x, args.y, args.speed)
-    )
+def _prepare_goto(x: int, y: int, speed: int, timeout: int | None) -> tuple[int, int | None]:
+    """`goto`'s non-session preparation -- validate `speed`, compute the
+    default timeout backstop when `timeout` is not given, and validate
+    that. Shared by `cmd_goto()` and `rogo.repl`'s per-line dispatch;
+    see `_prepare_turn()`'s own docstring for the shape of this split.
+    Returns `(exit_code, None)` on failure, `(0, timeout_ms)` on
+    success."""
+    if speed <= 0:
+        print(f"error: --speed must be > 0, got {speed}", file=sys.stderr)
+        return 2, None
+    timeout_ms = timeout if timeout is not None else _goto_default_timeout_ms(x, y, speed)
     if timeout_ms <= 0:
         print(f"error: --timeout must be > 0, got {timeout_ms}", file=sys.stderr)
-        return 2
+        return 2, None
+    return 0, timeout_ms
+
+
+def _run_goto(session: Session, x: int, y: int, speed: int, arrive: int, timeout_ms: int) -> int:
+    """`goto`'s session-only body -- one `GO_TO_R` call, using the
+    `timeout_ms` `_prepare_goto()` already resolved. Reports the
+    adapter's ACTUAL reply via the same `_await_ack_and_err()`/
+    `_print_soft_warning()` path `drive --mm`/`turn` already use for
+    `DiffDriveAdapter`'s documented `kUnknown` planner gap (UC-002/
+    UC-003) -- never a false "arrived" claim: an ack only means the call
+    was ACCEPTED, and `done reason=...` (`wait_for_done()`'s own
+    outcome, printed verbatim) is the only arrival signal this function
+    ever manufactures."""
+    seq_id = motion.go_to_r(session, x, y, speed, arrive, timeout_ms)
+    acked, err = _await_ack_and_err(session, seq_id)
+    if not acked:
+        print(f"GO_TO_R sent (#{seq_id}) but not acked within "
+              f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+        return 1
+    if err is not None:
+        _print_soft_warning("GO_TO_R", seq_id, err)
+        return 0
+    done = session.wait_for_done(
+        seq_id, timeout=timeout_ms / 1000.0 + _DEFAULT_TIMEOUT)
+    if done is None:
+        print(f"GO_TO_R acked (#{seq_id}) but never completed within timeout",
+              file=sys.stderr)
+        return 1
+    print(f"goto ({x}, {y}) -> GO_TO_R {x} {y} {speed} "
+          f"{arrive} {timeout_ms} (#{seq_id}), done reason={done.reason}")
+    return 0
+
+
+def cmd_goto(args: argparse.Namespace) -> int:
+    """`rogo goto <x> <y> [--speed] [--arrive] [--timeout]` -- one
+    `GO_TO_R` call. See `_run_goto()`'s own docstring for the reporting
+    contract."""
+    exit_code, timeout_ms = _prepare_goto(args.x, args.y, args.speed, args.timeout)
+    if timeout_ms is None:
+        return exit_code
 
     conn = connection.resolve(args)
     try:
-        seq_id = motion.go_to_r(
-            conn.session, args.x, args.y, args.speed, args.arrive, timeout_ms)
-        acked, err = _await_ack_and_err(conn.session, seq_id)
-        if not acked:
-            print(f"GO_TO_R sent (#{seq_id}) but not acked within "
-                  f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
-            return 1
-        if err is not None:
-            _print_soft_warning("GO_TO_R", seq_id, err)
-            return 0
-        done = conn.session.wait_for_done(
-            seq_id, timeout=timeout_ms / 1000.0 + _DEFAULT_TIMEOUT)
-        if done is None:
-            print(f"GO_TO_R acked (#{seq_id}) but never completed within timeout",
-                  file=sys.stderr)
-            return 1
-        print(f"goto ({args.x}, {args.y}) -> GO_TO_R {args.x} {args.y} {args.speed} "
-              f"{args.arrive} {timeout_ms} (#{seq_id}), done reason={done.reason}")
-        return 0
+        return _run_goto(conn.session, args.x, args.y, args.speed, args.arrive, timeout_ms)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
@@ -565,31 +649,38 @@ def cmd_goto(args: argparse.Namespace) -> int:
 # `.set` are thin wrappers and `rogo.cli` is thinner still.
 # ---------------------------------------------------------------------------
 
-def cmd_config_get(args: argparse.Namespace) -> int:
-    """`rogo config get [name]` -- bare `GET` lists every field the
-    adapter reports (protocol.md#6/#7: one `get` line per field); a
-    `name` asks for just that one. An unknown name gets NO `get` line
-    at all, though the command is still acked (protocol.md#7's own
-    "unknown name -> no get line" rule) -- reported here as a clear
+def _run_config_get(session: Session, name: str | None) -> int:
+    """`config get [name]`'s session-only body -- see `_run_hello()`'s
+    own docstring for why this split exists. Bare `GET` lists every
+    field the adapter reports (protocol.md#6/#7: one `get` line per
+    field); a `name` asks for just that one. An unknown name gets NO
+    `get` line at all, though the command is still acked (protocol.md#7's
+    own "unknown name -> no get line" rule) -- reported here as a clear
     error rather than a silent, field-less "success"."""
+    seq_id = motion.get(session, name)
+    acked, get_replies = _await_ack_and_get_lines(session, seq_id)
+    if not acked:
+        print(f"GET sent (#{seq_id}) but not acked within "
+              f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+        return 1
+    if not get_replies:
+        if name is not None:
+            print(f"error: no such config field: {name!r}", file=sys.stderr)
+            return 1
+        print("(adapter reports no config fields)")
+        return 0
+    for reply in get_replies:
+        field_name, value = reply.fields[0], reply.fields[1]
+        print(f"{field_name}={value}")
+    return 0
+
+
+def cmd_config_get(args: argparse.Namespace) -> int:
+    """`rogo config get [name]` -- see `_run_config_get()`'s own
+    docstring for the reporting contract."""
     conn = connection.resolve(args)
     try:
-        seq_id = motion.get(conn.session, args.name)
-        acked, get_replies = _await_ack_and_get_lines(conn.session, seq_id)
-        if not acked:
-            print(f"GET sent (#{seq_id}) but not acked within "
-                  f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
-            return 1
-        if not get_replies:
-            if args.name is not None:
-                print(f"error: no such config field: {args.name!r}", file=sys.stderr)
-                return 1
-            print("(adapter reports no config fields)")
-            return 0
-        for reply in get_replies:
-            name, value = reply.fields[0], reply.fields[1]
-            print(f"{name}={value}")
-        return 0
+        return _run_config_get(conn.session, args.name)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
@@ -597,25 +688,114 @@ def cmd_config_get(args: argparse.Namespace) -> int:
         conn.transport.close()
 
 
+def _run_config_set(session: Session, name: str, value: float) -> int:
+    """`config set <name> <value>`'s session-only body -- see
+    `_run_hello()`'s own docstring for why this split exists. An unknown
+    `name` is a genuine caller mistake, not a capability gap, so it is
+    reported as a hard error (nonzero exit) rather than `goto`'s
+    soft-warning treatment of the same wire error code -- see
+    `_print_config_set_error()`'s own docstring for why."""
+    seq_id = motion.set(session, name, value)
+    acked, err = _await_ack_and_err(session, seq_id)
+    if not acked:
+        print(f"SET sent (#{seq_id}) but not acked within "
+              f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+        return 1
+    if err is not None:
+        _print_config_set_error(name, err)
+        return 1
+    print(f"SET {name}={value} acked (#{seq_id})")
+    return 0
+
+
 def cmd_config_set(args: argparse.Namespace) -> int:
     """`rogo config set <name> <value>` -- `SET`'s own delegation
-    (protocol.md#7). An unknown `name` is a genuine caller mistake, not
-    a capability gap, so it is reported as a hard error (nonzero exit)
-    rather than `goto`'s soft-warning treatment of the same wire error
-    code -- see `_print_config_set_error()`'s own docstring for why."""
+    (protocol.md#7). See `_run_config_set()`'s own docstring for the
+    reporting contract."""
     conn = connection.resolve(args)
     try:
-        seq_id = motion.set(conn.session, args.name, args.value)
-        acked, err = _await_ack_and_err(conn.session, seq_id)
-        if not acked:
-            print(f"SET sent (#{seq_id}) but not acked within "
-                  f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
-            return 1
-        if err is not None:
-            _print_config_set_error(args.name, err)
-            return 1
-        print(f"SET {args.name}={args.value} acked (#{seq_id})")
-        return 0
+        return _run_config_set(conn.session, args.name, args.value)
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
+# ---------------------------------------------------------------------------
+# repl -- ticket 006: run commands over one persistent connection from an
+# argument list, piped stdin, or an interactive prompt. `rogo.repl` owns
+# only the command LOOP (read a line, parse it, decide whether to keep
+# going); the actual per-verb dispatch below lives here, in `rogo.cli`,
+# since it needs direct access to this module's own private per-verb
+# helpers (`_run_hello`, `_validate_drive_args`/`_dispatch_drive_mode`,
+# `_prepare_turn`/`_run_turn`, `_prepare_goto`/`_run_goto`,
+# `_run_config_get`/`_run_config_set`) -- reusing the SAME
+# `build_parser()` subparsers tickets 002/003/004 already built, per this
+# ticket's own Description ("a much smaller command loop reusing the
+# same rogo.cli per-subcommand argument parsers ... not a
+# reimplementation"). `rogo.repl` is handed this function as a callback
+# rather than importing `rogo.cli` itself, which would create a circular
+# import (`cli.cmd_repl()` needs `repl.run()`).
+# ---------------------------------------------------------------------------
+
+def _dispatch_repl_line(session: Session, args: argparse.Namespace) -> int:
+    """Route one already-parsed repl line to the session-only body the
+    matching top-level `cmd_*()` uses after `connection.resolve()` --
+    but against the repl's own already-open `session`, never resolving
+    or closing a connection of its own (ticket 006: "holds one Session
+    open for the whole repl lifetime and drains replies/telemetry
+    between commands").
+
+    `calibrate` is deliberately NOT dispatchable from inside a repl
+    line: its own multi-trial flow (`rogo.calibrate.calibrate_turns`/
+    `calibrate_distance`) is an interactive wizard spanning several
+    prompts around ONE drive, not a single self-contained command --
+    this ticket's own scope is reusing the parsers "already built by
+    tickets 003/004" (drive/turn/goto/config), plus ticket 002's
+    hello/stop. A nested `repl` (or `mcp`, once it exists) inside a repl
+    line makes no sense either. Both fall through to the same
+    unsupported-command message below."""
+    if args.command == "hello":
+        return _run_hello(session)
+    if args.command == "stop":
+        return _run_stop(session)
+    if args.command == "drive":
+        error = _validate_drive_args(args)
+        if error is not None:
+            return error
+        return _dispatch_drive_mode(session, args)
+    if args.command == "turn":
+        exit_code, params = _prepare_turn(args.degrees, args.speed)
+        if params is None:
+            return exit_code
+        cmd_l, cmd_r, duration_ms = params
+        return _run_turn(session, args.degrees, cmd_l, cmd_r, duration_ms)
+    if args.command == "goto":
+        exit_code, timeout_ms = _prepare_goto(args.x, args.y, args.speed, args.timeout)
+        if timeout_ms is None:
+            return exit_code
+        return _run_goto(session, args.x, args.y, args.speed, args.arrive, timeout_ms)
+    if args.command == "config":
+        if args.config_command == "get":
+            return _run_config_get(session, args.name)
+        if args.config_command == "set":
+            return _run_config_set(session, args.name, args.value)
+    print(f"error: {args.command!r} is not supported inside 'rogo repl' -- "
+          "run it as its own separate rogo command instead", file=sys.stderr)
+    return 2
+
+
+def cmd_repl(args: argparse.Namespace) -> int:
+    """`rogo repl [COMMAND ...]` -- resolve ONE connection for the whole
+    repl lifetime (this ticket's own AC #1: "runs both commands over one
+    connection"), then hand it to `rogo.repl.run()` along with a fresh
+    `build_parser()` (for per-line parsing) and `_dispatch_repl_line`
+    (for per-line dispatch). See `rogo.repl`'s own module docstring for
+    the three input modes."""
+    conn = connection.resolve(args)
+    try:
+        return repl.run(conn.session, args.commands, build_parser(), _dispatch_repl_line)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
@@ -786,6 +966,18 @@ def build_parser() -> argparse.ArgumentParser:
     # that stays float rather than int, unlike goto's five.
     p_config_set.add_argument("value", type=float, help="new value for the field")
     p_config_set.set_defaults(func=cmd_config_set)
+
+    p_repl = sub.add_parser(
+        "repl",
+        help="Run one or more commands over a single persistent connection: "
+             "an argument list, piped stdin, or an interactive prompt")
+    connection.add_target_arguments(p_repl)
+    p_repl.add_argument(
+        "commands", nargs="*", metavar="COMMAND",
+        help="one or more quoted command strings, e.g. "
+             "'drive 100 100 --ms 200' 'stop'. With none given, read "
+             "commands from stdin (piped) or an interactive prompt (tty).")
+    p_repl.set_defaults(func=cmd_repl)
 
     p_calibrate = sub.add_parser(
         "calibrate",
