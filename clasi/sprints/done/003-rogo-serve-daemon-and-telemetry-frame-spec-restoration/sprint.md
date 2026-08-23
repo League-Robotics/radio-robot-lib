@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Rogo serve daemon and telemetry frame spec restoration
-status: executing
+status: done
 branch: sprint/003-rogo-serve-daemon-and-telemetry-frame-spec-restoration
 use-cases: []
 issues:
