@@ -7,6 +7,7 @@ use-cases: []
 issues:
 - rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
 - restore-the-telemetry-frame-specification-and-add-a-host-requested-header-command.md
+- fix-four-remaining-dangling-spec-section-citations-in-src-protocol.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

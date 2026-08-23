@@ -210,7 +210,8 @@ class ProtocolHandler {
   void sendDebug(const char* text);
 
   // thdr: once, on the first call and again whenever the column set
-  // changes (spec §6.2); t: every call; THEN the current reliability
+  // changes (docs/design/protocol.md §10.2: `thdr` / `t` — the frame is
+  // self-describing); t: every call; THEN the current reliability
   // line -- nack(expectedNext_) if a gap is outstanding, ack(expectedNext_
   // - 1) otherwise (docs/design/protocol.md §8.5), each carrying
   // whatever the Adapter's lastDone()/lastDoneReason() report AT THE
