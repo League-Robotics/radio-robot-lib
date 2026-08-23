@@ -2,9 +2,12 @@
 id: '005'
 title: 'Build the rogo serve daemon server core: connection ownership, dispatch injection,
   estop-priority queue'
-status: open
-use-cases: [SUC-001, SUC-004]
-depends-on: ["004"]
+status: done
+use-cases:
+- SUC-001
+- SUC-004
+depends-on:
+- '004'
 github-issue: ''
 issue: rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
 completes_issue: true
@@ -44,17 +47,17 @@ request's verb, against the one `Session`/`Connection` it resolved via
 
 ## Acceptance Criteria
 
-- [ ] The server accepts a dispatch table/callable by injection at
+- [x] The server accepts a dispatch table/callable by injection at
       construction — it does not import `cli.py`.
-- [ ] One `rogo.connection.Connection` is resolved once at server
+- [x] One `rogo.connection.Connection` is resolved once at server
       startup and reused for every subsequent request (verified: no
       second `resolve()` call happens per request).
-- [ ] An estop/halt request submitted while another request is
+- [x] An estop/halt request submitted while another request is
       in-progress is executed ahead of that request's completion wait —
       the queue is priority-ordered, not FIFO, for estop specifically.
-- [ ] Every other request type is served in arrival order (FIFO)
+- [x] Every other request type is served in arrival order (FIFO)
       relative to other non-estop requests.
-- [ ] Server core has zero dependency on `src/host/rogo/cli.py`
+- [x] Server core has zero dependency on `src/host/rogo/cli.py`
       (verified: no `import` of `rogo.cli`/`from . import cli` anywhere
       in `daemon.py`).
 
