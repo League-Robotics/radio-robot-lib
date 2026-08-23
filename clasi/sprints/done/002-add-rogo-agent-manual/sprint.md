@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Add rogo --agent manual
-status: executing
+status: done
 branch: sprint/002-add-rogo-agent-manual
 use-cases:
 - SUC-001
