@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Implement TLM HDR header re-emission command and fix dangling section citations
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on:
