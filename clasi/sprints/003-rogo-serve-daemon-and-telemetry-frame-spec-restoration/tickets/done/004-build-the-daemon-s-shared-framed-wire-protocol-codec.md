@@ -1,8 +1,10 @@
 ---
 id: '004'
 title: Build the daemon's shared framed wire-protocol codec
-status: open
-use-cases: [SUC-001, SUC-003]
+status: done
+use-cases:
+- SUC-001
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
@@ -28,14 +30,14 @@ wire shape.
 
 ## Acceptance Criteria
 
-- [ ] Encoding a request produces one self-delimited line (newline- or
+- [x] Encoding a request produces one self-delimited line (newline- or
       length-framed — pick one, document it in the module docstring)
       carrying a correlation id.
-- [ ] Decoding a reply recovers the same correlation id the matching
+- [x] Decoding a reply recovers the same correlation id the matching
       request carried, unambiguously pairing requests with replies.
-- [ ] Round-trip (encode then decode) is lossless for the request/reply
+- [x] Round-trip (encode then decode) is lossless for the request/reply
       shapes this ticket defines.
-- [ ] The codec has no dependency on `socket`/`subprocess`/any transport
+- [x] The codec has no dependency on `socket`/`subprocess`/any transport
       module — it operates on bytes/strings in and out only, so it can
       be unit-tested with no process or socket involved.
 
