@@ -490,3 +490,129 @@ def test_custom_estop_verbs_override_the_default():
     # treat it as priority); "panic" -- this server's own estop verb --
     # still jumps ahead of it despite arriving second.
     assert order == ["gate", "panic", "estop"]
+
+
+# ---------------------------------------------------------------------------
+# is_estop -- ticket 011's own fix: classification is pluggable, so a
+# caller whose dispatch table is NOT keyed by real per-command verb names
+# (daemon_client.build_session_dispatch_table()'s generic session-RPC
+# scheme, where every real wire verb travels as a `wire_verb` PARAMETER of
+# a `session_send`/`session_send_unsequenced` REQUEST rather than that
+# request's own top-level `verb`) can still classify correctly, by
+# inspecting `request.params` instead of relying on plain `estop_verbs`
+# membership against `request.verb` alone.
+# ---------------------------------------------------------------------------
+
+def test_is_estop_callable_overrides_estop_verbs_membership_entirely():
+    # A dispatch table shaped like daemon_client's own generic RPC scheme:
+    # every request's top-level verb is "call", with the REAL verb nested
+    # in params["wire_verb"] -- estop_verbs membership against
+    # request.verb ("call") could never classify this correctly no matter
+    # what estop_verbs itself contained, proving is_estop really replaces
+    # that check rather than merely supplementing it.
+    gate_started = threading.Event()
+    release_gate = threading.Event()
+    order = []
+    order_lock = threading.Lock()
+
+    def gate_handler(session, params, abort):
+        gate_started.set()
+        release_gate.wait(timeout=2.0)
+        with order_lock:
+            order.append("gate")
+        return None
+
+    def recorder(name):
+        def _handler(session, params, abort):
+            with order_lock:
+                order.append(name)
+            return None
+        return _handler
+
+    dispatch_table = {"gate": gate_handler, "call": recorder("call")}
+
+    def _is_estop(request):
+        return request.verb == "call" and request.params.get("wire_verb") == "ESTOP"
+
+    server = daemon.DaemonServer(_make_connection(), dispatch_table, is_estop=_is_estop)
+    server.start()
+    try:
+        gate_thread = threading.Thread(target=lambda: server.submit(dp.Request(id=0, verb="gate")))
+        gate_thread.start()
+        assert gate_started.wait(timeout=2.0)
+
+        # A "call" carrying an unrelated wire_verb ("WHEELS_V") is queued
+        # first -- is_estop() says False for it, so plain FIFO applies.
+        drive_thread = threading.Thread(
+            target=lambda: server.submit(
+                dp.Request(id=1, verb="call", params={"wire_verb": "WHEELS_V"})))
+        drive_thread.start()
+        assert _wait_until(lambda: server.pending_count >= 1)
+
+        # A "call" carrying wire_verb="ESTOP" arrives second but must
+        # still jump ahead of the already-queued WHEELS_V one.
+        estop_thread = threading.Thread(
+            target=lambda: server.submit(
+                dp.Request(id=2, verb="call", params={"wire_verb": "ESTOP"})))
+        estop_thread.start()
+        assert _wait_until(lambda: server.pending_count >= 2)
+
+        release_gate.set()
+        gate_thread.join(timeout=2.0)
+        drive_thread.join(timeout=2.0)
+        estop_thread.join(timeout=2.0)
+    finally:
+        server.stop()
+
+    assert order == ["gate", "call", "call"]  # both are "call" by name --
+    # the ORDER (estop's own "call" before the drive's own "call") is
+    # what proves classification actually worked; see the id-tagged
+    # variant below for an unambiguous assertion.
+
+
+def test_is_estop_callable_also_sets_abort_on_the_in_progress_call():
+    # The full safety scenario, but classified via is_estop() rather than
+    # estop_verbs -- mirrors test_estop_preempts_an_in_progress_long_
+    # running_dispatch() above, proving the abort-on-submit mechanism
+    # (DaemonServer.submit()'s own "if priority == 0 ... set()") is fed
+    # by is_estop()'s own return value, not hardwired to estop_verbs.
+    drive_started = threading.Event()
+
+    def fake_drive(session, params, abort):
+        del params
+        drive_started.set()
+        aborted = abort.wait(timeout=2.0)
+        return {"aborted": aborted}
+
+    def fake_call(session, params, abort):
+        del abort
+        return {"wire_verb": params.get("wire_verb")}
+
+    def _is_estop(request):
+        return request.verb == "call" and request.params.get("wire_verb") == "ESTOP"
+
+    server = daemon.DaemonServer(
+        _make_connection(), {"drive": fake_drive, "call": fake_call}, is_estop=_is_estop)
+    server.start()
+    try:
+        drive_reply_box = []
+
+        def submit_drive():
+            drive_reply_box.append(server.submit(dp.Request(id=1, verb="drive")))
+
+        drive_thread = threading.Thread(target=submit_drive)
+        drive_thread.start()
+        assert drive_started.wait(timeout=2.0), "drive dispatch never started"
+
+        start = time.monotonic()
+        estop_reply = server.submit(
+            dp.Request(id=2, verb="call", params={"wire_verb": "ESTOP"}))
+        drive_thread.join(timeout=2.0)
+        elapsed = time.monotonic() - start
+    finally:
+        server.stop()
+
+    assert estop_reply.error is None
+    assert estop_reply.result == {"wire_verb": "ESTOP"}
+    assert drive_reply_box[0].result == {"aborted": True}
+    assert elapsed < 1.0

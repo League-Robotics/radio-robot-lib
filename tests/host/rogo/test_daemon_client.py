@@ -22,13 +22,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
 from robot_v6 import motion
-from rogo import connection, daemon_client
+from rogo import connection, daemon, daemon_client
+from rogo import daemon_protocol as dp
 
 
 def _short_tmp_dir() -> Path:
@@ -361,6 +363,223 @@ def test_default_spawn_argv_for_a_connect_target_includes_socket_dir():
     assert "--sim" not in argv
     assert argv[argv.index("--connect") + 1] == "host:1234"
     assert argv[argv.index("--socket-dir") + 1] == "/tmp/rundir"
+
+
+# ---------------------------------------------------------------------------
+# is_estop_request() -- ticket 011's own fix (see this module's own
+# header comment above `is_estop_request()`'s definition): a real ESTOP
+# call through `build_session_dispatch_table()`'s generic RPC scheme
+# always arrives as a `session_send`/`session_send_unsequenced` REQUEST
+# with the wire verb nested in `params["wire_verb"]`, never as a
+# top-level `"estop"`/`"halt"` request verb -- so `DaemonServer`'s
+# default `estop_verbs` membership check could never see it. Pure
+# function, no I/O -- exercises every branch directly against
+# hand-built `daemon_protocol.Request`s.
+# ---------------------------------------------------------------------------
+
+def test_is_estop_request_true_for_a_session_send_unsequenced_estop_call():
+    # robot_v6.motion.estop() sends ESTOP unsequenced (protocol.md#8.3) --
+    # this is the shape a real `rogo` ESTOP call actually produces on the
+    # wire through _RemoteSession.send_unsequenced().
+    request = dp.Request(
+        id=1, verb="session_send_unsequenced", params={"wire_verb": "ESTOP", "wire_fields": []})
+    assert daemon_client.is_estop_request(request) is True
+
+
+def test_is_estop_request_true_for_a_session_send_estop_call():
+    # Not how motion.estop() actually calls it (it uses send_unsequenced),
+    # but is_estop_request() checks both RPC verbs -- a future/alternate
+    # caller that sent ESTOP sequenced should still be classified as
+    # estop-priority.
+    request = dp.Request(
+        id=1, verb="session_send", params={"wire_verb": "ESTOP", "wire_fields": []})
+    assert daemon_client.is_estop_request(request) is True
+
+
+def test_is_estop_request_false_for_a_non_estop_wire_verb():
+    # The exact scenario the gap this ticket fixes allowed through
+    # silently: a long-running drive's own WHEELS_V call must NOT be
+    # misclassified as estop-priority.
+    request = dp.Request(
+        id=1, verb="session_send", params={"wire_verb": "WHEELS_V", "wire_fields": [100, 100, 500]})
+    assert daemon_client.is_estop_request(request) is False
+
+
+def test_is_estop_request_false_for_a_different_unsequenced_verb():
+    # HELLO is also sent unsequenced (protocol.md#8.3) -- proves this
+    # function checks the WRAPPED wire_verb, not merely "is this an
+    # unsequenced RPC call at all".
+    request = dp.Request(
+        id=1, verb="session_send_unsequenced", params={"wire_verb": "HELLO", "wire_fields": []})
+    assert daemon_client.is_estop_request(request) is False
+
+
+def test_is_estop_request_false_for_a_generic_rpc_verb_with_no_wire_verb_param():
+    # session_pump/session_highest_acked/session_wait_for_ack/
+    # session_wait_for_done carry no "wire_verb" param at all -- must not
+    # raise (a plain .get() miss, not a KeyError) and must not be
+    # misclassified as estop-priority.
+    for verb, params in [
+        ("session_pump", {"timeout": 0.2}),
+        ("session_highest_acked", {}),
+        ("session_wait_for_ack", {"seq_id": 1, "timeout": 5.0}),
+        ("session_wait_for_done", {"seq_id": 1, "timeout": 5.0}),
+    ]:
+        request = dp.Request(id=1, verb=verb, params=params)
+        assert daemon_client.is_estop_request(request) is False, verb
+
+
+# ---------------------------------------------------------------------------
+# The generic session-RPC dispatch table's own wait handlers respect
+# `abort` -- ticket 011's own fix for the other half of the same gap
+# (is_estop_request() alone is not enough: DaemonServer.submit() sets
+# `abort` on the CURRENTLY RUNNING call when an estop-class request is
+# submitted, but a handler that discards `abort` -- as
+# `_dispatch_session_wait_for_ack`/`_dispatch_session_wait_for_done` did
+# before this fix -- would never notice). Driven through a REAL
+# DaemonServer + build_session_dispatch_table(), against a fake `Session`
+# whose wait_for_done()/wait_for_ack() block until explicitly released --
+# proving the fix end to end at the dispatch-table level, one layer below
+# the full `rogo serve` subprocess scenarios in
+# test_daemon_e2e_multi_client.py.
+# ---------------------------------------------------------------------------
+
+class _NeverCompletesSession:
+    """A minimal stand-in for `robot_v6.reliability.Session`: `send()`
+    always assigns seq_id 1; `wait_for_ack()`/`wait_for_done()` block for
+    the FULL requested `timeout` and then report "not yet" -- exactly
+    what a real Session does while waiting on a robot that has not
+    finished a long motion. Used to prove the abort-aware poll loop in
+    `_dispatch_session_wait_for_ack`/`_dispatch_session_wait_for_done`
+    returns EARLY once `abort` is set, rather than only after this
+    session's own full (generous, 30s) per-call timeout.
+
+    `wait_started` is set on every `wait_for_ack()`/`wait_for_done()`
+    call, including the first -- a test waits on it before submitting an
+    estop, so the estop is only ever submitted once the daemon's single
+    worker thread has genuinely popped the wait request and started
+    dispatching it (`DaemonServer._run_worker()`'s own `_current_abort_
+    event` is only set to a request's own `abort_event` WHILE it is
+    executing -- submitting an estop any earlier would queue-jump ahead
+    of the wait request instead of aborting it, a different, already
+    separately-tested code path, see `test_daemon.py`'s own priority-
+    queue tests)."""
+
+    def __init__(self) -> None:
+        self.wait_started = threading.Event()
+
+    def send(self, verb, *fields):
+        del verb, fields
+        return 1
+
+    def send_unsequenced(self, verb, *fields):
+        del verb, fields
+
+    def pump(self, timeout=0.0):
+        del timeout
+        return []
+
+    @property
+    def highest_acked(self):
+        return 0
+
+    def wait_for_ack(self, seq_id, timeout=5.0):
+        del seq_id
+        self.wait_started.set()
+        time.sleep(timeout)
+        return False
+
+    def wait_for_done(self, seq_id, timeout=5.0):
+        del seq_id
+        self.wait_started.set()
+        time.sleep(timeout)
+        return None
+
+
+def _serve_dispatch_table_directly(session) -> daemon.DaemonServer:
+    """A `DaemonServer` wired exactly like `cli.cmd_serve()`'s own
+    Unix-socket branch (ticket 011's own fix): the real
+    `build_session_dispatch_table()`, classified by the real
+    `is_estop_request()` -- but around a fake `session` (above) instead
+    of a real `robot_v6.reliability.Session`/`tools/sim`, so this test
+    stays fast and needs no compiled binary. `transport=None` is fine --
+    nothing in this test suite's own dispatch bodies ever touches
+    `Connection.transport`, only `Connection.session`."""
+    conn = connection.Connection(transport=None, session=session)  # type: ignore[arg-type]
+    table = daemon_client.build_session_dispatch_table()
+    server = daemon.DaemonServer(conn, table, is_estop=daemon_client.is_estop_request)
+    server.start()
+    return server
+
+
+def test_session_wait_for_done_dispatch_returns_early_once_estop_aborts_it():
+    session = _NeverCompletesSession()
+    server = _serve_dispatch_table_directly(session)
+    try:
+        result_box = []
+
+        def submit_wait():
+            result_box.append(server.submit(dp.Request(
+                id=1, verb="session_wait_for_done",
+                params={"seq_id": 1, "timeout": 30.0})))
+
+        wait_thread = threading.Thread(target=submit_wait)
+        wait_thread.start()
+        # Wait for the daemon's OWN worker thread to have actually popped
+        # this request and started dispatching it (session.wait_started
+        # is only set from INSIDE wait_for_done() itself) -- see
+        # _NeverCompletesSession's own docstring for why this, not
+        # merely "the submitting thread started", is the correct sync
+        # point.
+        assert session.wait_started.wait(timeout=2.0), "wait_for_done() never started"
+
+        start = time.monotonic()
+        estop_reply = server.submit(dp.Request(
+            id=2, verb="session_send_unsequenced",
+            params={"wire_verb": "ESTOP", "wire_fields": []}))
+        wait_thread.join(timeout=2.0)
+        elapsed = time.monotonic() - start
+    finally:
+        server.stop()
+
+    assert estop_reply.error is None
+    assert not wait_thread.is_alive()
+    assert result_box[0].result is None  # aborted, not "completed"
+    # Well under the 30s the fake session's own wait_for_done() would
+    # otherwise have blocked for -- proves abort was actually honored,
+    # not merely ignored until a generous test timeout also happened to
+    # pass.
+    assert elapsed < 2.0
+
+
+def test_session_wait_for_ack_dispatch_returns_early_once_estop_aborts_it():
+    session = _NeverCompletesSession()
+    server = _serve_dispatch_table_directly(session)
+    try:
+        result_box = []
+
+        def submit_wait():
+            result_box.append(server.submit(dp.Request(
+                id=1, verb="session_wait_for_ack",
+                params={"seq_id": 1, "timeout": 30.0})))
+
+        wait_thread = threading.Thread(target=submit_wait)
+        wait_thread.start()
+        assert session.wait_started.wait(timeout=2.0), "wait_for_ack() never started"
+
+        start = time.monotonic()
+        estop_reply = server.submit(dp.Request(
+            id=2, verb="session_send_unsequenced",
+            params={"wire_verb": "ESTOP", "wire_fields": []}))
+        wait_thread.join(timeout=2.0)
+        elapsed = time.monotonic() - start
+    finally:
+        server.stop()
+
+    assert estop_reply.error is None
+    assert not wait_thread.is_alive()
+    assert result_box[0].result is False  # aborted, not acked
+    assert elapsed < 2.0
 
 
 # ---------------------------------------------------------------------------

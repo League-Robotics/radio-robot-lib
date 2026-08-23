@@ -1120,7 +1120,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     SIGTERM -- or, when `--idle-timeout` is given, until that many
     seconds elapse with no dispatched request (`_wait_until_stopped()`;
     used by `daemon_client.default_spawn_argv()` when this subcommand
-    is itself what an auto-spawned `rogo repl`/`rogo mcp` boots)."""
+    is itself what an auto-spawned `rogo repl`/`rogo mcp` boots).
+
+    The Unix-socket branch's own `DaemonServer` is constructed with
+    `is_estop=daemon_client.is_estop_request` (ticket 011's own fix --
+    see that function's own module-level header comment in
+    `daemon_client.py`): without it, an `ESTOP` sent through this
+    subcommand's own generic session-RPC dispatch table would never be
+    classified as estop-priority at all, silently defeating the issue's
+    safety carry-over in production. The `--stdio-pipe` branch does not
+    need the same override -- that transport serves exactly one client,
+    strictly sequentially (`daemon.run_stdio_pipe()`'s own module
+    docstring), so there is never a second, concurrent client's request
+    for an estop to preempt."""
     dispatch_table = daemon_client.build_session_dispatch_table()
 
     if args.stdio_pipe:
@@ -1147,7 +1159,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         if args.idle_timeout:
             table = _with_serve_activity_tracking(dispatch_table, last_activity)
 
-        server = daemon.DaemonServer(conn, table)
+        server = daemon.DaemonServer(conn, table, is_estop=daemon_client.is_estop_request)
         server.start()
         try:
             listener = daemon.UnixSocketListener(server, socket_path)

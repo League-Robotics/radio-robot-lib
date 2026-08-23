@@ -103,6 +103,42 @@ can never delay another client's halt":
 A dispatch body with nothing to wait for (most verbs) may simply ignore
 `abort` -- it is always passed so every verb shares one calling
 convention, not because every verb needs to consult it.
+
+---- `is_estop`: classification is pluggable, ticket 011's own fix
+for a gap this closing ticket's own end-to-end pass surfaced ----
+
+`estop_verbs` classifies by `request.verb` -- the request's own
+TOP-LEVEL wire verb -- which is exactly right for a caller whose
+dispatch table is keyed by real per-command verb names (a test's own
+fake table, `{"estop": ..., "drive": ...}`; ticket 005/006's own
+`tests/host/rogo/test_daemon.py` suite). It is NOT right for
+`daemon_client.build_session_dispatch_table()`, the table `rogo
+serve` actually injects (`cli.cmd_serve()`): every call through that
+table travels as one of a handful of GENERIC RPC verbs
+(`session_send`, `session_send_unsequenced`, `session_wait_for_done`,
+...), with the real wire verb (`STOP`, `WHEELS_V`, `ESTOP`, ...)
+carried one level down, as that request's own `wire_verb` PARAMETER --
+so a real `ESTOP` call, sent through THIS scheme, arrives with
+`request.verb == "session_send_unsequenced"`, never `"estop"`/`"halt"`,
+and `estop_verbs` membership can never match it. This is a real
+integration gap ticket 011's own end-to-end pass against the REAL
+`rogo serve` wiring caught (each of tickets 005-010 tested their own
+piece correctly in isolation; nothing exercised the two together
+against a genuine `ESTOP` call before this ticket): the safety
+carry-over would have silently done nothing in production.
+
+`is_estop`, when given, REPLACES `estop_verbs` matching entirely with
+an injected `Callable[[Request], bool]` -- the same injection-not-import
+shape `dispatch_table` itself already uses (this module's own
+"Injection, not import" section) -- so a caller whose own verb scheme
+needs to look inside `request.params` (as `daemon_client.
+is_estop_request()` does) can classify correctly without teaching
+this module anything about what any given table's params mean.
+`cli.cmd_serve()` passes `daemon_client.is_estop_request` for exactly
+this reason. Omit it (the default) to keep the plain `estop_verbs`
+membership check -- unchanged for every existing caller, including
+every test in this module's own suite that constructs a
+`DaemonServer` with a directly-named fake dispatch table.
 """
 
 from __future__ import annotations
@@ -154,12 +190,19 @@ places no constraint on what a `DispatchFn` actually does; it is
 whatever `rogo.cli` (ticket 009) or a test (this ticket) hands in."""
 
 DEFAULT_ESTOP_VERBS = frozenset({"estop", "halt"})
-"""The verb names that jump the priority queue by default --
+"""The verb names that jump the priority queue by default (used by the
+default `is_estop` classifier, `DaemonServer._verb_in_estop_verbs()`) --
 `daemon_protocol`'s own module docstring: "at minimum `estop`/`halt`".
 Overridable per-server via `DaemonServer(..., estop_verbs=...)`, since
 `daemon_protocol` itself deliberately has no verb table of its own (its
 module docstring's own "This module has no verb table of its own"
-sentence)."""
+sentence). These names are placeholders for a caller whose OWN
+dispatch table is keyed by real per-command verb names -- a caller
+using `daemon_client.build_session_dispatch_table()`'s generic
+session-RPC scheme instead should pass `is_estop=daemon_client.
+is_estop_request` rather than relying on this default (module
+docstring's own `is_estop` section explains why `estop_verbs`
+membership alone cannot see a real `ESTOP` call through that table)."""
 
 
 class DaemonServerError(RuntimeError):
@@ -213,11 +256,19 @@ class DaemonServer:
         dispatch_table: DispatchTable,
         *,
         estop_verbs: frozenset[str] = DEFAULT_ESTOP_VERBS,
+        is_estop: Callable[[Request], bool] | None = None,
     ) -> None:
         self._connection = connection
         self._session = connection.session
         self._dispatch_table: dict[str, DispatchFn] = dict(dispatch_table)
         self._estop_verbs = frozenset(estop_verbs)
+        # See module docstring's own "is_estop: classification is
+        # pluggable" section -- defaults to plain estop_verbs membership,
+        # unchanged for every existing caller; `cli.cmd_serve()` overrides
+        # this with `daemon_client.is_estop_request` instead.
+        self._is_estop: Callable[[Request], bool] = (
+            is_estop if is_estop is not None else self._verb_in_estop_verbs
+        )
 
         self._heap: list[_QueueItem] = []
         self._sequence_counter = itertools.count()
@@ -227,6 +278,12 @@ class DaemonServer:
         self._stop_requested = False
 
         self._worker: threading.Thread | None = None
+
+    def _verb_in_estop_verbs(self, request: Request) -> bool:
+        """The default `is_estop` classifier: plain `request.verb`
+        membership in `estop_verbs` -- see module docstring's own
+        `is_estop` section for why this is not always the right check."""
+        return request.verb in self._estop_verbs
 
     # ---- observable state -----------------------------------------
 
@@ -299,13 +356,15 @@ class DaemonServer:
         call this once per decoded request, from whichever thread owns
         that client's connection.
 
-        If `request.verb` is a member of this server's `estop_verbs`,
-        it is placed ahead of every already-queued non-estop request
-        (priority, not FIFO, ordering -- module docstring), and, if a
-        non-estop dispatch call is CURRENTLY running, that call's own
-        `abort` event is set immediately so a cooperative dispatch body
-        notices and returns early instead of running to its natural
-        completion (module docstring's "Estop-priority queue" section).
+        If this server's `is_estop(request)` classifier says True
+        (plain `estop_verbs` membership by default -- module docstring's
+        own `is_estop` section), it is placed ahead of every
+        already-queued non-estop request (priority, not FIFO, ordering
+        -- module docstring), and, if a non-estop dispatch call is
+        CURRENTLY running, that call's own `abort` event is set
+        immediately so a cooperative dispatch body notices and returns
+        early instead of running to its natural completion (module
+        docstring's "Estop-priority queue" section).
 
         An unrecognized verb is not an error here -- it becomes a
         failed `Reply` once dispatched, matching how any other dispatch
@@ -315,7 +374,7 @@ class DaemonServer:
         if self._worker is None:
             raise DaemonServerError("DaemonServer.submit() called before start()")
 
-        priority = 0 if request.verb in self._estop_verbs else 1
+        priority = 0 if self._is_estop(request) else 1
         item = _QueueItem(
             priority=priority,
             sequence=next(self._sequence_counter),

@@ -441,6 +441,27 @@ outlives the session that spawned it (another client may reuse it) and
 self-terminates on its own idle timeout (5 minutes by default,
 overridable via the `ROGO_DAEMON_IDLE_TIMEOUT` environment variable).
 
+### Estop-priority queue: `ESTOP` jumps every client's queue, `stop` does not
+
+`rogo serve` gives its work queue one safety-critical exception to
+plain first-in-first-out ordering: an `ESTOP` call -- the wire's own
+panic path, distinct from the *planned* sequenced `stop` documented in
+section 3 -- from ANY connected client jumps ahead of every other
+client's already-queued request, and, if another client's own
+completion wait (e.g. a `drive`/`turn`/`goto` invocation still blocked
+on `done reason=...`) is in progress at that instant, aborts it
+immediately rather than letting it run to its own natural timeout. This
+is what keeps one client's long-running move from ever delaying another
+client's emergency stop when several are sharing one daemon.
+
+`rogo` itself has no dedicated `estop` subcommand today -- `stop`
+(section 3) is a PLANNED stop and is intentionally NOT treated as
+estop-priority (it queues normally, exactly like every other command).
+An agent that specifically needs to trigger the estop-priority path
+calls `robot_v6.motion.estop(session)` directly against a resolved
+`Session` (daemon-proxied or direct alike) rather than through a `rogo`
+CLI invocation.
+
 ---
 
 ## 9. Robot config files

@@ -69,11 +69,21 @@ see `rogo.connection`.
 `rogo.daemon` (sprint 003) holds one robot/relay/sim connection open for
 a process's whole lifetime and serves it to any number of clients over
 a framed JSON request/reply wire (`rogo.daemon_protocol`), with an
-estop-priority queue so any client's halt jumps ahead of another
-client's in-flight command (`DaemonServer`, ticket 005). It exposes
-that server core over two interchangeable listener transports — same
-protocol, different I/O — plus the robot-name resolution that decides
-what the Unix-socket transport's file is named.
+estop-priority queue so any client's `ESTOP` jumps ahead of another
+client's in-flight command, aborting that command's own completion wait
+in progress if one is currently running (`DaemonServer`, ticket 005;
+`DaemonServer(..., is_estop=...)`, ticket 011 — the classifier
+`cli.cmd_serve()` injects, `daemon_client.is_estop_request()`, is what
+makes this hold for a REAL `ESTOP` sent through the generic session-RPC
+dispatch table `rogo serve` actually runs, not just for a directly-named
+`"estop"` verb in a test's own fake dispatch table; see `daemon.py`'s
+own `is_estop` docstring section for the gap this closed). The planned,
+sequenced `stop` every other subcommand sends is NOT estop-priority —
+only `ESTOP` is (`robot_v6.motion.estop()`; `rogo` itself has no
+dedicated `estop` subcommand today). It exposes that server core over
+two interchangeable listener transports — same protocol, different I/O
+— plus the robot-name resolution that decides what the Unix-socket
+transport's file is named.
 
 `rogo.cli`'s `serve` subcommand (`cmd_serve()`, ticket 009) wires this
 up end to end: it injects `rogo.daemon_client.

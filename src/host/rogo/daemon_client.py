@@ -377,7 +377,36 @@ class _RemoteSession:
 # The generic session-RPC dispatch table -- server side of `_RemoteSession`
 # above. Reusable by a future `cmd_serve()` (ticket 009); built and used
 # directly by this module's own worker (`run_daemon_worker()` below).
+#
+# `_dispatch_session_wait_for_ack`/`_dispatch_session_wait_for_done` are
+# the two handlers here that can genuinely block for a long time (a
+# `drive`/`turn`/`goto`'s own multi-second completion wait, `cli.py`'s
+# `_cmd_drive_ms()` and friends) -- exactly the "one client's long
+# `drive`" case the issue's own safety carry-over names. Ticket 011's own
+# end-to-end pass against the REAL `rogo serve` wiring found both of
+# them discarding their own `abort` argument (`del abort`) entirely: the
+# estop-priority queue could set `abort` all day and neither handler
+# would ever notice, so an ESTOP from another client would still sit
+# behind a long drive's full natural timeout, not preempt it. Both are
+# now poll loops -- bounded `_WAIT_POLL_S`-sized calls into the
+# underlying (abort-unaware) `Session.wait_for_ack()`/`wait_for_done()`,
+# rechecking `abort` between each -- so an estop is felt within one poll
+# interval instead of only once the original call's own full timeout
+# elapses. `_dispatch_session_send`/`_dispatch_session_send_unsequenced`
+# (non-blocking) and `_dispatch_session_highest_acked` (no I/O) need no
+# such change; `_dispatch_session_pump()`'s own `timeout` is always a
+# short, caller-controlled value in every call site this codebase makes
+# (`rogo.cli`'s own `_pump_until()` polls in 0.2s steps) rather than a
+# multi-second completion wait, so it is left as a plain pass-through.
 # ---------------------------------------------------------------------------
+
+_WAIT_POLL_S = 0.1  # [s] -- how often the two abort-aware wait dispatch
+# bodies below recheck `abort` between short polls of the underlying
+# (Session-level, abort-unaware) blocking call. Small enough that an
+# estop's own preemption is felt promptly (daemon.py's own
+# "Estop-priority queue" safety requirement); large enough not to turn
+# a long wait into a pump() busy-loop.
+
 
 def _reply_to_json(reply: codec.Reply) -> dict:
     return {"verb": reply.verb, "fields": list(reply.fields), "id": reply.id}
@@ -406,16 +435,34 @@ def _dispatch_session_highest_acked(session, params, abort):
 
 
 def _dispatch_session_wait_for_ack(session, params, abort):
-    del abort
-    return session.wait_for_ack(params["seq_id"], timeout=params.get("timeout", 5.0))
+    seq_id = params["seq_id"]
+    timeout = params.get("timeout", 5.0)
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        if abort.is_set():
+            return False
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            return False
+        step = _WAIT_POLL_S if remaining is None else min(_WAIT_POLL_S, remaining)
+        if session.wait_for_ack(seq_id, timeout=step):
+            return True
 
 
 def _dispatch_session_wait_for_done(session, params, abort):
-    del abort
-    done = session.wait_for_done(params["seq_id"], timeout=params.get("timeout", 5.0))
-    if done is None:
-        return None
-    return {"id": done.id, "reason": done.reason}
+    seq_id = params["seq_id"]
+    timeout = params.get("timeout", 5.0)
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        if abort.is_set():
+            return None
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            return None
+        step = _WAIT_POLL_S if remaining is None else min(_WAIT_POLL_S, remaining)
+        done = session.wait_for_done(seq_id, timeout=step)
+        if done is not None:
+            return {"id": done.id, "reason": done.reason}
 
 
 def build_session_dispatch_table() -> daemon.DispatchTable:
@@ -432,6 +479,44 @@ def build_session_dispatch_table() -> daemon.DispatchTable:
         "session_wait_for_ack": _dispatch_session_wait_for_ack,
         "session_wait_for_done": _dispatch_session_wait_for_done,
     }
+
+
+# ---------------------------------------------------------------------------
+# is_estop_request() -- `rogo serve`'s own `DaemonServer(..., is_estop=...)`
+# classifier (`cli.cmd_serve()`). See `daemon.py`'s own `DEFAULT_ESTOP_VERBS`
+# / `is_estop` docstring sections for why `DaemonServer`'s plain
+# `estop_verbs` membership check (against `request.verb` alone) can never
+# recognize a real `ESTOP` sent through this module's generic session-RPC
+# table: every `rogo.cli` dispatch body's own wire verb (`STOP`, `WHEELS_V`,
+# `ESTOP`, ...) travels as a `wire_verb` PARAMETER of a
+# `session_send`/`session_send_unsequenced` REQUEST, never as that
+# request's own top-level `verb` -- so `request.verb` is always one of
+# THIS table's six generic RPC names, never `"estop"`/`"halt"`, no matter
+# what a client actually sent. This function looks one level deeper, at
+# the wrapped `wire_verb`, so the issue's own safety carry-over ("an
+# estop/halt request from ANY client jumps to the front of the work
+# queue") holds for a REAL `rogo serve` daemon, not just for a test's own
+# directly-named fake dispatch table.
+# ---------------------------------------------------------------------------
+
+_ESTOP_WIRE_VERBS = frozenset({"ESTOP"})
+# protocol.md#8.3's own unsequenced "panic path" verb
+# (`robot_v6.motion.estop()`'s own docstring: "the panic path, not a
+# general-purpose halt"). `STOP` (`robot_v6.motion.stop()`) is a
+# PLANNED, sequenced stop -- deliberately excluded here, matching
+# motion.py's own documented distinction between the two.
+
+
+def is_estop_request(request: dp.Request) -> bool:
+    """True when `request` is a `session_send`/`session_send_unsequenced`
+    RPC call whose wrapped `wire_verb` is itself safety-critical
+    (`ESTOP`) -- see this section's own header comment for the full
+    rationale. Every other request (including `session_send_unsequenced`
+    calls for any OTHER unsequenced verb, e.g. `HELLO`/`PING`) is not
+    estop-priority."""
+    if request.verb not in ("session_send", "session_send_unsequenced"):
+        return False
+    return request.params.get("wire_verb") in _ESTOP_WIRE_VERBS
 
 
 def _with_activity_tracking(
@@ -710,7 +795,7 @@ def run_daemon_worker(args: argparse.Namespace) -> None:
         last_activity = [time.monotonic()]
         table = _with_activity_tracking(build_session_dispatch_table(), last_activity)
 
-        server = daemon.DaemonServer(conn, table)
+        server = daemon.DaemonServer(conn, table, is_estop=is_estop_request)
         server.start()
         try:
             listener = daemon.UnixSocketListener(server, socket_path)
