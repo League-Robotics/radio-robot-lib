@@ -1,9 +1,12 @@
 ---
 id: '003'
 title: Implement rogo drive/turn/stop/hello commands
-status: open
-use-cases: [SUC-001]
-depends-on: ["001", "002"]
+status: done
+use-cases:
+- SUC-001
+depends-on:
+- '001'
+- '002'
 github-issue: ''
 issue: import-rogo-cli-adapt-robot-radio-to-v6-host.md
 completes_issue: true
@@ -29,24 +32,24 @@ the real subcommand table alongside these.
 
 ## Acceptance Criteria
 
-- [ ] `rogo drive <L> <R> --ms <N>` against `tools/sim` issues one
+- [x] `rogo drive <L> <R> --ms <N>` against `tools/sim` issues one
       `WHEELS_V <L> <R> <N>` and reports the ack/completion outcome.
-- [ ] `rogo drive <L> <R> stream [--resend MS]` re-issues `WHEELS_V` at
+- [x] `rogo drive <L> <R> stream [--resend MS]` re-issues `WHEELS_V` at
       the configured resend cadence until Ctrl-C, then sends `STOP`
       (matches `reliability.py`'s documented "current reading always
       overrides the previous one" semantics for `WHEELS_V` on
       `DiffDriveAdapter`).
-- [ ] `rogo drive <L> <R> --mm <N>` issues `WHEELS_X` and reports whatever
+- [x] `rogo drive <L> <R> --mm <N>` issues `WHEELS_X` and reports whatever
       the connected adapter answers (ack + `kUnknown` on `DiffDriveAdapter`
       today, per UC-002) — not a crash, not a false "success."
-- [ ] `rogo turn <degrees> [--speed]` computes `(cmd_l, cmd_r, duration)`
+- [x] `rogo turn <degrees> [--speed]` computes `(cmd_l, cmd_r, duration)`
       from the ported rotation model using the active robot's
       `trackwidth`/`rotational_slip`, falling back to a no-slip linear
       estimate when calibration data is absent (matching elite's own
       fallback), and issues one `WHEELS_V`.
-- [ ] `rogo stop` and `rogo hello` work via the real `rogo.cli` command
+- [x] `rogo stop` and `rogo hello` work via the real `rogo.cli` command
       table (not the ticket-002 stub path).
-- [ ] Tests cover the rotation-model math as a pure function (no
+- [x] Tests cover the rotation-model math as a pure function (no
       transport needed) and an end-to-end `tools/sim` run for `drive
       --ms`, `drive stream`, and `turn`.
 
