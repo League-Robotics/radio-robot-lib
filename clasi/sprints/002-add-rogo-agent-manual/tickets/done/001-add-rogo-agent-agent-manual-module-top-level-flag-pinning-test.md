@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: 'Add rogo --agent: agent manual module, top-level flag, pinning test'
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: add-rogo-agent-flag-one-page-agent-manual.md
@@ -49,44 +50,44 @@ ships, not an idealized or stale version of it.
 
 ## Acceptance Criteria
 
-- [ ] `rogo --agent` (alone, no other flags/subcommand) exits 0 and
+- [x] `rogo --agent` (alone, no other flags/subcommand) exits 0 and
       prints a non-empty Markdown manual to stdout, resolving no target
       (`--sim`/`--connect`/`--port`) and requiring no built `tools/sim`.
-- [ ] The manual documents every subcommand `rogo` currently ships
+- [x] The manual documents every subcommand `rogo` currently ships
       (`hello`, `stop`, `drive`, `turn`, `goto`, `config get`/`config
       set`, `calibrate turns`/`calibrate distance`, `repl`, `mcp`) and
       every option/argument for each, including the shared target
       options (`--sim`/`--connect HOST:PORT`/`--port PORT`).
-- [ ] The manual gives concrete example invocations for the main
+- [x] The manual gives concrete example invocations for the main
       subcommands, not just a restatement of `--help` text.
-- [ ] The manual states expected output shape per command (e.g. what
+- [x] The manual states expected output shape per command (e.g. what
       `hello` prints, what a `WHEELS_V acked (#N), done reason=...` line
       means).
-- [ ] The manual documents exit-code semantics, explicitly including the
+- [x] The manual documents exit-code semantics, explicitly including the
       kUnknown soft-warning rule (an acked-but-merits-rejected call —
       e.g. `drive --mm`/`goto` hitting `DiffDriveAdapter`'s planner gap —
       prints a warning and still exits 0) and how `config set`'s
       unknown-field-name error differs (hard error, exit 1).
-- [ ] The manual documents units for every numeric argument (mm, mm/s,
+- [x] The manual documents units for every numeric argument (mm, mm/s,
       ms, degrees) and calls out which wire fields are integer-typed
       (`goto`'s five numeric fields, `drive`'s wheel speeds) versus
       float-typed (`config set`'s value — the one float wire field).
-- [ ] The manual documents `repl`'s one-persistent-session property and
+- [x] The manual documents `repl`'s one-persistent-session property and
       that `calibrate`/`mcp` are not available as repl lines.
-- [ ] The manual documents `mcp`'s `stdio`-by-default transport, lists
+- [x] The manual documents `mcp`'s `stdio`-by-default transport, lists
       all 8 tools it exposes, and states the `--listen`
       loopback-unless-`--allow-remote` binding rule.
-- [ ] The manual documents where robot configs live
+- [x] The manual documents where robot configs live
       (`config/robots/*.json`, `active_robot.json`) and that
       `calibrate`/`turn` read `trackwidth`/`rotational_slip`/
       `distance_scale` from there.
-- [ ] A pinning test introspects `rogo.cli.build_parser()`'s argparse
+- [x] A pinning test introspects `rogo.cli.build_parser()`'s argparse
       tree (every subparser name, every sub-subparser name, every
       registered option string) and asserts each one appears in
       `agent_manual.MANUAL` — not a hand-written checklist of expected
       strings (sprint.md's Design Rationale).
-- [ ] `src/host/rogo/README.md` mentions `rogo --agent`.
-- [ ] No existing `rogo` subcommand's behavior, options, or exit codes
+- [x] `src/host/rogo/README.md` mentions `rogo --agent`.
+- [x] No existing `rogo` subcommand's behavior, options, or exit codes
       change.
 
 ## Implementation Plan

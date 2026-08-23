@@ -12,6 +12,11 @@ Architecture and Design Rationale sections and is not repeated here.
 Install: `[project.scripts]` in this repo's `pyproject.toml` registers
 the `rogo` console script (`rogo.cli:main`).
 
+Run `rogo --agent` for the complete agent-oriented reference — every
+subcommand, every option, units, exit-code semantics, and the MCP tool
+list — in one page; `rogo --help`/`rogo <subcommand> --help` stay the
+short usage below.
+
 ## Commands
 
 Every subcommand accepts a target: `--sim` (spawn a freshly built
