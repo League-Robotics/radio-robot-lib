@@ -52,12 +52,78 @@ see `rogo.connection`.
   connection, reusing `rogo.cli`'s own `hello`/`stop`/`drive`/`turn`/
   `goto`/`config` dispatch. `calibrate` is deliberately **not**
   available inside a repl line — its own multi-trial wizard is not a
-  single self-contained command.
+  single self-contained command. Resolves its connection through
+  `rogo.daemon_client`'s **auto-spawn** policy — see "`rogo serve`" below.
 - `rogo mcp [--listen HOST:PORT [--allow-remote]]` — start an MCP
   server exposing `hello`/`stop`/`drive`/`turn`/`goto`/`config_get`/
   `config_set`/`calibrate_turns` (8 tools) as MCP tools. Defaults to
   `stdio` transport (no network surface at all); `--listen` opts into
   TCP, restricted to loopback unless paired with `--allow-remote`.
+- `rogo serve [--sim|--connect|--port] [--name NAME] [--socket-dir DIR]
+  [--idle-timeout SECONDS] [--stdio-pipe]` — start a daemon holding one
+  connection open for the whole process's lifetime, serving any number
+  of clients (see below).
+
+## `rogo serve` — the daemon (`rogo.daemon`/`rogo.daemon_client`)
+
+`rogo.daemon` (sprint 003) holds one robot/relay/sim connection open for
+a process's whole lifetime and serves it to any number of clients over
+a framed JSON request/reply wire (`rogo.daemon_protocol`), with an
+estop-priority queue so any client's `ESTOP` jumps ahead of another
+client's in-flight command, aborting that command's own completion wait
+in progress if one is currently running (`DaemonServer`, ticket 005;
+`DaemonServer(..., is_estop=...)`, ticket 011 — the classifier
+`cli.cmd_serve()` injects, `daemon_client.is_estop_request()`, is what
+makes this hold for a REAL `ESTOP` sent through the generic session-RPC
+dispatch table `rogo serve` actually runs, not just for a directly-named
+`"estop"` verb in a test's own fake dispatch table; see `daemon.py`'s
+own `is_estop` docstring section for the gap this closed). The planned,
+sequenced `stop` every other subcommand sends is NOT estop-priority —
+only `ESTOP` is (`robot_v6.motion.estop()`; `rogo` itself has no
+dedicated `estop` subcommand today). It exposes that server core over
+two interchangeable listener transports — same protocol, different I/O
+— plus the robot-name resolution that decides what the Unix-socket
+transport's file is named.
+
+`rogo.cli`'s `serve` subcommand (`cmd_serve()`, ticket 009) wires this
+up end to end: it injects `rogo.daemon_client.
+build_session_dispatch_table()` — a generic Session-RPC dispatch table,
+not a per-CLI-verb one, so every `cli.py` dispatch body (`_run_hello`,
+`_dispatch_drive_mode`, …) runs completely unchanged whether its
+connection is direct or daemon-proxied. Every one-shot subcommand
+(`hello`/`stop`/`drive`/`turn`/`goto`/`config`/`calibrate`)
+**auto-detects** an already-running daemon for its resolved target and
+routes through it when found, falling back to a direct connection
+unchanged when none is found; `rogo repl`/`rogo mcp` **auto-spawn** one
+when none is running (`rogo.daemon_client.get_connection()`, ticket 008)
+— an auto-spawned daemon outlives the session that spawned it and
+self-terminates after an idle timeout (5 minutes by default, overridable
+via `ROGO_DAEMON_IDLE_TIMEOUT`).
+
+- **Unix domain socket (production)** — `UnixSocketListener` binds a
+  socket at `$XDG_RUNTIME_DIR/rogo/<name>.sock` when that env var is
+  set, else `~/.rogo/run/<name>.sock` (`daemon.default_socket_dir()`/
+  `daemon.socket_path_for_name()`); the containing directory is created
+  with owner-only (`0700`) permissions if missing
+  (`daemon.ensure_socket_dir()`). `<name>` is the target's resolved
+  robot name, so two differently-named robots on one host run two
+  independent, independently-discoverable daemons with no collision.
+  Multiple clients may connect at once, each on its own thread — an MCP
+  session and a CLI invocation can share one robot through the same
+  socket.
+- **stdio pipe (tests/embedding)** — `daemon.run_stdio_pipe(server)`
+  speaks the identical framed protocol over the process's own
+  stdin/stdout, with no socket file created at all. This is how a test
+  forks the daemon as a subprocess and exchanges real wire-protocol
+  request/reply lines against it with no `tools/sim` process or Unix
+  socket involved — see `tests/host/rogo/test_daemon_transports.py`.
+  Output is always flushed line-by-line (ticket 003-001's fix), so a
+  reader on the far end of the pipe never waits on a block buffer.
+
+**Robot-name resolution** (`daemon.resolve_robot_name()`) — an explicit
+override, if given, wins immediately; otherwise the target's own
+`HELLO`/`device` banner supplies the name (protocol.md#8.3); a `--sim`
+target with neither falls back to a fixed default (`"sim"`).
 
 ## What was deliberately not ported, and why
 
@@ -72,11 +138,14 @@ argument, are repeated here:
   (robot-frame only — world-frame `go_to_w` stays unavailable until a
   pose source exists, `specification.md#13`); `rogo calibrate` ports
   only elite's fully self-contained manual/tape-measure mode.
-- **No `rogo serve` daemon.** Elite's multi-client TCP relay exists to
-  work around one platform hazard (macOS resets the robot when its
-  serial port closes); `robot_v6.transport.SocketTransport` already
-  lets any client connect directly to a robot, relay, or `tools/sim`
-  with no Rogo-specific relay in between.
+- **`rogo serve` was deferred, then rebuilt (sprint 001 decision,
+  superseded by sprint 003).** Sprint 001 left it out because
+  `robot_v6.transport.SocketTransport` already lets any client connect
+  directly to a robot, relay, or `tools/sim` with no relay in between —
+  but a direct connection still means every client owns and closes its
+  own connection, which resets the robot on macOS (DTR/HUPCL) between
+  invocations. Sprint 003 rebuilt `rogo serve` on this repo's v6 stack
+  for exactly that reason — see "`rogo serve` — the daemon" above.
 - **No digital/analog port, gripper, color/line-sensor, or OTOS/pose
   commands.** `DiffDriveAdapter` doesn't expose any of this hardware
   surface, and this sprint is host-side only (no firmware changes) —

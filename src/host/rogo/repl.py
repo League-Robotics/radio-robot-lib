@@ -85,6 +85,48 @@ class _Stop:
 _STOP = _Stop()
 
 
+def _force_line_buffered_stdout() -> None:
+    """Force `sys.stdout` into line-buffered mode so every line this
+    process writes -- both `print_fn`'s own output below AND, more
+    importantly, the per-verb `print()` calls `dispatch()` makes deep
+    inside `rogo.cli` (e.g. `_run_hello()`/`_run_stop()`/etc, which never
+    go through `print_fn` at all) -- reaches a piped stdout immediately
+    instead of sitting in CPython's default block-buffer (which
+    `sys.stdout` picks automatically whenever `isatty()` is false at
+    process startup: piped, redirected-to-file, or a test harness
+    reading a subprocess's stdout). Without this, a caller piping
+    `rogo repl`'s output sees it arrive in large delayed chunks -- often
+    only at process exit -- instead of per-line, and the only workaround
+    is the caller setting `PYTHONUNBUFFERED=1`, which this module must
+    not require (ticket 003-001).
+
+    Called once per `run()` invocation rather than importing `rogo.cli`
+    to patch there: `dispatch()` is injected, so this is the one place
+    both call sites share (see module docstring on why `repl.py` never
+    imports `cli.py`). Ticket 006's daemon stdio-pipe mode does not
+    reuse this loop at all (it is a separate framed request/reply
+    listener, not `run()`) -- it should call this SAME helper, or apply
+    `sys.stdout.reconfigure(line_buffering=True)` itself, before writing
+    its own first reply.
+
+    `reconfigure()` implicitly flushes any already-buffered bytes before
+    changing mode, so this is safe even if something was written to
+    `sys.stdout` earlier in the process. Guarded because `sys.stdout` is
+    not always a real `io.TextIOWrapper` -- e.g. some embeddings replace
+    it with a stream that has no `reconfigure()` method -- in which case
+    this is a deliberate no-op rather than a startup crash; those
+    replacement streams (including pytest's own `capsys`) are almost
+    always already unbuffered/write-through, so the flushing guarantee
+    this exists for still holds."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(line_buffering=True)
+    except (ValueError, OSError):
+        pass
+
+
 def run(
     session: Session,
     commands: Sequence[str],
@@ -106,7 +148,13 @@ def run(
     propagating out of `dispatch()`, which this function does NOT catch
     -- `rogo.cli.cmd_repl()`'s own `finally: conn.transport.close()`
     (the same pattern every other `cmd_*()` in that module already uses)
-    is what tears the connection down, on any exit path."""
+    is what tears the connection down, on any exit path.
+
+    Forces `sys.stdout` into line-buffered mode on entry (see
+    `_force_line_buffered_stdout()`) -- ticket 003-001's own fix, so no
+    caller needs `PYTHONUNBUFFERED=1` to see `rogo repl`'s output
+    arrive per-line rather than in delayed block-buffered chunks."""
+    _force_line_buffered_stdout()
     _input = input_fn if input_fn is not None else input
     _print = print_fn if print_fn is not None else print
     _isatty = isatty if isatty is not None else sys.stdin.isatty()

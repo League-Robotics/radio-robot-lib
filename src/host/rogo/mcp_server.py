@@ -31,6 +31,34 @@ encoding, config parsing, calibration math each still live in exactly
 one place); only the reporting shape differs, same as `rogo.repl`
 differing from `rogo.cli` only in how a result reaches the user.
 
+**Ticket 010: `session` may now be daemon-routed, not just direct --
+and this module never has to know or care which.** `rogo.cli`'s own
+`cmd_mcp()` resolves this module's `session` through `daemon_client.
+get_connection(args, spawn=True)` -- the identical auto-spawn-if-absent
+policy `cmd_repl()` already used (ticket 009) -- rather than `rogo.
+connection.resolve()` directly: an MCP session is itself a long-lived
+tool, so it prefers an already-running `rogo serve` daemon for the
+resolved target, or spawns one, letting a concurrent one-shot command
+(or another long-lived session) reach the same robot without contention
+(SUC-002's own multi-client requirement) instead of holding the
+serial/sim connection exclusively for itself. `session` is therefore no
+longer guaranteed to be a direct `rogo.connection.Connection.session`
+-- it may equally be a `daemon_client.ClientConnection.session` (a
+`_RemoteSession` proxying one `session_send`/`session_pump`/... RPC per
+call to the daemon's own held `Session`). This is exactly why this
+module's decision, above, to keep its own thin translation layer rather
+than import `cli.py`'s print-based dispatch bodies pays off a second
+time: `_RemoteSession` presents the IDENTICAL `Session` surface a
+direct connection's does (`send`/`send_unsequenced`/`pump`/
+`highest_acked`/`wait_for_ack`/`wait_for_done`, `daemon_client.py`'s
+own module docstring), so this module's wire-glue helpers (`_pump_until()`/
+`_await_ack_and_err()`/`_await_ack_and_get_lines()` below) needed NO
+changes at all for this ticket and are NOT retired by it -- they are
+what makes `session`'s origin (direct vs. daemon-routed) invisible to
+every `_tool_*()` body below, the same way `rogo.cli`'s own per-verb
+dispatch bodies stayed unchanged across the identical daemon-routing
+swap (ticket 009's own AC #3).
+
 **STAKEHOLDER DECISION (sprint 001 stakeholder_approval gate,
 binding):** kUnknown outcomes are soft WARNINGS, not tool errors -- an
 acked call the adapter then rejects on merit (protocol.md#8.9) is
@@ -507,7 +535,14 @@ def serve(session: Session, *, listen: str | None = None, allow_remote: bool = F
     disconnecting, or Ctrl-C for a `--listen` server); always returns 0
     on a clean exit -- `rogo.cli.cmd_mcp()` is what maps a
     `ListenTargetError`/`TransportClosed` raised around THIS call to a
-    nonzero process exit code."""
+    nonzero process exit code.
+
+    `session` is whatever `cmd_mcp()`'s own `daemon_client.get_connection(
+    args, spawn=True)` resolved (ticket 010) -- a direct `rogo.connection.
+    Connection.session` or a daemon-routed `_RemoteSession` proxy; this
+    function (and every `_tool_*()` body it builds tools around) does not
+    need to know which (module docstring's own "session may now be
+    daemon-routed" section)."""
     target = resolve_listen_target(listen, allow_remote)
     server = build_server(session)
     if target is None:

@@ -8,9 +8,10 @@
 namespace msg::wire_v6 {
 
 // kPoseColumns/kFullColumns -- protocol v6's telemetry column NAME
-// tables (spec §6.3 POSE / §6.4 FULL), in wire column order. `thdr:`
-// emits these names once per subscription change; `t:` emits the
-// matching values every frame (spec §6.2). Assembling those values
+// tables (docs/design/protocol.md §10.4, which points at this file as
+// the archived full-robot POSE/FULL reference layout), in wire column
+// order. `thdr:` emits these names once per subscription change; `t:`
+// emits the matching values every frame (§10.2). Assembling those values
 // from RobotState is ticket 004's job, not this one -- this header
 // only fixes the column NAMES and their ORDER, generated so the
 // firmware table and the host mirror below can never independently

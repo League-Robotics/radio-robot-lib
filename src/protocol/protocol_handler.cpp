@@ -140,6 +140,7 @@ bool parseTlmMode(const char* field, TlmMode& mode) {
       {"OFF", TlmMode::kOff},   {"POSE", TlmMode::kPose},
       {"FULL", TlmMode::kFull}, {"NOW", TlmMode::kNow},
       {"AUTO", TlmMode::kAuto}, {"BUFFER", TlmMode::kBuffer},
+      {"HDR", TlmMode::kHdr},
   };
   for (const auto& entry : kModes) {
     if (std::strcmp(field, entry.name) == 0) {
@@ -741,6 +742,21 @@ void ProtocolHandler::execTlm(char** fields, size_t fieldCount, uint32_t id,
                 // for TLM (unchanged from before the reliability layer).
   TlmMode mode;
   parseTlmMode(fields[0], mode);  // decodeTlm() already proved this succeeds
+
+  // TLM HDR (docs/design/protocol.md §10.5): a header-recovery request,
+  // not a subscription change. Handled entirely here by clearing the
+  // handler's own remembered-header state directly -- the same field
+  // headerChanged() already checks -- so the very next emitTelemetry()
+  // call re-emits `thdr` before its next `t` frame. This never reaches
+  // Adapter::onTlm(): the handler already owns every bit of state that
+  // needs clearing (headerCount_/headerNames_/headerHex_/
+  // everEmittedHeader_), and forwarding it would wrongly let a
+  // DiffDriveAdapter-shaped `if (mode != TlmMode::kNow) mode_ = mode;`
+  // persist kHdr as the current subscription mode.
+  if (mode == TlmMode::kHdr) {
+    everEmittedHeader_ = false;
+    return;
+  }
   (void)adapter_.onTlm(mode);
 }
 
@@ -1053,7 +1069,8 @@ void ProtocolHandler::emitFrame(const Snapshot& snapshot) {
   for (size_t i = 0; i < snapshot.count; ++i) {
     append(" ");
     if (snapshot.columns[i].hex) {
-      // flags: lowercase hex, no "0x" prefix (spec §6.5).
+      // flags: lowercase hex, no "0x" prefix (docs/design/protocol.md
+      // §10.2's Value encoding paragraph).
       std::snprintf(valueText, sizeof(valueText), "%x",
                     static_cast<unsigned int>(
                         static_cast<uint32_t>(snapshot.columns[i].value)));

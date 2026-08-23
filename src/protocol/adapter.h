@@ -52,10 +52,17 @@ enum class Result : uint8_t {
   kBusy,           // -> err 10 #<id>  ERR_BUSY
 };
 
-// TLM subscription modes (spec §6.1). The handler only decodes the wire
+// TLM subscription modes (docs/design/protocol.md §10.1: `TLM <mode>` —
+// telemetry is a subscription). The handler only decodes the wire
 // token ("OFF"/"POSE"/"FULL"/"NOW"/"AUTO"/"BUFFER") into this enum and
 // hands it to onTlm() — what each mode DOES (including whether "current
 // mode" even changes for NOW) is entirely the adapter's business.
+//
+// `kHdr` (2026-08-23, docs/design/protocol.md §10.5) is the one
+// exception to that rule: `TLM HDR` is a header-recovery request, not a
+// subscription change, so ProtocolHandler::execTlm() handles it
+// entirely itself (clearing its own remembered-header state) and NEVER
+// forwards it to onTlm() — no Adapter ever observes this enumerator.
 enum class TlmMode : uint8_t {
   kOff,
   kPose,
@@ -63,6 +70,7 @@ enum class TlmMode : uint8_t {
   kNow,
   kAuto,
   kBuffer,
+  kHdr,
 };
 
 // The reliability layer's completion-reason vocabulary (docs/design/
@@ -111,11 +119,12 @@ struct StatusFields {
 };
 
 // One column of a telemetry frame — see Snapshot below. `value` is
-// already fully scaled per spec §6.3/§6.4 (e.g. an `elv` column already
-// carries mm/s x10); ProtocolHandler does not know or care what a column
-// MEANS, only how to print it. `hex` selects spec §6.5's one exception:
-// `flags` prints lowercase hex with no `0x` prefix, everything else
-// prints signed base-10.
+// already fully scaled per docs/design/protocol.md §10.3 (This library's
+// column sets; e.g. an `elv` column already carries mm/s x10);
+// ProtocolHandler does not know or care what a column MEANS, only how to
+// print it. `hex` selects docs/design/protocol.md §10.2's Value encoding
+// paragraph's one exception: `flags` prints lowercase hex with no `0x`
+// prefix, everything else prints signed base-10.
 struct Column {
   const char* name = "";
   int32_t value = 0;
@@ -131,8 +140,9 @@ struct Column {
 // column set (count, names, hex-ness, and order) stays stable across
 // calls for as long as the subscription mode is unchanged — that
 // stability is what the handler watches to decide whether a fresh
-// `thdr:` is due (spec §6.2: "whenever the subscription changes, and
-// before the first frame after connect").
+// `thdr:` is due (docs/design/protocol.md §10.2: a fresh `thdr:` is due
+// whenever the column set changes, including the first frame this
+// handler has ever emitted).
 struct Snapshot {
   const Column* columns = nullptr;
   size_t count = 0;

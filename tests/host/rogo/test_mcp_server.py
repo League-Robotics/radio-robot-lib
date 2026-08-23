@@ -12,21 +12,45 @@ pattern -- a second, independent copy of that small fixture here for
 the same reason `rogo.mcp_server` itself doesn't import `rogo.cli`
 (see that module's own docstring): this file exercises `mcp_server` in
 isolation. No real stdio/JSON-RPC wire, no `tools/sim` subprocess.
+
+Ticket 010 changes `cli.cmd_mcp()` to resolve its connection through
+`daemon_client.get_connection(args, spawn=True)` (auto-spawn a daemon
+when none is running for the resolved target, exactly like `cmd_repl()`
+already does, ticket 009) rather than `connection.resolve()` directly.
+Every test above this point is unaffected -- each builds `mcp_server.
+build_server(session)` directly around an already-constructed `Session`,
+never going through `cli.cmd_mcp()`'s own connection acquisition at
+all -- proving the tool-body/wire behavior is UNCHANGED (this ticket's
+own ACs #2/#3). The section below this point is new: it exercises
+`cli.cmd_mcp()`'s own daemon-client connection acquisition end to end
+against the real compiled `tools/sim` binary (auto-spawn, reuse, and a
+concurrent one-shot command sharing the same daemon -- this ticket's
+own AC #5), mirroring test_cli_serve.py's own `rogo repl` auto-spawn
+tests. `mcp_server.serve()` itself is stubbed out in that section (it
+blocks forever running the real MCP stdio protocol loop, which is not
+what daemon-connection acquisition is about) so each test there
+observes exactly the connection `cmd_mcp()` resolved, then returns
+before that blocking loop would ever start.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import pytest
 
 from robot_v6.reliability import Session
 from robot_v6.transport import Transport, TransportClosed
 
-from rogo import cli, mcp_server
+from rogo import cli, daemon_client, mcp_server
 from rogo import config as rogo_config
 from rogo import turn_model
 
@@ -423,3 +447,220 @@ def test_cli_mcp_subcommand_defaults_listen_to_none_and_allow_remote_to_false():
     assert args.listen is None
     assert args.allow_remote is False
     assert args.func is cli.cmd_mcp
+
+
+# ---------------------------------------------------------------------------
+# cli.cmd_mcp()'s own daemon-client connection acquisition (ticket 010) --
+# see module docstring for why `mcp_server.serve()` is stubbed out below
+# and why `isolated_socket_dir` is required on every test in this section
+# (never touch this machine's real ~/.rogo/run/$XDG_RUNTIME_DIR, or leave
+# a background daemon running against it -- test_cli_serve.py's own
+# `isolated_socket_dir` fixture, duplicated here rather than imported
+# across test files, matches this project's own established
+# duplicate-rather-than-couple precedent, e.g. daemon.py's
+# `_force_line_buffered()`).
+# ---------------------------------------------------------------------------
+
+def _terminate(proc: subprocess.Popen, *, timeout: float = 5.0) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=timeout)
+
+
+def _short_tmp_dir() -> Path:
+    """A short-path temp directory under `/tmp` -- AF_UNIX's `sun_path`
+    has an OS-enforced length limit (~104 bytes on macOS) that pytest's
+    own `tmp_path` fixture can exceed once nested; see test_cli_serve.py's/
+    test_daemon_client.py's own identical helper/rationale."""
+    return Path(tempfile.mkdtemp(prefix="rogo-mcp-", dir="/tmp"))
+
+
+@pytest.fixture
+def isolated_socket_dir(monkeypatch) -> Iterator[Path]:
+    """Redirect `daemon.default_socket_dir()` -- and so every
+    `daemon_client`/`cmd_mcp()`/`rogo serve` lookup that does not pass an
+    explicit `--socket-dir`/`socket_dir=` -- at a per-test SHORT tmp
+    directory, via the same `XDG_RUNTIME_DIR` precedence
+    `daemon.default_socket_dir()` documents. A subprocess spawned from
+    within a test using this fixture inherits the modified env
+    (`subprocess.Popen`'s own default `env=None` behavior)."""
+    xdg_dir = _short_tmp_dir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(xdg_dir))
+    try:
+        yield xdg_dir / "rogo"
+    finally:
+        shutil.rmtree(xdg_dir, ignore_errors=True)
+
+
+def _spawn_serve(*extra_args: str) -> subprocess.Popen:
+    argv = [sys.executable, "-m", "rogo.cli", "serve", "--sim", *extra_args]
+    return subprocess.Popen(  # noqa: S603
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+
+
+def _wait_for_daemon(name: str, socket_dir: Path, *, timeout: float = 10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found = daemon_client.find_daemon(name, socket_dir=socket_dir, timeout=0.2)
+        if found is not None:
+            return found
+        time.sleep(0.05)
+    return None
+
+
+def _stub_serve(captured: list):
+    """Replaces `mcp_server.serve()` for a test: records the `session`
+    `cmd_mcp()` resolved and returns 0 immediately, instead of blocking
+    forever on the real MCP stdio protocol loop (module docstring)."""
+    def _serve(session, *, listen=None, allow_remote=False):
+        del listen, allow_remote
+        captured.append(session)
+        return 0
+    return _serve
+
+
+def test_cmd_mcp_without_a_resolvable_name_reports_a_clean_error_not_a_hang(capsys):
+    # --connect with neither --sim nor --name: resolve_client_name()
+    # returns None (daemon_client.py's own module docstring) --
+    # get_connection(spawn=True) raises RobotNameRequiredError before
+    # ever attempting a connection, exactly like cmd_repl() would for
+    # the same target -- reported as a clean error, not a hang or a
+    # traceback.
+    exit_code = cli.main(["mcp", "--connect", "127.0.0.1:1"])
+    err = capsys.readouterr().err
+
+    assert exit_code == 1
+    assert "error:" in err
+
+
+def test_cmd_mcp_validates_listen_target_before_resolving_a_connection(monkeypatch, capsys):
+    # AC #4: --listen/--allow-remote's binding rule is validated BEFORE
+    # daemon_client.get_connection() is ever called -- a disallowed
+    # --listen must fail fast, with no daemon lookup/spawn attempted at
+    # all (unaffected by ticket 010's own connection-resolution change).
+    def _forbid_get_connection(args, **kwargs):
+        del args, kwargs
+        raise AssertionError("must not resolve a connection before validating --listen")
+    monkeypatch.setattr(daemon_client, "get_connection", _forbid_get_connection)
+
+    exit_code = cli.main(["mcp", "--sim", "--listen", "0.0.0.0:8765"])
+    err = capsys.readouterr().err
+
+    assert exit_code == 2
+    assert "allow-remote" in err
+
+
+def test_cmd_mcp_auto_spawns_a_daemon_when_none_is_running(
+    built_sim_binary, isolated_socket_dir, monkeypatch,
+):
+    del built_sim_binary
+    spawned: list[subprocess.Popen] = []
+    real_spawn = daemon_client._spawn_daemon
+
+    def _tracking_spawn(argv):
+        proc = real_spawn(argv)
+        spawned.append(proc)
+        return proc
+    monkeypatch.setattr(daemon_client, "_spawn_daemon", _tracking_spawn)
+
+    captured: list = []
+    monkeypatch.setattr(mcp_server, "serve", _stub_serve(captured))
+
+    try:
+        exit_code = cli.main(["mcp", "--sim"])
+
+        assert exit_code == 0
+        assert len(spawned) == 1, "rogo mcp must auto-spawn exactly one daemon when none is running"
+        assert len(captured) == 1
+
+        # The auto-spawned daemon outlives the mcp invocation that
+        # spawned it (by design -- another client may reuse it) -- prove
+        # it is a REAL, still-reachable Unix-socket daemon.
+        found = daemon_client.find_daemon("sim", socket_dir=isolated_socket_dir, timeout=2.0)
+        assert found is not None
+        found.transport.close()
+    finally:
+        for proc in spawned:
+            _terminate(proc)
+
+
+def test_cmd_mcp_reuses_an_already_running_daemon_without_spawning_a_new_one(
+    built_sim_binary, isolated_socket_dir, monkeypatch,
+):
+    del built_sim_binary
+    proc = _spawn_serve("--idle-timeout", "30.0")
+    try:
+        assert _wait_for_daemon("sim", isolated_socket_dir, timeout=10.0) is not None
+
+        def _forbid_spawn(argv):
+            raise AssertionError(
+                f"must reuse the already-running daemon, not spawn a new one: {argv!r}")
+        monkeypatch.setattr(daemon_client, "_spawn_daemon", _forbid_spawn)
+
+        captured: list = []
+        monkeypatch.setattr(mcp_server, "serve", _stub_serve(captured))
+
+        exit_code = cli.main(["mcp", "--sim"])
+
+        assert exit_code == 0
+        assert len(captured) == 1
+    finally:
+        _terminate(proc)
+
+
+def test_concurrent_one_shot_command_reaches_the_same_daemon_as_an_active_mcp_session(
+    built_sim_binary, isolated_socket_dir, monkeypatch, capsys,
+):
+    # This ticket's own AC #5 (SUC-002's multi-client acceptance
+    # criterion): a one-shot `rogo drive`/`stop` invocation running
+    # concurrently with an active `rogo mcp` session reaches the SAME
+    # robot without contention -- proven here by session-state
+    # continuity (robot_v6.reliability.Session's own client-side
+    # sequence counter, starting at 1 for a fresh Session), matching
+    # test_cli_serve.py's own `test_one_shot_followed_by_repl_reuses_
+    # the_same_daemon_connection`.
+    del built_sim_binary
+    spawned: list[subprocess.Popen] = []
+    real_spawn = daemon_client._spawn_daemon
+
+    def _tracking_spawn(argv):
+        proc = real_spawn(argv)
+        spawned.append(proc)
+        return proc
+    monkeypatch.setattr(daemon_client, "_spawn_daemon", _tracking_spawn)
+
+    captured: list = []
+    monkeypatch.setattr(mcp_server, "serve", _stub_serve(captured))
+
+    try:
+        exit_code = cli.main(["mcp", "--sim"])
+        assert exit_code == 0
+        assert len(captured) == 1
+        assert len(spawned) == 1, "the mcp session itself must have auto-spawned the daemon"
+
+        # cmd_mcp()'s own `finally: conn.transport.close()` already
+        # closed the mcp session's OWN client socket by the time
+        # cli.main() returned above -- but the DAEMON PROCESS, and the
+        # sim connection it holds, are unaffected
+        # (daemon_client.ClientConnection's own docstring: "the daemon
+        # process ... is unaffected"). A concurrent one-shot command
+        # must still reach it.
+        exit_code_stop = cli.main(["stop", "--sim"])
+        out = capsys.readouterr().out
+
+        assert exit_code_stop == 0
+        assert len(spawned) == 1, "the one-shot command must reuse the daemon, not spawn a second one"
+        assert "STOP acked (#1)" in out, (
+            f"a concurrent one-shot command must reach the SAME daemon "
+            f"an active rogo mcp session spawned -- got {out!r}"
+        )
+    finally:
+        for proc in spawned:
+            _terminate(proc)

@@ -35,6 +35,17 @@ wrong about" behavior (every name unknown, matching
 test_cli_goto_config.py's own module docstring) -- this test asserts
 that real, honest behavior rather than a round trip `tools/sim`
 structurally cannot produce.
+
+Ticket 009 changes step 7 (`repl`) to resolve its connection through
+`daemon_client.get_connection(args, spawn=True)` (auto-spawn a daemon
+when none is running for the resolved target) rather than
+`connection.resolve()` directly -- see test_repl.py's own module
+docstring for why this test stubs it back to a direct connection too
+(same `_direct_connect_only` autouse fixture, same rationale: this test
+is about the seams between subcommands, not daemon auto-spawn, and
+without the stub it would otherwise spawn a real, long-lived `rogo
+serve --sim` subprocess against this machine's actual `~/.rogo/run`/
+`$XDG_RUNTIME_DIR` socket directory).
 """
 
 from __future__ import annotations
@@ -46,9 +57,20 @@ from pathlib import Path
 
 import pytest
 
-from rogo import cli, config, connection, mcp_server
+from rogo import cli, config, connection, daemon_client, mcp_server
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "gopiv.json"
+
+
+@pytest.fixture(autouse=True)
+def _direct_connect_only(monkeypatch):
+    """See module docstring: keeps this test's repl step on the SAME
+    direct-connect path it ran against before ticket 009, with no real
+    daemon spawn involved."""
+    def _direct_connect(args, **kwargs):
+        del kwargs
+        return connection.resolve(args)
+    monkeypatch.setattr(daemon_client, "get_connection", _direct_connect)
 
 
 def _fixture_copy(tmp_path: Path) -> Path:

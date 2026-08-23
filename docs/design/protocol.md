@@ -489,6 +489,12 @@ fields. `flags` is a **local bit layout** (`computeFlags()` in
 no OTOS/line/colour/planner, so reusing bit numbers that meant those things
 elsewhere would actively mislead a reader.
 
+**See §10** for the full telemetry-frame specification built on top of this
+projection — `TLM <mode>` subscription semantics, the `thdr`/`t` line
+grammar and emission rules, this library's exact column tables, and the
+`TLM HDR` header-recovery command. This section states what gets projected;
+§10 states the wire contract around it.
+
 ---
 
 ## 6. Verb scope — what this library implements
@@ -1701,3 +1707,204 @@ in the same spirit as §9.8's own list for the pass before it:
    between them — a small, deliberate duplication (this is not a hot
    path) that keeps "what counts as decodable" defined in exactly one
    place per verb without a shared decoded-argument struct per verb.
+
+---
+
+## 10. Telemetry
+
+**Restored 2026-08-23.** Commit `34d12c2` folded `docs/protocol-v6-spec.md`
+into this file but dropped its entire §6 Telemetry chapter, even though
+`thdr`/`t` frames, six `TLM` modes, and "the telemetry cadence" are
+referenced throughout this document — line 33, §5.2, the §6 verb table's
+`TLM` row, §8.5 — with no section anywhere defining the frame grammar, mode
+semantics, or column layout. This chapter restores that definition,
+appended as a new top-level chapter rather than reclaiming the old spec's
+"§6" numbering, which would mean renumbering every section from current §6
+onward — and every cross-reference to them — in an already heavily
+cross-referenced document.
+
+**Not a verbatim restoration.** The recovered source (`git show
+34d12c2^:docs/protocol-v6-spec.md`, its own §6) describes a full robot:
+world-frame pose fused from OTOS and encoder odometry, line sensors,
+colour. None of that lives in this library. What follows is written
+against `DiffDriveAdapter`'s actual projection (§5.2) and
+`ProtocolHandler`'s actual emission code, not a transcription of the old
+tables — §10.4 points at the archived full-robot tables for a port that
+grows beyond DiffDrive.
+
+### 10.1 `TLM <mode>` — telemetry is a subscription
+
+| mode | wire token | effect |
+|---|---|---|
+| off | `TLM OFF` | `DiffDriveAdapter::telemetryEnabled()` returns false; the calling app is expected to stop calling `buildSnapshot()`/`emitTelemetry()` for this connection — neither `ProtocolHandler` nor the adapter suppresses frames on its own (§10.2) |
+| pose | `TLM POSE` | 7-column projection, §10.3 |
+| full | `TLM FULL` | 11-column projection (`POSE`'s 7 plus 4 more), §10.3 |
+| now | `TLM NOW` | decoded and acked like any other `TLM` command, but deliberately never stored into `mode_` (`onTlm()`, `diffdrive_adapter.cpp:287-295`) — the current mode is left exactly as it was |
+| auto | `TLM AUTO` | stored into `mode_`, reported by `STATUS`'s `tlm=` field; `DiffDriveAdapter` has no scheduler of its own, so the "silent while parked" cadence this token implies is not implemented here — see below |
+| buffer | `TLM BUFFER` | stored into `mode_`; same story — the REPL-side accumulate-and-drain behavior this token implies is an application concern, not implemented in `ProtocolHandler` or `DiffDriveAdapter` |
+
+Wire tokens are `OFF`/`POSE`/`FULL`/`NOW`/`AUTO`/`BUFFER`, decoded
+case-sensitively by `parseTlmMode()`; an unrecognized token is a decode
+failure (§8.9), not an application-level rejection.
+
+**Mode is state on the Adapter, not the handler.** `DiffDriveAdapter::mode_`
+defaults to `OFF` at construction — this library has no per-port default the
+way the old spec's full robot did (`POSE` on radio/UDP, `BUFFER` on the
+REPL); every connection starts silent until a host explicitly subscribes.
+`HELLO`'s reset (§8.3) does not touch it: `handleHello()` only resets the
+reliability layer's own sequencing state (`expectedNext_`), so a
+reconnecting host that does not resend `TLM` keeps whatever mode was last
+set.
+
+**`NOW`, `AUTO`, and `BUFFER` do not carry their nominal behavior on this
+adapter.** All three are accepted, and (except `NOW`) persisted as the
+current mode — but `buildSnapshot()` branches on exactly one condition,
+`mode_ == TlmMode::kFull`; every other mode, including `AUTO` and `BUFFER`,
+produces the identical 7-column `POSE` shape. `NOW`'s "emit one frame
+immediately" is not implemented at all: nothing observes a `TLM NOW`
+command past `onTlm()` returning `kOk`, so it triggers no extra push — the
+app-driven `emitTelemetry()` cadence (below) is the only thing that ever
+emits a frame. A future adapter that DOES have its own scheduler
+(parked-detection for `AUTO`, an accumulate/drain queue for `BUFFER`) is
+where those tokens would grow real behavior; on `DiffDriveAdapter` they are
+accepted, remembered, and otherwise inert.
+
+**No re-emit is triggered by the mode token itself.** §10.2 states the
+actual re-emit rule — a column-*set* change, not a mode change — and
+because `DiffDriveAdapter`'s own column set depends only on the `FULL`
+boundary, switching among `OFF`/`POSE`/`NOW`/`AUTO`/`BUFFER` never changes
+the header at all (they all share `POSE`'s 7 columns); only a transition
+across `POSE`↔`FULL` does.
+
+**No built-in rate floor.** `ProtocolHandler` has no timer or clock of any
+kind (§8.0/§8.5) — `emitTelemetry()` is an "unsolicited emission the app
+drives, not the wire" (§3), so it emits exactly once per call, whenever the
+caller calls it. `DiffDriveAdapter::kCyclePeriod` (24 ms, the kernel
+fiber's own cadence) is the reference cycle time if an app calls
+`buildSnapshot()`/`emitTelemetry()` once per kernel cycle, but that is a
+kernel constant, not a floor this library enforces on the wire.
+
+### 10.2 `thdr` / `t` — the frame is self-describing
+
+```
+thdr seq now flags posl posr vell velr
+t 5 1080 3 120 118 250 248
+t 6 1104 3 122 120 250 248
+```
+
+`emitTelemetry()` (`protocol_handler.cpp:1071-1093`) calls `emitHeader()`
+before `emitFrame()` whenever `headerChanged()` (`protocol_handler.cpp:
+1003-1015`) says the remembered header is stale, then always calls
+`emitFrame()`. `headerChanged()` is true when:
+
+- this is the first frame this handler has ever emitted
+  (`everEmittedHeader_` still false), OR
+- the column *count* differs from the remembered header, OR
+- any column's *name* or *hex-ness* differs from the remembered header, at
+  any position up to `kMaxHeaderColumns` (40, `protocol_handler.h:301`).
+
+Nothing about the mode TOKEN is consulted directly — only the shape of the
+`Snapshot` the adapter hands in (§10.1's last point is this rule applied to
+`DiffDriveAdapter` specifically).
+
+Value encoding (`emitFrame()`, `protocol_handler.cpp:1045-1069`): every
+column prints in header order, one value per `t` line. An ordinary column
+prints as a signed base-10 integer (`%ld`); `flags` — the one column with
+`Column::hex == true` — prints lowercase hex with no `0x` prefix (`%x`). A
+reader zips `thdr` against each `t` positionally; nothing needs a schema, a
+field table, or version negotiation.
+
+### 10.3 This library's column sets
+
+`DiffDriveAdapter::buildSnapshot()` (`diffdrive_adapter.cpp:297-335`) is the
+entire projection — §5.2 already states the principle ("a projection, not a
+computation"); these are the actual columns it emits.
+
+**`POSE` — 7 columns, the projection for any subscribed mode except
+`FULL`:**
+
+| col | unit | meaning |
+|---|---|---|
+| `seq` | — | increments per emitted frame, wraps at 128 (7-bit) |
+| `now` | `[ms]` | robot clock at frame assembly (`DifferentialDrive::Output::now`) |
+| `flags` | hex | local bit layout — see below |
+| `posl` | `[mm]` | left wheel position, counts → mm through `countsPerLength` |
+| `posr` | `[mm]` | right wheel position |
+| `vell` | `[mm/s ×10]` | left wheel velocity |
+| `velr` | `[mm/s ×10]` | right wheel velocity |
+
+**`FULL` adds 4 more (11 total):**
+
+| col | unit | meaning |
+|---|---|---|
+| `lambda` | `[×1000]` | authority scale currently applied (`Output::lambda`, a `[1]` dimensionless 0–1 value, ×1000 wire quantum — Stage C's own bench-visible learned parameter) |
+| `biasl` | `[counts/s]` | Stage C's adapted left-wheel trim (`Output::biasLeft`) |
+| `biasr` | `[counts/s]` | Stage C's adapted right-wheel trim (`Output::biasRight`) |
+| `cyc` | — | kernel heartbeat cycle count (`Output::cycleCount`) — the same sentinel `RobotLoop` watches for advance |
+
+`×10`/`×1000` mean the wire integer is the value times that factor, the
+same convention the archived full-robot table uses for `elv`/`erv` (§10.4)
+— no precision is lost relative to the float source.
+
+**`flags` — local bit layout (`computeFlags()`, `diffdrive_adapter.cpp:
+111-122`):**
+
+| bit | meaning | bit | meaning |
+|---|---|---|---|
+| 0 | ready | 4 | left wheel connected |
+| 1 | estopped | 5 | right wheel connected |
+| 2 | lease expired | 6 | left wedge |
+| 3 | stall halted | 7 | right wedge |
+
+This is **not** the archived spec's §6.5 bit numbering, deliberately —
+`diffdrive_adapter.h`'s own header comment states why: this library has no
+OTOS, line sensor, colour sensor, or planner, so reusing bit numbers that
+meant those things elsewhere would misrepresent what they mean here to a
+reader with the old spec open. §10.4 points at where that numbering still
+applies.
+
+### 10.4 How the full-robot tables relate
+
+The archived spec's own column tables survive in code form at
+`src/archive/protocol-v6/wire_v6_telemetry.h` — auto-generated
+(`scripts/wire_v6_tables.py`) `kPoseColumns`/`kFullColumns` name arrays: 9
+columns for `POSE` (`seq now flags x y h ox oy oh` — world-frame pose fused
+from encoder and OTOS odometry) and 35 for `FULL` (adds per-wheel encoder
+detail, OTOS velocity, body twist, line/colour sensor channels, cycle
+timing). These are the reference layout — and, for `flags`, the reference
+bit numbering — for a port that grows beyond `DiffDriveAdapter`: a robot
+that DOES carry OTOS, line sensing, or a real motion planner should extend
+toward that table's column names and bit assignments rather than inventing
+a third scheme, so an existing host-side decoder written against the full
+spec keeps working unmodified. This library's own reduced projection
+(§10.3) is not a subset of that table by column position — `posl`/`posr`/
+`vell`/`velr` have no full-robot equivalent name, because DiffDrive
+publishes wheel counts, not a fused pose.
+
+### 10.5 `TLM HDR` — requesting a fresh header
+
+**Forward-specified here; implemented by ticket 003, not yet in code as
+this chapter lands.** The frame is self-describing only if the host
+actually holds the header (§10.2) — if a `thdr` line is dropped on the
+radio, or a host reconnects mid-stream, every `t` frame after it is
+unparseable: values with no column names. The host *knows* this (no
+remembered header, or a field count mismatch against the header it has)
+but has had no way to ask for a fresh one.
+
+**`TLM HDR #<id>`** — reuses the existing `TLM <mode> #id` slot exactly
+like every other mode token, so it is sequenced like any other `TLM` form
+with no new grammar rule. It forces the *next* `emitTelemetry()` call to
+re-emit `thdr` before its next `t` frame, and does **not** change the
+current subscription mode — `STATUS`'s `tlm=` field reads exactly as it
+did before the request. Mechanically (per ticket 003's plan): `execTlm()`
+special-cases this token by clearing the handler's own remembered-header
+state directly (`everEmittedHeader_ = false`, the same field
+`headerChanged()` already checks) rather than forwarding it to
+`Adapter::onTlm()` — a header-recovery request is not a subscription
+change, and the handler already owns the state that needs clearing.
+
+This is the correct recovery path — **not** `TLM NOW`. The old spec
+claimed a host that missed the header "sends `TLM NOW`" to recover it;
+that was never true of this implementation (§10.1: `NOW` triggers no extra
+emission of any kind, header or otherwise) and is not restored here.
+`TLM HDR` is the mechanism this chapter specifies instead.
