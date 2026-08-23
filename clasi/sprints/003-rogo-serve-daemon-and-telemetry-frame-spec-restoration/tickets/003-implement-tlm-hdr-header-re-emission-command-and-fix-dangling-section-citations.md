@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: Implement TLM HDR header re-emission command and fix dangling section citations
-status: open
-use-cases: [SUC-005]
-depends-on: ["002"]
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- '002'
 github-issue: ''
 issue: restore-the-telemetry-frame-specification-and-add-a-host-requested-header-command.md
 completes_issue: true
@@ -54,21 +56,21 @@ has landed §10:
 
 ## Acceptance Criteria
 
-- [ ] `TLM HDR #<id>` is accepted as a well-formed `TLM` command
+- [x] `TLM HDR #<id>` is accepted as a well-formed `TLM` command
       (decodes like any other mode token).
-- [ ] Sending `TLM HDR` after the header has been "lost" (simulate by
+- [x] Sending `TLM HDR` after the header has been "lost" (simulate by
       resetting/not tracking the remembered header on the test's host
       side) causes the next `emitTelemetry()` call to emit `thdr` before
       the next `t` frame.
-- [ ] The current subscription mode (`OFF`/`POSE`/`FULL`/`AUTO`/
+- [x] The current subscription mode (`OFF`/`POSE`/`FULL`/`AUTO`/
       `BUFFER`) is unchanged after `TLM HDR` — verified by checking mode
       state before and after.
-- [ ] `src/adapter/diffdrive_adapter.cpp` has zero diff — confirms the
+- [x] `src/adapter/diffdrive_adapter.cpp` has zero diff — confirms the
       "no other behavior change to `src/protocol/`" constraint (checked
       literally: `onTlm()`'s existing logic is untouched).
-- [ ] All three dangling `§6.x` citations listed above resolve to the
+- [x] All three dangling `§6.x` citations listed above resolve to the
       real §10 section (or subsection) landed by ticket 002.
-- [ ] Existing golden-vector and adversarial `tests/protocol/` suites
+- [x] Existing golden-vector and adversarial `tests/protocol/` suites
       pass unmodified except for the one new `TLM HDR` vector this
       ticket adds.
 

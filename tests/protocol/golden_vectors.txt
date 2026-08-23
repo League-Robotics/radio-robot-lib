@@ -440,3 +440,22 @@ OUT err 2 #1
 # kind, unaffected by this change.
 IN RUN
 OUT NONE
+
+# ---- TLM HDR: header recovery request (docs/design/protocol.md §10.5,
+# sprint 003 ticket 003) ----
+
+# Continues directly from the telemetry blocks above: headerNames_ is
+# still ["seq","now","x"], everEmittedHeader_ still true -- the
+# "WHEELS_V ... #5 / EMIT seq:0:1 now:0:2 x:0:3" block just above
+# already proved that SAME column set does NOT re-emit thdr on its own.
+# TLM HDR #1 is accepted and acked like any other sequenced TLM form --
+# no err line, and no telemetry output of its own -- but it clears the
+# remembered header, so the very next EMIT with the IDENTICAL column set
+# re-emits thdr anyway: proof the re-emit came from TLM HDR, not from
+# any column-set change.
+IN TLM HDR #1
+EMIT seq:0:9 now:0:99 x:0:1
+OUT ack 1 0 none
+OUT thdr seq now x
+OUT t 9 99 1
+OUT ack 1 0 none

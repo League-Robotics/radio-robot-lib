@@ -74,13 +74,17 @@ RESULT_UNIMPLEMENTED = 5
 RESULT_NOTREADY = 6
 RESULT_BUSY = 7
 
-# Protocol::TlmMode's declaration order (adapter.h).
+# Protocol::TlmMode's declaration order (adapter.h). kHdr (2026-08-23,
+# docs/design/protocol.md §10.5) is never passed to onTlm() -- see the
+# TLM HDR tests below -- but is listed here for symmetry with the C++
+# enum.
 TLM_OFF = 0
 TLM_POSE = 1
 TLM_FULL = 2
 TLM_NOW = 3
 TLM_AUTO = 4
 TLM_BUFFER = 5
+TLM_HDR = 6
 
 # Protocol::DoneReason's declaration order (adapter.h, 2026-08-22).
 DONE_NONE = 0
@@ -1831,6 +1835,111 @@ def test_tlm_missing_id_is_malformed_never_reaches_adapter(tmp_path):
         assert lib.phTlmCalls(handle) == 0
         assert lib.phMalformedCount(handle) == 1
         assert _sink_lines(lib, handle) == []
+    finally:
+        lib.phDestroy(handle)
+
+
+# ---------------------------------------------------------------------------
+# TLM HDR: requesting a fresh header (docs/design/protocol.md §10.5,
+# sprint 003 ticket 003). Reuses the existing `TLM <mode> #id` slot, so
+# it is sequenced and acked like any other TLM form -- but execTlm()
+# special-cases it entirely inside the handler (clearing
+# everEmittedHeader_ directly) and never forwards it to
+# Adapter::onTlm() at all, since a header-recovery request is not a
+# subscription change.
+# ---------------------------------------------------------------------------
+
+def test_tlm_hdr_is_accepted_and_acked_like_any_sequenced_tlm_form(tmp_path):
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        _feed(lib, handle, "TLM HDR #1\n")
+        assert _sink_lines(lib, handle) == [_ack(1)]
+        assert lib.phMalformedCount(handle) == 0
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_tlm_hdr_never_reaches_the_adapter_and_leaves_status_tlm_unchanged(
+        tmp_path):
+    """AC: 'the current subscription mode ... is unchanged after TLM
+    HDR -- verified by checking mode state before and after.' Two
+    independent checks: (1) STATUS's own tlm= field, read before and
+    after the TLM HDR request; (2) the adapter's own onTlm() call
+    record (tlmCalls/lastTlmMode) proving execTlm() actually took the
+    "never call onTlm()" branch, not merely that nothing downstream
+    happened to react to it."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    try:
+        # `s.tlm` is a BORROWED pointer (protocol_shim.cpp's phSetStatus,
+        # same contract as every other canned string field on
+        # MockAdapter) -- keep the encoded bytes alive in a local so it
+        # outlives every STATUS call below, not just this one.
+        tlm_bytes = b"full"
+        lib.phSetStatus(handle, 1, 1, 1, 1, 1, 0, 0, tlm_bytes)
+
+        _feed(lib, handle, "TLM FULL #1\n")
+        assert lib.phTlmCalls(handle) == 1
+        assert lib.phLastTlmMode(handle) == TLM_FULL
+        lib.phSinkClear(handle)
+
+        _feed(lib, handle, "STATUS #2\n")
+        before = _sink_lines(lib, handle)
+        assert "tlm=full" in before[1], before
+        lib.phSinkClear(handle)
+
+        _feed(lib, handle, "TLM HDR #3\n")
+        assert _sink_lines(lib, handle) == [_ack(3)]
+        assert lib.phTlmCalls(handle) == 1, "TLM HDR must never call onTlm()"
+        assert lib.phLastTlmMode(handle) == TLM_FULL, (
+            "the current mode must be exactly as TLM FULL left it")
+        lib.phSinkClear(handle)
+
+        _feed(lib, handle, "STATUS #4\n")
+        after = _sink_lines(lib, handle)
+        assert "tlm=full" in after[1], after
+    finally:
+        lib.phDestroy(handle)
+
+
+def test_tlm_hdr_forces_a_fresh_thdr_before_the_next_t_frame(tmp_path):
+    """The core recovery scenario (docs/design/protocol.md §10.5): a
+    host that already holds the header loses it (a dropped thdr line, or
+    a mid-stream reconnect) and has no remembered header any more.
+    Simulated here on the HANDLER side by clearing everEmittedHeader_
+    through TLM HDR itself -- the very next emitTelemetry() call must
+    re-emit thdr before its next t frame, even though the column set has
+    not changed at all (contrast against the immediately preceding EMIT,
+    same column set, which correctly does NOT repeat thdr)."""
+    lib = _load_shim(tmp_path)
+    handle = lib.phCreate()
+    runner = _GoldenVectorRunner(lib, handle)
+    try:
+        # Establish the header once -- the ordinary first-frame case.
+        runner.apply_action("EMIT", ["seq:0:1", "now:0:1000", "x:0:5"])
+        assert _sink_lines(lib, handle) == [
+            "thdr seq now x", "t 1 1000 5", _ack(0),
+        ]
+        lib.phSinkClear(handle)
+
+        # Same column set again -- thdr must NOT repeat (baseline §10.2
+        # behavior, the contrast case for what follows).
+        runner.apply_action("EMIT", ["seq:0:2", "now:0:1001", "x:0:6"])
+        assert _sink_lines(lib, handle) == ["t 2 1001 6", _ack(0)]
+        lib.phSinkClear(handle)
+
+        # Simulate losing the header and ask for a fresh one.
+        _feed(lib, handle, "TLM HDR #1\n")
+        assert _sink_lines(lib, handle) == [_ack(1)]
+        lib.phSinkClear(handle)
+
+        # The VERY NEXT emitTelemetry() call re-emits thdr before t, even
+        # though the column set is still identical to the last frame.
+        runner.apply_action("EMIT", ["seq:0:3", "now:0:1002", "x:0:7"])
+        assert _sink_lines(lib, handle) == [
+            "thdr seq now x", "t 3 1002 7", _ack(1),
+        ]
     finally:
         lib.phDestroy(handle)
 

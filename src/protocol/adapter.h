@@ -56,6 +56,12 @@ enum class Result : uint8_t {
 // token ("OFF"/"POSE"/"FULL"/"NOW"/"AUTO"/"BUFFER") into this enum and
 // hands it to onTlm() — what each mode DOES (including whether "current
 // mode" even changes for NOW) is entirely the adapter's business.
+//
+// `kHdr` (2026-08-23, docs/design/protocol.md §10.5) is the one
+// exception to that rule: `TLM HDR` is a header-recovery request, not a
+// subscription change, so ProtocolHandler::execTlm() handles it
+// entirely itself (clearing its own remembered-header state) and NEVER
+// forwards it to onTlm() — no Adapter ever observes this enumerator.
 enum class TlmMode : uint8_t {
   kOff,
   kPose,
@@ -63,6 +69,7 @@ enum class TlmMode : uint8_t {
   kNow,
   kAuto,
   kBuffer,
+  kHdr,
 };
 
 // The reliability layer's completion-reason vocabulary (docs/design/
@@ -131,8 +138,9 @@ struct Column {
 // column set (count, names, hex-ness, and order) stays stable across
 // calls for as long as the subscription mode is unchanged — that
 // stability is what the handler watches to decide whether a fresh
-// `thdr:` is due (spec §6.2: "whenever the subscription changes, and
-// before the first frame after connect").
+// `thdr:` is due (docs/design/protocol.md §10.2: a fresh `thdr:` is due
+// whenever the column set changes, including the first frame this
+// handler has ever emitted).
 struct Snapshot {
   const Column* columns = nullptr;
   size_t count = 0;
