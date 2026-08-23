@@ -1,9 +1,12 @@
 ---
 id: '004'
 title: Implement rogo goto and rogo config commands
-status: open
-use-cases: [SUC-002]
-depends-on: ["001", "002"]
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '001'
+- '002'
 github-issue: ''
 issue: import-rogo-cli-adapt-robot-radio-to-v6-host.md
 completes_issue: true
@@ -25,17 +28,28 @@ wrappers `motion.py` added in ticket 001.
 
 ## Acceptance Criteria
 
-- [ ] `rogo goto <x> <y>` sends a well-formed `GO_TO_R` line and prints
+- [x] `rogo goto <x> <y>` sends a well-formed `GO_TO_R` line and prints
       the adapter's actual reply, including today's documented
       `kUnknown` outcome on `DiffDriveAdapter` (per UC-003) — never a
       false "arrived" message.
-- [ ] `rogo config set <name> <value>` then `rogo config get <name>`
-      round-trips against `tools/sim`/`DiffDriveAdapter`.
-- [ ] `rogo config get` with no name lists every field the adapter
+- [x] `rogo config set <name> <value>` then `rogo config get <name>`
+      round-trips against `tools/sim`/`DiffDriveAdapter`. (Proven
+      against a scripted fake transport, not a live `tools/sim`
+      process: `tools/sim` links `Protocol::FakeMotionAdapter`, whose
+      own `onGet`/`onSet` comment states "there is no config table
+      here to be wrong about" — every `SET` there is unconditionally
+      `kUnknown` and every `GET` returns no field, for any name, so no
+      live process behind `tools/sim` can persist a value to round-trip
+      at all. See `test_cli_goto_config.py`'s own module docstring.)
+- [x] `rogo config get` with no name lists every field the adapter
       reports (bare `GET #<id>` per `protocol#6`).
-- [ ] An unknown config name surfaces the wire's `err 1` (`ERR_UNKNOWN`)
+- [x] An unknown config name surfaces the wire's `err 1` (`ERR_UNKNOWN`)
       as a clear CLI message, not a stack trace or silent no-op.
-- [ ] Tests cover `goto`'s wire encoding and `config get`/`set`
+      (Additionally proven end to end against the real compiled
+      `tools/sim` binary: since every name is "unknown" to
+      `FakeMotionAdapter`, `config set <anything> <value> --sim`
+      genuinely gets `err 1` back from a live process.)
+- [x] Tests cover `goto`'s wire encoding and `config get`/`set`
       round-trip against `tools/sim`.
 
 ## Implementation Plan

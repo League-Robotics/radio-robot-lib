@@ -5,11 +5,17 @@ Architecture Step 3: "it routes, it does not implement").
 
 Ticket 002 wired exactly two subcommands -- `hello` and `stop` -- as
 "the simplest possible smoke test of the whole stack end to end." Ticket
-003 (this module's current state) adds `drive` and `turn` to the SAME
-command table `hello`/`stop` already live in -- there never was a
-separate "stub" table to graduate out of; `build_parser()` has always
-been the real one. Later tickets extend this module's subcommand table
-(`goto`/`config`/`calibrate`/`repl`/`mcp`) without changing this shape.
+003 added `drive` and `turn` to the SAME command table `hello`/`stop`
+already live in -- there never was a separate "stub" table to graduate
+out of; `build_parser()` has always been the real one. Ticket 004 (this
+module's current state) adds `goto` (one `GO_TO_R` call, robot-frame --
+sprint.md's Design Rationale Decision 3: the aprilcam camera closed loop
+from elite does NOT port, and `go_to_w`'s world-frame variant stays
+unavailable until a pose source exists, specification.md#13) and
+`config get`/`config set` (pure `GET`/`SET` wire delegation,
+protocol.md#7, via `robot_v6.motion`'s wrappers). Later tickets extend
+this module's subcommand table (`calibrate`/`repl`/`mcp`) without
+changing this shape.
 
 **The stakeholder's soft-warning decision (sprint 001
 stakeholder_approval gate), binding for `drive --mm`:** a command that
@@ -27,6 +33,7 @@ one real verb (protocol.md#5) -- no soft-warning path applies to them.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 
@@ -52,6 +59,31 @@ _ERR_UNKNOWN = "1"  # protocol.md's own resultCode() table: kUnknown -> 1
 _STREAM_LEASE_FLOOR_MS = 500
 _STREAM_LEASE_MULTIPLE = 3
 _WHEELS_V_MAX_DURATION_MS = 5000
+
+# `goto` -- GO_TO_R's own field types (protocol_handler.cpp: x/y/speed/
+# arrive are parseInt32'd, timeout is parseUint32'd -- ALL FIVE are
+# integer wire fields, not floats; ticket 003's own int-typed-wire-field
+# lesson applies here identically) drive argparse's `type=int` choice
+# for every one of `goto`'s numeric arguments below.
+_DEFAULT_GOTO_SPEED_MM_S = 200  # matches _DEFAULT_TURN_SPEED_MM_S's own
+# magnitude (elite's own turn-in-place default), kept as a plain int
+# here since GO_TO_R's `speed` field is int32-parsed firmware-side --
+# unlike `_DEFAULT_TURN_SPEED_MM_S`, which stays a float because
+# `turn_model.compute_turn()` does its own physics in float and rounds
+# to int only at the very end.
+_DEFAULT_GOTO_ARRIVE_MM = 0  # motion-api.md#3.5: "0 takes the
+# configured default" (10mm on tovez) -- the CLI's own default just
+# forwards that same "let the adapter decide" behavior rather than
+# guessing a distance of its own.
+
+# `config get` -- how long to keep draining `get` reply lines after the
+# ack before deciding a bare GET's field dump is finished. A named GET
+# gets at most one line so this rarely matters for it, but a bare GET's
+# line count varies by adapter (DiffDriveAdapter exposes 15 wire fields,
+# protocol.md#7) and isn't knowable ahead of time from the wire alone --
+# unlike `_await_ack_and_err()`'s single same-id `err`, there is no
+# fixed count to wait for.
+_GET_DRAIN_IDLE = 0.3  # [s]
 
 
 def _pump_until(session: Session, predicate, timeout: float = _DEFAULT_TIMEOUT):
@@ -105,6 +137,63 @@ def _print_soft_warning(verb: str, seq_id: int, err: Reply) -> None:
         file=sys.stderr,
     )
     print(f"{verb} sent (#{seq_id}); adapter reports {detail}")
+
+
+def _await_ack_and_get_lines(
+    session: Session, seq_id: int, timeout: float = _DEFAULT_TIMEOUT
+) -> tuple[bool, list[Reply]]:
+    """Pump until `seq_id` is retired by a cumulative ack, then drain the
+    `get` reply lines `execGet()` writes AFTER that ack (dispatch()
+    sends the ack unconditionally before running the verb's own
+    executor -- protocol.md#8.2): zero lines for an unknown name
+    (protocol.md#7's own "unknown name -> no get line, but the command
+    is still acked" rule), one line for a named `GET`, or one line per
+    field the adapter reports for a bare `GET`.
+
+    `get` replies carry no `#<id>` of their own
+    (`protocol_handler.cpp`'s `execGet()` formats `"get %s %s\\n"` with
+    no trailing id token -- unlike `err`, which S8.6 requires to end
+    every line with one), so they cannot be correlated to `seq_id` the
+    way `_await_ack_and_err()` correlates a same-id `err`. This relies
+    instead on `rogo config get` only ever having one `GET` outstanding
+    at a time, and drains for `_GET_DRAIN_IDLE` seconds of silence
+    (rather than a fixed one-shot grace pump) since a bare GET's own
+    line count isn't known ahead of time. Returns `(acked,
+    get_replies)`.
+    """
+    replies = _pump_until(session, lambda rs: session.highest_acked >= seq_id, timeout=timeout)
+    acked = session.highest_acked >= seq_id
+    if not acked:
+        return False, []
+    get_replies = [r for r in replies if r.verb == "get"]
+    deadline = time.monotonic() + _GET_DRAIN_IDLE
+    while time.monotonic() < deadline:
+        new_replies = session.pump(0.1)
+        new_get = [r for r in new_replies if r.verb == "get"]
+        if new_get:
+            get_replies.extend(new_get)
+            deadline = time.monotonic() + _GET_DRAIN_IDLE  # more data seen -- extend the window
+    return True, get_replies
+
+
+def _print_config_set_error(name: str, err: Reply) -> None:
+    """`SET`'s own merits-rejection path (protocol.md#7): the handler
+    holds no field table, so an unrecognized `name` comes back as
+    `err 1 #<id>` (`ERR_UNKNOWN`), layered on the in-order ack every
+    `SET` gets regardless (protocol.md#8.2) -- the exact same wire code
+    `goto`'s own `kUnknown` planner gap uses. Deliberately NOT routed
+    through `_print_soft_warning()`, though: that helper's wording ("no
+    planner for this verb") describes a capability this ADAPTER merely
+    lacks, which is true of `goto` on `DiffDriveAdapter` but not of a
+    mistyped config field name -- that is a genuine caller error, with
+    no adapter anywhere that would accept it, so `cmd_config_set()`
+    treats this as a hard error (nonzero exit) rather than a warning."""
+    code = err.fields[0] if err.fields else "?"
+    if code == _ERR_UNKNOWN:
+        print(f"error: SET {name} rejected -- no such config field: {name!r}",
+              file=sys.stderr)
+    else:
+        print(f"error: SET {name} rejected -- err {code}", file=sys.stderr)
 
 
 def cmd_hello(args: argparse.Namespace) -> int:
@@ -399,6 +488,141 @@ def cmd_turn(args: argparse.Namespace) -> int:
         conn.transport.close()
 
 
+# ---------------------------------------------------------------------------
+# goto -- one GO_TO_R call, robot-frame (sprint.md's Design Rationale
+# Decision 3: elite's aprilcam-camera closed loop does NOT port; the
+# world-frame go_to_w variant stays unavailable until a pose source
+# exists, specification.md#13).
+# ---------------------------------------------------------------------------
+
+def _goto_default_timeout_ms(x: int, y: int, speed_mm_s: int) -> int:
+    """A generous timeout backstop when `--timeout` is not given,
+    following `_wheels_x_fields()`'s own ETA-based approach
+    (motion-api.md#3.1's "bounded ... by the required timeout backstop"
+    logic, applied here to `GO_TO_R`'s own required `timeout` field):
+    `_STREAM_LEASE_MULTIPLE` (3x) the straight-line ETA at the commanded
+    cruise speed, floored at 1000ms so a very short hop still gets a
+    livable window. `GO_TO_R`'s actual path length (motion-api.md#3.5's
+    own arc-length formula) is usually somewhat longer than the
+    straight-line chord used here, which is exactly why a MULTIPLE, not
+    the bare ETA, is the floor."""
+    distance_mm = math.hypot(x, y)
+    eta_ms = 1000.0 * distance_mm / speed_mm_s
+    return max(1000, int(round(eta_ms * _STREAM_LEASE_MULTIPLE)))
+
+
+def cmd_goto(args: argparse.Namespace) -> int:
+    """`rogo goto <x> <y> [--speed] [--arrive] [--timeout]` -- one
+    `GO_TO_R` call. Reports the adapter's ACTUAL reply via the same
+    `_await_ack_and_err()`/`_print_soft_warning()` path `drive --mm`/
+    `turn` already use for `DiffDriveAdapter`'s documented `kUnknown`
+    planner gap (UC-002/UC-003) -- never a false "arrived" claim: an
+    ack only means the call was ACCEPTED, and `done reason=...`
+    (`wait_for_done()`'s own outcome, printed verbatim) is the only
+    arrival signal this function ever manufactures."""
+    if args.speed <= 0:
+        print(f"error: --speed must be > 0, got {args.speed}", file=sys.stderr)
+        return 2
+    timeout_ms = (
+        args.timeout if args.timeout is not None
+        else _goto_default_timeout_ms(args.x, args.y, args.speed)
+    )
+    if timeout_ms <= 0:
+        print(f"error: --timeout must be > 0, got {timeout_ms}", file=sys.stderr)
+        return 2
+
+    conn = connection.resolve(args)
+    try:
+        seq_id = motion.go_to_r(
+            conn.session, args.x, args.y, args.speed, args.arrive, timeout_ms)
+        acked, err = _await_ack_and_err(conn.session, seq_id)
+        if not acked:
+            print(f"GO_TO_R sent (#{seq_id}) but not acked within "
+                  f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+            return 1
+        if err is not None:
+            _print_soft_warning("GO_TO_R", seq_id, err)
+            return 0
+        done = conn.session.wait_for_done(
+            seq_id, timeout=timeout_ms / 1000.0 + _DEFAULT_TIMEOUT)
+        if done is None:
+            print(f"GO_TO_R acked (#{seq_id}) but never completed within timeout",
+                  file=sys.stderr)
+            return 1
+        print(f"goto ({args.x}, {args.y}) -> GO_TO_R {args.x} {args.y} {args.speed} "
+              f"{args.arrive} {timeout_ms} (#{seq_id}), done reason={done.reason}")
+        return 0
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
+# ---------------------------------------------------------------------------
+# config get/set -- pure GET/SET wire delegation (protocol.md#7): this
+# library stores no field table of its own, so `robot_v6.motion.get`/
+# `.set` are thin wrappers and `rogo.cli` is thinner still.
+# ---------------------------------------------------------------------------
+
+def cmd_config_get(args: argparse.Namespace) -> int:
+    """`rogo config get [name]` -- bare `GET` lists every field the
+    adapter reports (protocol.md#6/#7: one `get` line per field); a
+    `name` asks for just that one. An unknown name gets NO `get` line
+    at all, though the command is still acked (protocol.md#7's own
+    "unknown name -> no get line" rule) -- reported here as a clear
+    error rather than a silent, field-less "success"."""
+    conn = connection.resolve(args)
+    try:
+        seq_id = motion.get(conn.session, args.name)
+        acked, get_replies = _await_ack_and_get_lines(conn.session, seq_id)
+        if not acked:
+            print(f"GET sent (#{seq_id}) but not acked within "
+                  f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+            return 1
+        if not get_replies:
+            if args.name is not None:
+                print(f"error: no such config field: {args.name!r}", file=sys.stderr)
+                return 1
+            print("(adapter reports no config fields)")
+            return 0
+        for reply in get_replies:
+            name, value = reply.fields[0], reply.fields[1]
+            print(f"{name}={value}")
+        return 0
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
+def cmd_config_set(args: argparse.Namespace) -> int:
+    """`rogo config set <name> <value>` -- `SET`'s own delegation
+    (protocol.md#7). An unknown `name` is a genuine caller mistake, not
+    a capability gap, so it is reported as a hard error (nonzero exit)
+    rather than `goto`'s soft-warning treatment of the same wire error
+    code -- see `_print_config_set_error()`'s own docstring for why."""
+    conn = connection.resolve(args)
+    try:
+        seq_id = motion.set(conn.session, args.name, args.value)
+        acked, err = _await_ack_and_err(conn.session, seq_id)
+        if not acked:
+            print(f"SET sent (#{seq_id}) but not acked within "
+                  f"{_DEFAULT_TIMEOUT}s", file=sys.stderr)
+            return 1
+        if err is not None:
+            _print_config_set_error(args.name, err)
+            return 1
+        print(f"SET {args.name}={args.value} acked (#{seq_id})")
+        return 0
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rogo",
@@ -447,6 +671,50 @@ def build_parser() -> argparse.ArgumentParser:
         "--speed", type=float, default=_DEFAULT_TURN_SPEED_MM_S,
         help=f"wheel speed magnitude in mm/s (default: {_DEFAULT_TURN_SPEED_MM_S:g})")
     p_turn.set_defaults(func=cmd_turn)
+
+    p_goto = sub.add_parser(
+        "goto",
+        help="Drive to a robot-frame point via GO_TO_R: "
+             "rogo goto <x> <y> [--speed] [--arrive] [--timeout]")
+    connection.add_target_arguments(p_goto)
+    # x/y/speed/arrive/timeout are all int-parsed wire fields
+    # (parseInt32/parseUint32, protocol_handler.cpp) -- see this
+    # module's own int-typed-wire-field constants above.
+    p_goto.add_argument("x", type=int, help="target x, robot frame, forward (mm)")
+    p_goto.add_argument("y", type=int, help="target y, robot frame, left (mm)")
+    p_goto.add_argument(
+        "--speed", type=int, default=_DEFAULT_GOTO_SPEED_MM_S,
+        help=f"cruise speed magnitude in mm/s (default: {_DEFAULT_GOTO_SPEED_MM_S})")
+    p_goto.add_argument(
+        "--arrive", type=int, default=_DEFAULT_GOTO_ARRIVE_MM,
+        help="arrival tolerance in mm; 0 takes the adapter's configured "
+             f"default (motion-api.md#3.5) (default: {_DEFAULT_GOTO_ARRIVE_MM})")
+    p_goto.add_argument(
+        "--timeout", type=int, default=None,
+        help="timeout backstop in ms (default: computed from distance/speed)")
+    p_goto.set_defaults(func=cmd_goto)
+
+    p_config = sub.add_parser(
+        "config", help="Read/write the adapter's config fields (GET/SET, protocol.md#7)")
+    config_sub = p_config.add_subparsers(dest="config_command", required=True)
+
+    p_config_get = config_sub.add_parser(
+        "get", help="GET [name] -- one field, or every field the adapter reports")
+    connection.add_target_arguments(p_config_get)
+    p_config_get.add_argument(
+        "name", nargs="?", default=None,
+        help="field name, e.g. wheel_control.pid_kp (default: list every field)")
+    p_config_get.set_defaults(func=cmd_config_get)
+
+    p_config_set = config_sub.add_parser("set", help="SET <name> <value>")
+    connection.add_target_arguments(p_config_set)
+    p_config_set.add_argument("name", help="field name, e.g. wheel_control.pid_kp")
+    # The wire's config value is parseFloatField'd, not parseInt32'd
+    # (protocol.md#7.2: "config values are the one place floats appear
+    # on the wire") -- the one numeric argument in this whole module
+    # that stays float rather than int, unlike goto's five.
+    p_config_set.add_argument("value", type=float, help="new value for the field")
+    p_config_set.set_defaults(func=cmd_config_set)
 
     return parser
 
