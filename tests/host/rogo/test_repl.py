@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import argparse
 import io
+import pathlib
+import sys
 
 import pytest
 
+from robot_v6.transport import StdioTransport
 from rogo import cli, connection, repl
 
 
@@ -381,3 +384,71 @@ def test_repl_end_to_end_help_flag_mid_session_does_not_kill_the_repl(
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "STOP acked" in out
+
+
+# ---------------------------------------------------------------------------
+# Output flushing (ticket 003-001) -- `rogo repl`'s output must reach a
+# piped stdout line-by-line, with no `PYTHONUNBUFFERED=1` workaround
+# required of the caller. Proven against a REAL subprocess and a REAL
+# OS pipe via `StdioTransport` (the same mechanism ticket 006's daemon
+# pipe mode will use) rather than `capsys`: pytest's own capture object
+# is already write-through (`_pytest.capture.CaptureIO`), so it can
+# never reproduce CPython's own pipe-vs-tty block-buffering decision --
+# the exact bug this ticket fixes only shows up on a real fd.
+# ---------------------------------------------------------------------------
+
+_REPL_STDOUT_FLUSH_SCRIPT = """
+import sys, time
+sys.path.insert(0, {src_host!r})
+import argparse
+from rogo import repl
+
+parser = argparse.ArgumentParser(prog="fake", exit_on_error=True)
+parser.add_argument("token")
+
+def dispatch(session, args):
+    if args.token == "pause":
+        # No print here -- this command's whole job is to occupy the
+        # process for a while WITHOUT emitting anything of its own, so
+        # the read below observes "a"'s output in isolation, not
+        # "pause" arriving alongside it because both happened to be
+        # dispatched within the read window.
+        time.sleep(1.5)
+        return 0
+    print(f"got:{{args.token}}")
+    return 0
+
+sys.exit(repl.run(None, ["a", "pause"], parser, dispatch))
+"""
+
+
+def test_repl_output_is_line_flushed_to_a_piped_stdout_with_no_pythonunbuffered(
+    monkeypatch,
+):
+    # No PYTHONUNBUFFERED=1 in the child's own environment -- proves the
+    # fix needs no caller workaround (this ticket's Description: "No
+    # PYTHONUNBUFFERED=1 workaround should be required of the caller").
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    src_host = str(pathlib.Path(__file__).resolve().parents[3] / "src" / "host")
+    script = _REPL_STDOUT_FLUSH_SCRIPT.format(src_host=src_host)
+
+    # Argument-list mode (`commands=["a", "pause"]`) dispatches both
+    # with no `input_fn` call in between -- unlike prompt/piped-stdin
+    # mode, where real `input()`'s own implicit stdout flush before
+    # blocking on the next read would mask this exact bug.
+    transport = StdioTransport([sys.executable, "-c", script])
+    try:
+        # "a" is dispatched and printed first; "pause" is dispatched
+        # next and sleeps 1.5s before returning -- so if "got:a" were
+        # still sitting in a block buffer (unfixed), it would stay
+        # invisible on this pipe well past this short read, only
+        # appearing once the process exits and flushes everything at
+        # once. This is the module docstring's own "each line is
+        # visible before the next command is dispatched" guarantee.
+        lines = transport.read_lines(timeout=0.5)
+        assert lines == ["got:a"], (
+            "rogo repl's output must be flushed line-by-line to a piped "
+            "stdout, with no PYTHONUNBUFFERED=1 needed -- got "
+            f"{lines!r} within 0.5s (process may still be block-buffering)")
+    finally:
+        transport.close()

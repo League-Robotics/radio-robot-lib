@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Fix unbuffered/line-flushed output for rogo repl and daemon pipe mode
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
@@ -26,15 +27,15 @@ Python block-buffers stdout when it detects a non-tty. No
 
 ## Acceptance Criteria
 
-- [ ] `rogo repl`'s output is flushed after every emitted line,
+- [x] `rogo repl`'s output is flushed after every emitted line,
       confirmed with stdout redirected to a pipe (not a tty) and no
       `PYTHONUNBUFFERED=1` set in the test's environment.
-- [ ] The fix is general enough to also cover the daemon's stdio pipe
+- [x] The fix is general enough to also cover the daemon's stdio pipe
       mode once ticket 006 adds it (either a shared helper this ticket
       introduces, or a documented pattern ticket 006 follows) — this
       ticket does not implement pipe mode itself, only the flushing
       behavior `rogo repl` needs today.
-- [ ] No change to `rogo repl`'s existing interactive/argument-list/
+- [x] No change to `rogo repl`'s existing interactive/argument-list/
       piped-stdin behavior (SUC-001's own scope: output timing only).
 
 ## Implementation Plan
