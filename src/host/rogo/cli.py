@@ -24,6 +24,13 @@ without `cmd_*()`'s own per-invocation `connection.resolve()`/`close()`
 pair running once per repl line. Later tickets extend this module's
 subcommand table (`mcp`) without changing this shape.
 
+Sprint 002 ticket 001 adds the top-level `--agent` flag: `main()` scans
+raw `argv` for it BEFORE `parser.parse_args()` ever runs, since
+`build_parser()`'s subparsers are `required=True` and would otherwise
+reject a bare `rogo --agent` invocation with no subcommand -- see
+`main()`'s own comment. `agent_manual.MANUAL` is this module's only new
+import; no other subcommand's behavior changes.
+
 **The stakeholder's soft-warning decision (sprint 001
 stakeholder_approval gate), binding for `drive --mm`:** a command that
 reaches `DiffDriveAdapter`'s `kUnknown` planner gap (no planner behind
@@ -49,7 +56,7 @@ from robot_v6.codec import Reply
 from robot_v6.reliability import Session
 from robot_v6.transport import TransportClosed
 
-from . import calibrate, config, connection, mcp_server, repl, turn_model
+from . import agent_manual, calibrate, config, connection, mcp_server, repl, turn_model
 
 _DEFAULT_TIMEOUT = 3.0  # [s] -- generous for a local subprocess/socket/serial hop
 _DEFAULT_TURN_SPEED_MM_S = 200.0  # matches elite's own `p_turn --speed` default
@@ -924,6 +931,18 @@ def build_parser() -> argparse.ArgumentParser:
         description="Command-line control for a protocol-v6 robot, relay, "
                     "or tools/sim.",
     )
+    # Top-level flag, checked in main() BEFORE the subparsers' own
+    # `required=True` would otherwise reject a bare `rogo --agent`
+    # invocation (see main()'s own comment) -- registered here anyway so
+    # `rogo --help` documents it and this parser stays the single source
+    # of truth the pinning test (tests/host/rogo/test_agent_manual.py)
+    # introspects.
+    parser.add_argument(
+        "--agent", action="store_true",
+        help="print the complete agent-oriented Markdown manual (every "
+             "subcommand, every option, units, exit codes) and exit 0 -- "
+             "resolves no target and requires no subcommand",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_hello = sub.add_parser(
@@ -1078,8 +1097,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # `--agent` must work with no subcommand given, but build_parser()'s
+    # own subparsers are `required=True` (a bare `rogo` with nothing else
+    # is a usage error, per this module's own longstanding behavior) --
+    # `parser.parse_args()` would enforce that requirement and reject
+    # `rogo --agent` before `args.agent` could ever be checked. Scan the
+    # raw argv for the flag FIRST, before requiring or resolving a
+    # subcommand/target at all, rather than relaxing `required=True` on
+    # the shared parser other callers (rogo.repl's own per-line parsing)
+    # rely on staying strict.
+    resolved_argv = sys.argv[1:] if argv is None else argv
+    if "--agent" in resolved_argv:
+        print(agent_manual.MANUAL)
+        return 0
+
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(resolved_argv)
     try:
         return args.func(args)
     except connection.TargetError as exc:
