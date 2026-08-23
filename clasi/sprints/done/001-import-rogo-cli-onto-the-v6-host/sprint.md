@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Import Rogo CLI onto the v6 host
-status: executing
+status: done
 branch: sprint/001-import-rogo-cli-onto-the-v6-host
 use-cases:
 - SUC-001
