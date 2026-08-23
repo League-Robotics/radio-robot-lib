@@ -1,9 +1,11 @@
 ---
 id: '007'
 title: Add rogo serve --sim support and stdio-pipe fork test harness
-status: open
-use-cases: [SUC-003]
-depends-on: ["006"]
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '006'
 github-issue: ''
 issue: rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
 completes_issue: true
@@ -30,15 +32,15 @@ building new sim-launching logic.
 
 ## Acceptance Criteria
 
-- [ ] `rogo serve --sim` reaches a working daemon with no manually
+- [x] `rogo serve --sim` reaches a working daemon with no manually
       started `tools/sim` process (freshly builds/reuses `tools/sim`
       the same way `rogo drive --sim` already does today).
-- [ ] A reusable test helper/fixture forks `rogo serve --sim
+- [x] A reusable test helper/fixture forks `rogo serve --sim
       --stdio-pipe` (or equivalent), yields a connected client-side pipe
       pair, and tears the process down cleanly on test exit — usable by
       tickets 008/009/010/011's own tests without each reimplementing
       process management.
-- [ ] SUC-003's full flow (fork daemon in pipe mode, exchange a
+- [x] SUC-003's full flow (fork daemon in pipe mode, exchange a
       request/reply cycle, confirm dispatch reaches the sim-backed
       connection) passes as an end-to-end test.
 

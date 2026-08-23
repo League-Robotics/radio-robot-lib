@@ -24,6 +24,7 @@ length limit applies to a `pathlib.Path` that is never handed to
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import socket
 import sys
@@ -649,3 +650,61 @@ def test_stdio_pipe_mode_never_constructs_a_socket(monkeypatch):
     assert len(out_stream.written) == 1
     reply = dp.decode_reply(out_stream.written[0].rstrip("\n"))
     assert reply.result == "pong"
+
+
+# ---------------------------------------------------------------------------
+# run_stdio_pipe_from_args -- ticket 007's own `--sim`/`--connect`/`--port`
+# boot wiring for the pipe transport (module docstring's own "argument
+# plumbing" note). These two tests stay in-process, with
+# `daemon.resolve_connection` monkeypatched, on purpose -- no real sim
+# subprocess involved -- so this file's own fast/no-compiler-dependency
+# coverage of the plumbing itself is separate from
+# `test_daemon_sim_e2e.py`'s own real, forked, `--sim`-backed end-to-end
+# proof (this ticket's own SUC-003 scenario, AC #3).
+# ---------------------------------------------------------------------------
+
+def test_run_stdio_pipe_from_args_resolves_connection_via_args_and_serves_requests(monkeypatch):
+    fake_conn = _make_connection()
+    captured_args = []
+
+    def _fake_resolve(args):
+        captured_args.append(args)
+        return fake_conn
+
+    monkeypatch.setattr(daemon, "resolve_connection", _fake_resolve)
+
+    in_stream = _FakeStdioStream([dp.encode_request(dp.Request(id=1, verb="ping"))])
+    out_stream = _FakeStdioStream()
+    ns = argparse.Namespace(sim=True, connect=None, port=None)
+
+    daemon.run_stdio_pipe_from_args(
+        ns, {"ping": lambda s, p, a: "pong"}, stdin=in_stream, stdout=out_stream,
+    )
+
+    # The SAME args object handed to run_stdio_pipe_from_args() is what
+    # reaches connection resolution -- no re-parsing, no second target.
+    assert captured_args == [ns]
+    assert len(out_stream.written) == 1
+    reply = dp.decode_reply(out_stream.written[0].rstrip("\n"))
+    assert reply.id == 1
+    assert reply.result == "pong"
+
+
+def test_run_stdio_pipe_from_args_closes_the_resolved_connections_transport_on_eof(monkeypatch):
+    fake_conn = _make_connection()
+    monkeypatch.setattr(daemon, "resolve_connection", lambda args: fake_conn)
+    closed = []
+    monkeypatch.setattr(fake_conn.transport, "close", lambda: closed.append(True))
+
+    in_stream = _FakeStdioStream([])  # EOF immediately -- no requests at all
+    out_stream = _FakeStdioStream()
+
+    daemon.run_stdio_pipe_from_args(
+        argparse.Namespace(sim=True, connect=None, port=None), {},
+        stdin=in_stream, stdout=out_stream,
+    )
+
+    # The resolved connection's transport is torn down once run_stdio_pipe()
+    # returns (EOF), not left open for the caller to remember to close --
+    # this is what keeps a --sim subprocess from being orphaned.
+    assert closed == [True]

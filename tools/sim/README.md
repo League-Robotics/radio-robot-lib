@@ -32,6 +32,14 @@ Two transport modes, identical line protocol on both:
 # No port allocation, no bind races, no leaked listener process.
 /tmp/robot_sim --stdio
 
+# a third way to reach this same binary: `rogo`'s own --sim flag builds
+# (or reuses) tools/sim and spawns it over stdio for you --
+# `rogo serve --sim` in particular boots one of these as the daemon's
+# own target connection (src/host/rogo/connection.py's
+# `ensure_sim_binary()`/`--sim` resolution; src/host/rogo/daemon.py's
+# `run_stdio_pipe_from_args()`), so nothing here needs to be started by
+# hand first.
+
 # TCP -- one client at a time; accepts a new one after the previous
 # disconnects, so a dev session doesn't need to relaunch the process.
 /tmp/robot_sim --listen 127.0.0.1:7654

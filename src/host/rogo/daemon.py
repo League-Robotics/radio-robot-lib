@@ -13,10 +13,17 @@ stdin/stdout) -- plus the robot-name/socket-path resolution
 is named and where it lives. Both transports are thin: they decode a
 request line via `daemon_protocol`, call `DaemonServer.submit()`, and
 encode the reply back -- neither owns any dispatch logic of its own.
-Still no `--sim`/CLI boot wiring here (tickets 007/009) -- this module
-takes an already-resolved `Connection` and, for the transports, an
-already-started `DaemonServer`; it does not itself decide how either
-gets built.
+Ticket 007 (this revision) adds exactly one boot function,
+`run_stdio_pipe_from_args()`, tying `rogo.connection.resolve()`'s
+already-existing `--sim`/`--connect`/`--port` resolution to a freshly
+built `DaemonServer` for the PIPE transport only (issue Requirement 3:
+a `--sim` target here freshly builds/reuses `tools/sim` exactly the
+way `rogo drive --sim` does today, with no manually started
+`tools/sim` process required). The Unix-socket branch and the full
+`rogo serve` CLI subcommand (`cmd_serve()`, argument parsing, a
+`--stdio-pipe` flag, signal handling) remain ticket 009's job -- this
+module still does not decide how a Unix-socket listener's
+`DaemonServer` gets built, nor does it import `rogo.cli`.
 
 ---- Injection, not import: this module never imports `rogo.cli` ----
 
@@ -46,9 +53,10 @@ anything that itself imports `rogo.cli`.
 lifetime ----
 
 `DaemonServer` is constructed with an already-resolved
-`rogo.connection.Connection` -- this module does not itself call
-`rogo.connection.resolve()`; that is the caller's job (a future
-`cmd_serve()`/`--sim` boot function, tickets 007/009) -- and holds it
+`rogo.connection.Connection` -- `DaemonServer.__init__()` itself still
+never calls `rogo.connection.resolve()`; that is always a CALLER's job
+(ticket 007's own `run_stdio_pipe_from_args()`, for the pipe transport,
+or a future `cmd_serve()`, ticket 009, for the rest) -- and holds it
 for as long as the server runs: every request, from every client, for
 the server's whole lifetime, dispatches against the SAME
 `Connection.session`, never a freshly reopened one (this ticket's own
@@ -99,6 +107,7 @@ convention, not because every verb needs to consult it.
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import heapq
 import itertools
@@ -112,7 +121,7 @@ from typing import Callable, Mapping, TextIO
 
 from robot_v6.reliability import Session
 
-from .connection import Connection
+from .connection import Connection, resolve as resolve_connection
 from .daemon_protocol import ProtocolError, Reply, Request, decode_request, encode_reply
 
 DispatchFn = Callable[[Session, dict, "threading.Event"], object]
@@ -745,6 +754,66 @@ def run_stdio_pipe(
         reply = server.submit(request)
         out_stream.write(encode_reply(reply) + "\n")
         out_stream.flush()
+
+
+# ---------------------------------------------------------------------------
+# --sim/--connect/--port boot wiring for the pipe transport -- ticket 007's
+# own deliverable (issue Requirement 3: "rogo serve --sim should reach a
+# working daemon the same way rogo drive --sim does today"). Deliberately
+# narrow: this ties `rogo.connection.resolve()` to `run_stdio_pipe()` ONLY --
+# the Unix-socket branch, the `rogo serve` subcommand itself, and
+# `cli.py`'s own per-verb dispatch table remain ticket 009's job (module
+# docstring's "Still ... ticket 009" note).
+# ---------------------------------------------------------------------------
+
+def run_stdio_pipe_from_args(
+    args: argparse.Namespace,
+    dispatch_table: DispatchTable,
+    *,
+    estop_verbs: frozenset[str] = DEFAULT_ESTOP_VERBS,
+    stdin: TextIO | None = None,
+    stdout: TextIO | None = None,
+) -> None:
+    """Resolve `args` (as produced by a parser that called
+    `rogo.connection.add_target_arguments()`, e.g. `--sim`) into a live
+    target `Connection` via `rogo.connection.resolve()` -- the EXACT
+    same resolution every one-shot `rogo` command already uses, so a
+    `--sim` target here freshly builds/reuses `tools/sim`
+    (`connection.ensure_sim_binary()`) and spawns it identically to
+    `rogo drive --sim` today (this ticket's own AC #1) -- then build and
+    `start()` a `DaemonServer` around it with `dispatch_table`, and run
+    it over the pipe transport (`run_stdio_pipe()`) until EOF. Always
+    `stop()`s the server and `close()`s the connection's transport
+    afterward, success or failure, so a `--sim` subprocess this function
+    spawned is never left running once the pipe closes.
+
+    This is the ONE place in this module that ties connection
+    resolution to a running server -- ticket 007's own test harness
+    (`tests/host/rogo/daemon_test_helpers.py`) forks a subprocess that
+    calls this function to prove the whole boot sequence end to end
+    against a real `tools/sim` (SUC-003). A future `cmd_serve()`
+    (ticket 009) is expected to call this SAME function for its own
+    `--stdio-pipe` branch, with `cli.py`'s own per-verb dispatch table,
+    rather than reimplementing this sequence -- its Unix-socket branch
+    needs its own, separate wiring (name resolution, socket path,
+    signal handling), which is out of this function's scope.
+
+    `stdin`/`stdout` pass straight through to `run_stdio_pipe()` (its
+    own default-to-`sys.stdin`/`sys.stdout` behavior applies when
+    omitted) -- present here purely so this function itself is testable
+    in-process, with a fake pair of streams, the same way
+    `run_stdio_pipe()` already is (`test_daemon_transports.py`'s own
+    `_FakeStdioStream`), with no real subprocess/sim required for that
+    coverage.
+    """
+    conn = resolve_connection(args)
+    server = DaemonServer(conn, dispatch_table, estop_verbs=estop_verbs)
+    server.start()
+    try:
+        run_stdio_pipe(server, stdin=stdin, stdout=stdout)
+    finally:
+        server.stop()
+        conn.transport.close()
 
 
 def _force_line_buffered(stream: TextIO) -> None:
