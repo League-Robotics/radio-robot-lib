@@ -1,7 +1,7 @@
 ---
 id: '012'
 title: Fix four remaining dangling spec section citations in src/protocol
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on:
