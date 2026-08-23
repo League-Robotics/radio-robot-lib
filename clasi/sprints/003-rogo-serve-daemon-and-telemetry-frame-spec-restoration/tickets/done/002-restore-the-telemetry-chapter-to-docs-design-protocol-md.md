@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: Restore the Telemetry chapter to docs/design/protocol.md
-status: open
-use-cases: [SUC-005]
+status: done
+use-cases:
+- SUC-005
 depends-on: []
 github-issue: ''
 issue: restore-the-telemetry-frame-specification-and-add-a-host-requested-header-command.md
@@ -49,7 +50,7 @@ or "the next section" rather than asserting it already works.
 
 ## Acceptance Criteria
 
-- [ ] New §10 "Telemetry" section covers: `TLM <mode>` subscription
+- [x] New §10 "Telemetry" section covers: `TLM <mode>` subscription
       semantics (the six-mode table, per-connection mode, re-emit
       `thdr` on mode change, rate floor); the `thdr`/`t` line grammar
       and emission rules (header on first frame and on column-set
@@ -62,11 +63,11 @@ or "the next section" rather than asserting it already works.
       POSE/FULL column tables for ports that grow beyond DiffDrive; and
       the `TLM HDR` command's wire form and semantics (forward-written
       against ticket 003's planned implementation).
-- [ ] §5.2 gains a forward-pointer to §10 ("see §10 for the full
+- [x] §5.2 gains a forward-pointer to §10 ("see §10 for the full
       telemetry-frame specification").
-- [ ] No restored text repeats the old "`TLM NOW` recovers the header"
+- [x] No restored text repeats the old "`TLM NOW` recovers the header"
       claim.
-- [ ] Section renders correctly (valid Markdown, table formatting
+- [x] Section renders correctly (valid Markdown, table formatting
       consistent with the rest of `protocol.md`).
 
 ## Implementation Plan
