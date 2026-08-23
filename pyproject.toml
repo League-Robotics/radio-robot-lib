@@ -4,6 +4,7 @@ version = "0.20260822.1"
 description = "Common library code shared by robot deployment environments: a differential-drive wheel kernel and a protocol-v6 line-grammar handler."
 requires-python = ">=3.10"
 dependencies = [
+    "mcp>=1.0",
     "pytest>=8.0",
 ]
 

@@ -49,7 +49,7 @@ from robot_v6.codec import Reply
 from robot_v6.reliability import Session
 from robot_v6.transport import TransportClosed
 
-from . import calibrate, config, connection, repl, turn_model
+from . import calibrate, config, connection, mcp_server, repl, turn_model
 
 _DEFAULT_TIMEOUT = 3.0  # [s] -- generous for a local subprocess/socket/serial hop
 _DEFAULT_TURN_SPEED_MM_S = 200.0  # matches elite's own `p_turn --speed` default
@@ -874,6 +874,50 @@ def cmd_calibrate_distance(args: argparse.Namespace) -> int:
         conn.transport.close()
 
 
+# ---------------------------------------------------------------------------
+# mcp -- ticket 007: expose drive/turn/goto/config/calibrate as MCP
+# tools over ONE connection resolved for the server's whole lifetime
+# (same resolution as every other subcommand above). All tool-dispatch
+# logic lives in `rogo.mcp_server` (its own module docstring explains
+# why that module does NOT import this one back -- it would be
+# circular, since THIS function needs `rogo.mcp_server.serve()`); this
+# function's own job is exactly `cmd_repl()`'s shape: resolve, hand off,
+# translate the handoff's own exceptions to an exit code, always close.
+# ---------------------------------------------------------------------------
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """`rogo mcp [--sim|--connect|--port] [--listen HOST:PORT
+    [--allow-remote]]` -- resolve ONE connection for the MCP server's
+    whole lifetime (sprint.md SUC-005's own Main Flow: "same resolution
+    as SUC-001"), then hand it to `rogo.mcp_server.serve()`. Defaults to
+    stdio transport for the MCP wire itself -- a separate pipe from the
+    resolved ROBOT connection above -- per this ticket's own binding
+    security requirement (`rogo.mcp_server`'s own module docstring,
+    Security section): no `--listen` means no network surface at all;
+    `--listen` alone only reaches loopback; a non-loopback host needs
+    `--allow-remote` too. Validates `--listen`/`--allow-remote` BEFORE
+    resolving the robot/relay/sim connection, so a malformed or
+    disallowed flag fails fast rather than after paying for a
+    (possibly slow, possibly sim-rebuilding) connection first."""
+    try:
+        mcp_server.resolve_listen_target(args.listen, args.allow_remote)
+    except mcp_server.ListenTargetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    conn = connection.resolve(args)
+    try:
+        return mcp_server.serve(conn.session, listen=args.listen, allow_remote=args.allow_remote)
+    except mcp_server.ListenTargetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rogo",
@@ -1013,6 +1057,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--trials", type=int, default=calibrate.DEFAULT_DISTANCE_TRIALS,
         help=f"number of manual trials (default: {calibrate.DEFAULT_DISTANCE_TRIALS})")
     p_cal_distance.set_defaults(func=cmd_calibrate_distance)
+
+    p_mcp = sub.add_parser(
+        "mcp",
+        help="Start an MCP server exposing drive/turn/goto/config/"
+             "calibrate_turns as tools (stdio transport by default -- "
+             "see rogo.mcp_server for --listen's binding rules)")
+    connection.add_target_arguments(p_mcp)
+    p_mcp.add_argument(
+        "--listen", metavar="HOST:PORT", default=None,
+        help="serve the MCP protocol over TCP instead of stdio, bound "
+             "to HOST:PORT (loopback only unless --allow-remote is "
+             "also given)")
+    p_mcp.add_argument(
+        "--allow-remote", action="store_true",
+        help="required alongside --listen to bind to a non-loopback host")
+    p_mcp.set_defaults(func=cmd_mcp)
 
     return parser
 

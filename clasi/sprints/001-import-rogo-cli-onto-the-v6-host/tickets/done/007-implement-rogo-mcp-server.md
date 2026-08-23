@@ -1,9 +1,15 @@
 ---
 id: '007'
 title: Implement rogo mcp server
-status: open
-use-cases: [SUC-005]
-depends-on: ["001", "002", "003", "004", "005"]
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
 github-issue: ''
 issue: import-rogo-cli-adapt-robot-radio-to-v6-host.md
 completes_issue: true
@@ -27,20 +33,20 @@ elsewhere.
 
 ## Acceptance Criteria
 
-- [ ] Each ported CLI operation (drive, turn, goto, config get/set) has a
+- [x] Each ported CLI operation (drive, turn, goto, config get/set) has a
       corresponding MCP tool with matching behavior/outcome against
       `tools/sim`.
-- [ ] `rogo mcp` binds to `127.0.0.1` by default; a `--listen HOST:PORT`
+- [x] `rogo mcp` binds to `127.0.0.1` by default; a `--listen HOST:PORT`
       -style flag is required to bind elsewhere.
-- [ ] A tool call targeting an unreachable robot/relay/sim surfaces a
+- [x] A tool call targeting an unreachable robot/relay/sim surfaces a
       transport-level error through the MCP error channel rather than
       hanging.
-- [ ] At least one calibrate tool (e.g. `calibrate_turns`) is exposed,
+- [x] At least one calibrate tool (e.g. `calibrate_turns`) is exposed,
       calling ticket 005's non-interactive trial-loop core (explicit
       trial count / measured values as tool arguments) rather than the
       CLI's TTY prompts, since an MCP client can't answer an `input()`
       call.
-- [ ] Thin unit test per tool: schema shape + dispatch to the right
+- [x] Thin unit test per tool: schema shape + dispatch to the right
       underlying call — not a full MCP-protocol integration test.
 
 ## Implementation Plan
