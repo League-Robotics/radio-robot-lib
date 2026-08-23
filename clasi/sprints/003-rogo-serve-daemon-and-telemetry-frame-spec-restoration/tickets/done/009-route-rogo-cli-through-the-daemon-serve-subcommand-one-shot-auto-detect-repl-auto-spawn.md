@@ -2,9 +2,12 @@
 id: 009
 title: 'Route rogo CLI through the daemon: serve subcommand, one-shot auto-detect,
   repl auto-spawn'
-status: open
-use-cases: [SUC-001]
-depends-on: ["005", "008"]
+status: done
+use-cases:
+- SUC-001
+depends-on:
+- '005'
+- 008
 github-issue: ''
 issue: rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
 completes_issue: true
@@ -40,19 +43,19 @@ additive changes:
 
 ## Acceptance Criteria
 
-- [ ] `rogo serve [--sim|--connect|--port] [--stdio-pipe]` starts a
+- [x] `rogo serve [--sim|--connect|--port] [--stdio-pipe]` starts a
       daemon (delegating to `daemon.py`), reusing `cli.py`'s own
       per-verb dispatch functions by injection.
-- [ ] A one-shot `rogo drive`/`turn`/`goto`/`config`/`calibrate`
+- [x] A one-shot `rogo drive`/`turn`/`goto`/`config`/`calibrate`
       invocation routes through a running daemon when one exists for
       the resolved robot, with no new process spawned.
-- [ ] The same one-shot invocation, with no daemon running, behaves
+- [x] The same one-shot invocation, with no daemon running, behaves
       identically to today (direct connect, no auto-spawn) — regression
       guard for SUC-001's second acceptance criterion.
-- [ ] `rogo repl` auto-spawns a daemon when none is running for its
+- [x] `rogo repl` auto-spawns a daemon when none is running for its
       resolved target, then behaves identically to a direct connection
       from the user's perspective.
-- [ ] Two sequential one-shot invocations (or a one-shot followed by
+- [x] Two sequential one-shot invocations (or a one-shot followed by
       `repl`) against the same daemon do not reset `tools/sim`'s
       connection state between them (SUC-001's own first acceptance
       criterion, verified end to end here for the first time).

@@ -5,6 +5,23 @@ module's own claimed decoupling from `rogo.cli`), plus full end-to-end
 runs of all three input modes (argument list, piped stdin, interactive
 prompt) against the real compiled `tools/sim` binary through
 `rogo.cli.cmd_repl()`'s own wiring -- this ticket's own AC #4.
+
+Ticket 009 changes `cmd_repl()` to resolve its connection through
+`daemon_client.get_connection(args, spawn=True)` (auto-spawn a daemon
+when none is running for the resolved target) rather than calling
+`connection.resolve()` directly. Every test below is about `repl.py`'s
+OWN command-loop behavior (one persistent session, quit/exit, EOF,
+blank/comment lines, per-line parse-error recovery) against a real
+`--sim` target -- NOT about daemon auto-spawn mechanics, which get
+their own dedicated coverage in test_cli_serve.py. The `_direct_connect_
+only` autouse fixture below stubs `get_connection()` back to a thin
+wrapper around `connection.resolve()` (still routed through the
+`connection` module so `test_repl_argument_list_runs_drive_then_stop_
+over_one_connection_against_sim`'s own `connection.resolve` monkeypatch/
+call-count assertion keeps working unchanged) -- without it, EVERY test
+below would otherwise spawn a real, long-lived `rogo serve --sim`
+subprocess against this machine's actual `~/.rogo/run`/
+`$XDG_RUNTIME_DIR` socket directory, once per test.
 """
 
 from __future__ import annotations
@@ -17,7 +34,18 @@ import sys
 import pytest
 
 from robot_v6.transport import StdioTransport
-from rogo import cli, connection, repl
+from rogo import cli, connection, daemon_client, repl
+
+
+@pytest.fixture(autouse=True)
+def _direct_connect_only(monkeypatch):
+    """See module docstring: keeps every test below on the SAME direct-
+    connect path it ran against before ticket 009, with no real daemon
+    spawn involved."""
+    def _direct_connect(args, **kwargs):
+        del kwargs
+        return connection.resolve(args)
+    monkeypatch.setattr(daemon_client, "get_connection", _direct_connect)
 
 
 # ---------------------------------------------------------------------------

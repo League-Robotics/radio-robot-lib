@@ -31,6 +31,28 @@ reject a bare `rogo --agent` invocation with no subcommand -- see
 `main()`'s own comment. `agent_manual.MANUAL` is this module's only new
 import; no other subcommand's behavior changes.
 
+Sprint 003 ticket 009 wires this module into the new daemon subsystem
+(sprint.md's Architecture Step 3, this module's own row), three
+additive changes: (1) a `serve` subcommand (`cmd_serve()`) that imports
+`rogo.daemon` and starts its server loop, injecting `daemon_client.
+build_session_dispatch_table()` -- the SAME generic Session-RPC table
+`daemon_client.py`'s own client half (`ClientConnection`/
+`_RemoteSession`, ticket 008) speaks, so a daemon started this way is
+wire-compatible with every dispatch body below with NO per-verb table
+of its own needed here; (2) every one-shot `cmd_*()`'s own
+`connection.resolve(args)` call site is replaced with `daemon_client.
+get_connection(args, spawn=False)` -- auto-detect only, falling back to
+`connection.resolve()` UNCHANGED when no daemon is found (zero
+regression for a caller that never runs `rogo serve`); (3) `cmd_repl()`
+resolves through `daemon_client.get_connection(args, spawn=True)`
+instead -- auto-spawn-if-absent, since a repl session is itself a
+long-lived tool like `rogo serve`/`rogo mcp`. This module still never
+imports `rogo.daemon_client`'s or `rogo.daemon`'s internals beyond
+their own public surface, and `rogo.daemon`/`rogo.daemon_client` never
+import this module back -- the one-directional edge sprint.md's
+architecture review specifically verified (see `daemon.py`'s own module
+docstring, "Injection, not import" section).
+
 **The stakeholder's soft-warning decision (sprint 001
 stakeholder_approval gate), binding for `drive --mm`:** a command that
 reaches `DiffDriveAdapter`'s `kUnknown` planner gap (no planner behind
@@ -48,15 +70,20 @@ from __future__ import annotations
 
 import argparse
 import math
+import signal
 import sys
 import time
+from pathlib import Path
 
 from robot_v6 import motion
 from robot_v6.codec import Reply
 from robot_v6.reliability import Session
 from robot_v6.transport import TransportClosed
 
-from . import agent_manual, calibrate, config, connection, mcp_server, repl, turn_model
+from . import (
+    agent_manual, calibrate, config, connection, daemon, daemon_client, mcp_server, repl,
+    turn_model,
+)
 
 _DEFAULT_TIMEOUT = 3.0  # [s] -- generous for a local subprocess/socket/serial hop
 _DEFAULT_TURN_SPEED_MM_S = 200.0  # matches elite's own `p_turn --speed` default
@@ -233,8 +260,13 @@ def cmd_hello(args: argparse.Namespace) -> int:
     simplest possible round trip: no sequencing, no motion, just proof
     the target is alive and answering (per protocol.md#8.3, `HELLO`'s
     reply is byte-identical to the unsolicited boot banner already
-    emitted on connect, so this also verifies re-sending it works)."""
-    conn = connection.resolve(args)
+    emitted on connect, so this also verifies re-sending it works).
+
+    Resolves through `daemon_client.get_connection(args, spawn=False)`
+    (ticket 009) -- routes through an already-running `rogo serve`
+    daemon for the resolved target when one exists, else falls back to
+    `connection.resolve()` unchanged (module docstring)."""
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _run_hello(conn.session)
     except TransportClosed as exc:
@@ -262,8 +294,9 @@ def cmd_stop(args: argparse.Namespace) -> int:
     """Send the sequenced `STOP` command and report whether it was
     acked -- `rogo`'s other half of ticket 002's smoke test, exercising
     `robot_v6.motion` and the reliability layer's ack path rather than
-    `hello`'s unsequenced one."""
-    conn = connection.resolve(args)
+    `hello`'s unsequenced one. See `cmd_hello()`'s own docstring for
+    why this resolves through `daemon_client.get_connection()` now."""
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _run_stop(conn.session)
     except TransportClosed as exc:
@@ -470,7 +503,7 @@ def cmd_drive(args: argparse.Namespace) -> int:
     if error is not None:
         return error
 
-    conn = connection.resolve(args)
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _dispatch_drive_mode(conn.session, args)
     except TransportClosed as exc:
@@ -552,7 +585,7 @@ def cmd_turn(args: argparse.Namespace) -> int:
         return exit_code
     cmd_l, cmd_r, duration_ms = params
 
-    conn = connection.resolve(args)
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _run_turn(conn.session, args.degrees, cmd_l, cmd_r, duration_ms)
     except TransportClosed as exc:
@@ -640,7 +673,7 @@ def cmd_goto(args: argparse.Namespace) -> int:
     if timeout_ms is None:
         return exit_code
 
-    conn = connection.resolve(args)
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _run_goto(conn.session, args.x, args.y, args.speed, args.arrive, timeout_ms)
     except TransportClosed as exc:
@@ -685,7 +718,7 @@ def _run_config_get(session: Session, name: str | None) -> int:
 def cmd_config_get(args: argparse.Namespace) -> int:
     """`rogo config get [name]` -- see `_run_config_get()`'s own
     docstring for the reporting contract."""
-    conn = connection.resolve(args)
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _run_config_get(conn.session, args.name)
     except TransportClosed as exc:
@@ -719,7 +752,7 @@ def cmd_config_set(args: argparse.Namespace) -> int:
     """`rogo config set <name> <value>` -- `SET`'s own delegation
     (protocol.md#7). See `_run_config_set()`'s own docstring for the
     reporting contract."""
-    conn = connection.resolve(args)
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _run_config_set(conn.session, args.name, args.value)
     except TransportClosed as exc:
@@ -799,8 +832,25 @@ def cmd_repl(args: argparse.Namespace) -> int:
     connection"), then hand it to `rogo.repl.run()` along with a fresh
     `build_parser()` (for per-line parsing) and `_dispatch_repl_line`
     (for per-line dispatch). See `rogo.repl`'s own module docstring for
-    the three input modes."""
-    conn = connection.resolve(args)
+    the three input modes.
+
+    Resolves through `daemon_client.get_connection(args, spawn=True)`
+    (ticket 009) rather than `connection.resolve()` directly -- a repl
+    session is itself a long-lived tool, so it AUTO-SPAWNS a daemon for
+    the resolved target when none is already running (always preferring
+    an already-running one first, module docstring), rather than only
+    auto-detecting one the way the one-shot `cmd_*()`s above do. Either
+    way the object handed to `repl.run()` presents the identical
+    `Session` surface a direct connection's own `.session` does, so
+    nothing below this call site changes."""
+    try:
+        conn = daemon_client.get_connection(args, spawn=True)
+    except daemon_client.RobotNameRequiredError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except daemon_client.DaemonUnavailableError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     try:
         return repl.run(conn.session, args.commands, build_parser(), _dispatch_repl_line)
     except TransportClosed as exc:
@@ -821,7 +871,9 @@ def cmd_repl(args: argparse.Namespace) -> int:
 
 def cmd_calibrate_turns(args: argparse.Namespace) -> int:
     """`rogo calibrate turns [--speed] [--trials N]` -- see
-    `rogo.calibrate.calibrate_turns()` for the full flow."""
+    `rogo.calibrate.calibrate_turns()` for the full flow. See
+    `cmd_hello()`'s own docstring for why this resolves through
+    `daemon_client.get_connection()` now."""
     if args.speed <= 0:
         print(f"error: --speed must be > 0, got {args.speed}", file=sys.stderr)
         return 2
@@ -838,7 +890,7 @@ def cmd_calibrate_turns(args: argparse.Namespace) -> int:
         )
         return 1
 
-    conn = connection.resolve(args)
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return calibrate.calibrate_turns(conn.session, cfg, args.trials, args.speed)
     except TransportClosed as exc:
@@ -850,7 +902,9 @@ def cmd_calibrate_turns(args: argparse.Namespace) -> int:
 
 def cmd_calibrate_distance(args: argparse.Namespace) -> int:
     """`rogo calibrate distance [--distance] [--speed] [--trials N]` --
-    see `rogo.calibrate.calibrate_distance()` for the full flow."""
+    see `rogo.calibrate.calibrate_distance()` for the full flow. See
+    `cmd_hello()`'s own docstring for why this resolves through
+    `daemon_client.get_connection()` now."""
     if args.speed <= 0:
         print(f"error: --speed must be > 0, got {args.speed}", file=sys.stderr)
         return 2
@@ -870,7 +924,7 @@ def cmd_calibrate_distance(args: argparse.Namespace) -> int:
         )
         return 1
 
-    conn = connection.resolve(args)
+    conn = daemon_client.get_connection(args, spawn=False)
     try:
         return calibrate.calibrate_distance(
             conn.session, cfg, args.trials, args.distance, args.speed)
@@ -923,6 +977,157 @@ def cmd_mcp(args: argparse.Namespace) -> int:
         return 1
     finally:
         conn.transport.close()
+
+
+# ---------------------------------------------------------------------------
+# serve -- ticket 009: `cmd_serve()` imports `rogo.daemon` and starts its
+# server loop against a resolved target, injecting `daemon_client.
+# build_session_dispatch_table()` -- the SAME generic Session-RPC table
+# `daemon_client.py`'s own client half already speaks (its own module
+# docstring: "Public so a future cmd_serve() (ticket 009) can reuse it
+# verbatim rather than reimplementing this mapping"). This IS this
+# module's own per-verb dispatch reused by injection, one layer down:
+# every entry in that table forwards straight to the SAME `Session`
+# methods (`send`/`pump`/`wait_for_ack`/...) `_run_hello()`/
+# `_dispatch_drive_mode()`/etc. already call directly against a direct
+# connection -- so no new, separate "drive"/"turn"/"goto"-keyed table is
+# needed here, and a daemon started by a user's own `rogo serve` is
+# wire-compatible with `daemon_client.get_connection()`'s auto-detect/
+# auto-spawn clients (`cmd_*()`s above, `cmd_repl()`) no matter which of
+# the two started it.
+# ---------------------------------------------------------------------------
+
+def _with_serve_activity_tracking(
+    table: daemon.DispatchTable, last_activity: list[float],
+) -> daemon.DispatchTable:
+    """Wrap every handler in `table` so calling it stamps
+    `last_activity[0]` with the current time -- `_wait_until_stopped()`'s
+    own `--idle-timeout` watchdog reads this same list to decide when to
+    self-terminate (used when THIS subcommand is itself what
+    `daemon_client.default_spawn_argv()` spawns, ticket 008/009's own
+    reconciliation: an auto-spawned worker has no interactive user to
+    Ctrl-C it, so it needs to notice idleness itself). Duplicated, in
+    miniature, from `daemon_client`'s own private identically-shaped
+    helper rather than imported -- that helper is a private
+    implementation detail of `daemon_client.run_daemon_worker()`'s own
+    idle-timeout logic, and this module has no other reason to depend on
+    it; see `daemon.py`'s own `_force_line_buffered()` for the identical
+    duplicate-rather-than-couple precedent already established in this
+    package."""
+    def _wrap(fn):
+        def _wrapped(session, params, abort):
+            last_activity[0] = time.monotonic()
+            return fn(session, params, abort)
+        return _wrapped
+    return {verb: _wrap(fn) for verb, fn in table.items()}
+
+
+def _raise_keyboard_interrupt(signum: int, frame: object) -> None:
+    del signum, frame
+    raise KeyboardInterrupt
+
+
+def _wait_until_stopped(
+    idle_timeout: float | None, last_activity: list[float], *, sleep=None,
+) -> None:
+    """Block the calling thread until Ctrl-C, SIGTERM, or -- when
+    `idle_timeout` is truthy -- until that many seconds elapse with no
+    dispatched request (`last_activity[0]`, stamped by
+    `_with_serve_activity_tracking()`'s wrapped handlers). SIGTERM is
+    mapped onto the same `KeyboardInterrupt` path Ctrl-C (SIGINT)
+    already takes by default, so a daemon started non-interactively
+    (an auto-spawned worker, an init system) shuts down the same clean
+    way a user's own Ctrl-C would; `signal.signal()` only works from the
+    main thread, so registering it is a best-effort no-op when called
+    from anywhere else (a test driving `cmd_serve()` off the main
+    thread) -- the idle-timeout half of this function still applies
+    either way. `sleep`, when given, replaces the pacing call -- see
+    `_cmd_drive_stream()`'s own docstring for why (a test injects a fake
+    that raises after a bounded number of calls instead of a real
+    Ctrl-C)."""
+    _sleep = sleep if sleep is not None else time.sleep
+    previous_sigterm = None
+    try:
+        previous_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+    except ValueError:
+        pass  # not the main thread -- SIGTERM handling unavailable here
+    try:
+        while True:
+            if idle_timeout and time.monotonic() - last_activity[0] >= idle_timeout:
+                return
+            _sleep(0.2)
+    except KeyboardInterrupt:
+        print()  # move past a bare ^C already echoed to the terminal
+    finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """`rogo serve [--sim|--connect|--port] [--name NAME]
+    [--socket-dir DIR] [--idle-timeout SECONDS] [--stdio-pipe]` -- start
+    a daemon (`rogo.daemon`) holding ONE connection open for the whole
+    process's lifetime, injecting `daemon_client.
+    build_session_dispatch_table()` (see this section's own header
+    comment for why no separate per-verb table is needed).
+
+    `--stdio-pipe` serves the framed protocol over this process's own
+    stdin/stdout instead of a Unix domain socket (tests/embedding --
+    delegates to `daemon.run_stdio_pipe_from_args()`, ticket 007's own
+    boot function) and returns once stdin hits EOF. The default is a
+    named Unix domain socket (production): the name is resolved via
+    `daemon.resolve_robot_name()` (`--name` overrides; else HELLO; else
+    the fixed `"sim"` default for a `--sim` target with no HELLO
+    answer), `--socket-dir` overrides the well-known socket directory
+    (`daemon.default_socket_dir()`), and the server runs until Ctrl-C/
+    SIGTERM -- or, when `--idle-timeout` is given, until that many
+    seconds elapse with no dispatched request (`_wait_until_stopped()`;
+    used by `daemon_client.default_spawn_argv()` when this subcommand
+    is itself what an auto-spawned `rogo repl`/`rogo mcp` boots)."""
+    dispatch_table = daemon_client.build_session_dispatch_table()
+
+    if args.stdio_pipe:
+        try:
+            daemon.run_stdio_pipe_from_args(args, dispatch_table)
+        except TransportClosed as exc:
+            print(f"error: connection closed: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    conn = connection.resolve(args)
+    try:
+        try:
+            name = daemon.resolve_robot_name(
+                conn.session, override=args.name, sim=bool(getattr(args, "sim", False)))
+        except daemon.RobotNameError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        socket_dir = Path(args.socket_dir) if args.socket_dir else None
+        socket_path = daemon.socket_path_for_name(name, socket_dir=socket_dir)
+
+        table = dispatch_table
+        last_activity = [time.monotonic()]
+        if args.idle_timeout:
+            table = _with_serve_activity_tracking(dispatch_table, last_activity)
+
+        server = daemon.DaemonServer(conn, table)
+        server.start()
+        try:
+            listener = daemon.UnixSocketListener(server, socket_path)
+            listener.start()
+            try:
+                print(f"rogo serve: {name!r} listening at {socket_path} -- Ctrl-C to stop")
+                _wait_until_stopped(args.idle_timeout, last_activity)
+            finally:
+                listener.stop()
+        finally:
+            server.stop()
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1092,6 +1297,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-remote", action="store_true",
         help="required alongside --listen to bind to a non-loopback host")
     p_mcp.set_defaults(func=cmd_mcp)
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="Start a daemon holding one connection open for multiple "
+             "clients/sessions: rogo serve [--sim|--connect|--port] "
+             "[--name NAME] [--socket-dir DIR] [--idle-timeout SECONDS] "
+             "[--stdio-pipe]")
+    connection.add_target_arguments(p_serve)
+    p_serve.add_argument(
+        "--name", default=None,
+        help="robot name override for the Unix-socket file (<name>.sock) "
+             "-- default: resolved via HELLO, or 'sim' for a --sim target "
+             "with no HELLO answer")
+    p_serve.add_argument(
+        "--socket-dir", default=None,
+        help="override the well-known socket directory (default: "
+             "daemon.default_socket_dir())")
+    p_serve.add_argument(
+        "--idle-timeout", type=float, default=None,
+        help="self-terminate after this many idle seconds with no "
+             "dispatched request (default: never -- run until Ctrl-C/"
+             "SIGTERM); used by an auto-spawned rogo repl/rogo mcp worker")
+    p_serve.add_argument(
+        "--stdio-pipe", action="store_true",
+        help="serve the framed daemon protocol over this process's own "
+             "stdin/stdout instead of a Unix domain socket -- for tests "
+             "and embedding (see rogo.daemon.run_stdio_pipe)")
+    p_serve.set_defaults(func=cmd_serve)
 
     return parser
 

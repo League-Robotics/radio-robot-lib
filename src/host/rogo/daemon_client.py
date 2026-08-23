@@ -57,25 +57,35 @@ independent of `cli.py` entirely, and is exactly what a generic
 "connection-shaped client interface" (sprint.md Step 2) means in
 practice.
 
----- Spawning a real daemon with no `rogo serve` subcommand yet ----
+---- Spawning: `default_spawn_argv()` boots the real `serve` subcommand
+(ticket 009 reconciliation) ----
 
-`cli.py`'s `serve` subcommand and its own dispatch-injection wiring are
-explicitly ticket 009's job (sprint.md's Tickets table; this ticket's
-own Out of Scope note) -- `rogo.daemon_client` therefore cannot spawn
-`rogo serve` as a literal CLI invocation today. Instead, this module is
-itself a bootable worker: `python -m rogo.daemon_client --sim|--connect
-|--port ... --name <name> --idle-timeout <seconds>` resolves a
-connection (`rogo.connection.resolve()`), binds a `daemon.UnixSocketListener`
-at `daemon.socket_path_for_name(name)`, serves the SAME generic
-Session-RPC dispatch table this module's own client speaks, and
-self-terminates after `idle_timeout` idle seconds (see below).
-`default_spawn_argv()` builds exactly this invocation, so
-`get_connection(..., spawn=True)` is fully functional today, end to end,
-with no dependency on `cli.py`. A future `cmd_serve()` (ticket 009) may
-keep shelling out to this same worker, or call `run_daemon_worker()`
-directly -- either way, THIS module's own wire vocabulary
-("session_send", ...) is what a `ClientConnection` speaks, so nothing
-about the client half needs to change either way.
+Ticket 008 (this module's original state) had no `serve` subcommand to
+spawn yet, so `default_spawn_argv()` booted THIS module itself as a
+bootable worker (`python -m rogo.daemon_client --sim|--connect|--port
+... --name <name> --idle-timeout <seconds>`, see `run_daemon_worker()`
+below) -- a real, but standalone, boot path with no dependency on the
+CLI router module. Ticket 009 built that `serve` subcommand
+(`rogo.cli`'s own `cmd_serve()`), and reconciled `default_spawn_argv()`
+to boot THAT instead: `python -m rogo.cli serve --sim|--connect|--port
+... --name <name> --idle-timeout <seconds> [--socket-dir <dir>]` --
+robust whether or not the `rogo` console script is on `PATH`, since
+`-m` resolves the module directly. `cmd_serve()`'s own Unix-socket
+branch binds a `daemon.UnixSocketListener` at
+`daemon.socket_path_for_name(name)`, injects `build_session_dispatch_
+table()` (below) -- the SAME table this module's own worker already
+used -- and self-terminates after `idle_timeout` idle seconds exactly
+like `run_daemon_worker()` does (`cmd_serve()`'s own `--idle-timeout`
+flag, mirroring this module's idle-tracking approach in miniature,
+documented at its own call site). `spawn_argv=` on `get_connection()`
+stays fully overridable (a caller, or a test, may still boot anything
+it likes in place of the default). `run_daemon_worker()`/`__main__`
+below remain a still-functional, dependency-light ALTERNATIVE boot path
+-- useful directly, or embedded, with no `argparse`/CLI-router
+involved at all -- but are no longer what `default_spawn_argv()` itself
+targets; either way, THIS module's own wire vocabulary ("session_send",
+...) is what a `ClientConnection` speaks, so nothing about the CLIENT
+half ever needed to change across this reconciliation.
 
 ---- Idle-timeout self-termination (sprint.md Step 7's own open
 question; this ticket's own decision) ----
@@ -513,20 +523,27 @@ def _wait_for_daemon(
 
 # ---------------------------------------------------------------------------
 # Spawn -- a real OS subprocess, not a Python import of daemon.py. See
-# module docstring's "Spawning a real daemon with no rogo serve subcommand
-# yet" section for why the default argv invokes THIS module.
+# module docstring's "Spawning: default_spawn_argv() boots the real
+# serve subcommand" section for why the default argv now invokes the
+# CLI router module's own `serve` subcommand (ticket 009 reconciliation)
+# rather than this module's own standalone worker.
 # ---------------------------------------------------------------------------
 
 def default_spawn_argv(
     args: argparse.Namespace, *, name: str, idle_timeout: float, socket_dir: Path | None = None,
 ) -> list[str]:
     """Build the subprocess argv `get_connection(..., spawn=True)` uses
-    when a caller does not supply its own `spawn_argv` -- boots THIS
-    module as `python -m rogo.daemon_client` against the same
+    when a caller does not supply its own `spawn_argv` -- boots the
+    `serve` subcommand of the CLI router module (`python -m rogo.cli
+    serve`, robust whether or not the `rogo` console script is on
+    `PATH`, since `-m` resolves the module directly) against the same
     `--sim`/`--connect`/`--port` target `args` names, with `name`
-    already resolved (so the worker never re-resolves it via its own
-    HELLO round trip) and `idle_timeout` passed through explicitly."""
-    argv = [sys.executable, "-m", "rogo.daemon_client"]
+    already resolved (so the daemon it starts never re-resolves it via
+    its own HELLO round trip) and `idle_timeout` passed through
+    explicitly (`--idle-timeout`, self-terminates the spawned daemon
+    once that many seconds pass with no dispatched request -- an
+    auto-spawned worker has no interactive user to Ctrl-C it)."""
+    argv = [sys.executable, "-m", "rogo.cli", "serve"]
     if getattr(args, "sim", False):
         argv.append("--sim")
     elif getattr(args, "connect", None):
@@ -627,8 +644,10 @@ def get_connection(
 
 # ---------------------------------------------------------------------------
 # The bootable worker -- `python -m rogo.daemon_client ...`. See module
-# docstring's "Spawning a real daemon with no rogo serve subcommand yet"
-# section.
+# docstring's "Spawning: default_spawn_argv() boots the real serve
+# subcommand" section: this is now an ALTERNATIVE, dependency-light boot
+# path (no argparse/CLI-router module involved) rather than what
+# get_connection(..., spawn=True)'s own default targets.
 # ---------------------------------------------------------------------------
 
 def _build_worker_parser() -> argparse.ArgumentParser:
@@ -639,9 +658,12 @@ def _build_worker_parser() -> argparse.ArgumentParser:
             "speaking the generic session-RPC protocol daemon_client.py's "
             "own ClientConnection expects, and self-terminates after "
             "--idle-timeout idle seconds with no dispatched request. Not "
-            "a public CLI surface -- spawned by get_connection()'s "
-            "auto-spawn policy (default_spawn_argv()), or invoked "
-            "directly in tests."
+            "a public CLI surface -- ticket 009's rogo serve subcommand "
+            "is what get_connection()'s own auto-spawn policy "
+            "(default_spawn_argv()) targets by default; this worker "
+            "remains callable directly (run_daemon_worker()) or as a "
+            "standalone subprocess, in tests or embedded, with no "
+            "dependency on the CLI router module at all."
         ),
     )
     connection.add_target_arguments(parser)

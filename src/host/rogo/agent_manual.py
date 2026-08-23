@@ -9,9 +9,12 @@ document is the complete reference for the actual command surface this
 repo's `rogo` ships against a protocol-v6 robot, relay, or `tools/sim`
 (sprint.md's Architecture and Design Rationale, clasi/sprints/002-add-
 rogo-agent-manual/sprint.md) -- deliberately NOT a port of elite's own
-manual content: no daemon (`rogo serve`), no socket-relay protocol, no
-binary command plane, no macOS-HUPCL serial-port-reset advice. None of
-that exists in this repo's `rogo`.
+manual content: no binary command plane, no socket-relay protocol
+distinct from this repo's own daemon wire (below). Sprint 003 rebuilt a
+`rogo serve` daemon on this repo's own v6 host stack (`rogo.daemon`/
+`rogo.daemon_client`) -- narrower than elite's own (no macOS-HUPCL
+serial-port-reset advice needed here beyond what auto-detect/auto-spawn
+routing already handles transparently, no separate binary envelope).
 
 Keep this text in lockstep with ``rogo.cli.build_parser()``: a pinning
 test (``tests/host/rogo/test_agent_manual.py``) introspects the parser's
@@ -33,12 +36,15 @@ complete reference: every subcommand, every option, units, exit-code
 semantics, and the operational knowledge `--help` text does not carry.
 
 `rogo` talks to a protocol-v6 robot, relay, or `tools/sim` -- a single
-plain-ASCII line grammar (no COBS/CRC/binary command plane). There is no
-daemon in this repo (unlike elite's own `rogo serve`): every subcommand
-below either resolves one connection and exits (`hello`, `stop`,
-`drive`, `turn`, `goto`, `config get`/`set`, `calibrate turns`/
-`distance`), or holds one connection open for a whole session (`repl`,
-`mcp`).
+plain-ASCII line grammar (no COBS/CRC/binary command plane). Every
+one-shot subcommand below (`hello`, `stop`, `drive`, `turn`, `goto`,
+`config get`/`set`, `calibrate turns`/`distance`) resolves one
+connection and exits, but AUTO-DETECTS an already-running `rogo serve`
+daemon for its resolved target first and routes through it when one
+exists (falling back to a direct connection, unchanged, when none is
+found -- see section 8); `repl`/`mcp` hold one connection open for a
+whole session and AUTO-SPAWN a daemon when none is already running (see
+section 8); `serve` itself starts the daemon.
 
 ---
 
@@ -57,8 +63,9 @@ rogo [--agent] <subcommand> ...
 | `goto` | `rogo goto <x> <y> [--speed] [--arrive] [--timeout]` -- one `GO_TO_R` call, robot-frame only. |
 | `config get`/`config set` | Raw `GET`/`SET` wire delegation -- this library keeps no field table of its own. |
 | `calibrate turns`/`calibrate distance` | A manual, tape-measure/protractor-verified multi-trial run against the *active* robot config. |
-| `repl` | Run one or more commands over ONE persistent connection: an argument list, piped stdin, or an interactive prompt. |
+| `repl` | Run one or more commands over ONE persistent connection: an argument list, piped stdin, or an interactive prompt. Auto-spawns a daemon (section 8). |
 | `mcp` | Start an MCP server exposing 8 tools (`hello`/`stop`/`drive`/`turn`/`goto`/`config_get`/`config_set`/`calibrate_turns`), `stdio` by default. |
+| `serve` | `rogo serve [--sim\|--connect\|--port] [--name] [--socket-dir] [--idle-timeout] [--stdio-pipe]` -- start a daemon holding one connection open for multiple clients/sessions (section 8). |
 
 `rogo --agent` prints this manual and exits 0, checked BEFORE any
 subcommand is required and BEFORE any target (`--sim`/`--connect`/
@@ -333,6 +340,14 @@ individual dispatched line itself failed; each line's own outcome is
 reported inline (via the same printing every direct subcommand uses),
 not accumulated into the session's own exit code.
 
+`rogo repl` resolves its ONE connection through the same auto-detect/
+auto-spawn routing section 8 describes, with the AUTO-SPAWN half
+enabled: it reuses an already-running `rogo serve` daemon for its
+resolved target when one exists, or spawns one when none is running --
+either way, the rest of this section's behavior (one connection for the
+whole session, three input modes, `quit`/`exit`) is unchanged from the
+caller's own perspective.
+
 ---
 
 ## 7. `mcp` -- the MCP server
@@ -371,7 +386,64 @@ surfaces as an MCP tool error.
 
 ---
 
-## 8. Robot config files
+## 8. `rogo serve` -- the daemon, and auto-detect/auto-spawn routing
+
+`rogo serve [--sim|--connect|--port] [--name NAME] [--socket-dir DIR]
+[--idle-timeout SECONDS] [--stdio-pipe]` holds ONE connection open for
+the whole process's lifetime and serves it to any number of clients --
+built to fix a real failure mode: on macOS, opening then closing a
+serial connection resets the robot (DTR/HUPCL), so two back-to-back
+one-shot `rogo` invocations against a real port can each reset it
+between commands. Sharing ONE already-open connection through a daemon
+avoids that.
+
+```
+$ rogo serve --sim
+rogo serve: 'sim' listening at /Users/you/.rogo/run/sim.sock -- Ctrl-C to stop
+```
+
+- **Target**: the same `--sim`/`--connect`/`--port` flags every other
+  subcommand takes (section 2).
+- **`--name NAME`**: overrides the socket file's name (`<name>.sock`,
+  under `--socket-dir`/the well-known socket directory below). Default:
+  the target's own `HELLO`/`device` banner name; falling back to the
+  fixed `"sim"` default for a `--sim` target whose `HELLO` does not
+  answer within a short timeout.
+- **`--socket-dir DIR`**: overrides the well-known socket directory
+  (default: `$XDG_RUNTIME_DIR/rogo/` when that env var is set, else
+  `~/.rogo/run/`).
+- **`--idle-timeout SECONDS`**: self-terminate after that many idle
+  seconds with no dispatched request, instead of running until Ctrl-C/
+  SIGTERM -- what an auto-spawned daemon (below) uses, since it has no
+  interactive user to stop it.
+- **`--stdio-pipe`**: serve the same framed protocol over this
+  process's own stdin/stdout instead of a Unix domain socket -- for
+  tests and embedding; returns once stdin hits EOF.
+
+### Auto-detect (one-shot subcommands)
+
+`hello`/`stop`/`drive`/`turn`/`goto`/`config get`/`config set`/
+`calibrate turns`/`calibrate distance` each look for an already-running
+`rogo serve` daemon for their resolved target FIRST: if one is found,
+the command runs through it (no new process spawned, no connection
+reset); if none is found, the command falls back to a direct connection
+-- byte-for-byte the same behavior as if `rogo serve` did not exist.
+Auto-detect never spawns a daemon itself.
+
+### Auto-spawn (`repl`, `mcp`)
+
+`rogo repl` and `rogo mcp` are themselves long-lived, so they go
+further: if no daemon is already running for their resolved target,
+they spawn one (a real, detached `rogo serve` subprocess) and wait for
+it to become reachable before connecting -- always preferring an
+already-running daemon over spawning a new one. An auto-spawned daemon
+outlives the session that spawned it (another client may reuse it) and
+self-terminates on its own idle timeout (5 minutes by default,
+overridable via the `ROGO_DAEMON_IDLE_TIMEOUT` environment variable).
+
+---
+
+## 9. Robot config files
 
 Robot configs live at `config/robots/*.json`; `config/robots/
 active_robot.json` is a pointer file (a `{"path": "..."}` shape,

@@ -342,9 +342,13 @@ def test_resolve_client_name_returns_none_when_nothing_resolves():
 # ---------------------------------------------------------------------------
 
 def test_default_spawn_argv_for_a_sim_target():
+    # Ticket 009 reconciliation: the default spawn target is now the
+    # real `rogo serve` subcommand (`python -m rogo.cli serve`, robust
+    # whether or not the `rogo` console script is on PATH), not
+    # daemon_client's own standalone worker module.
     args = argparse.Namespace(sim=True, connect=None, port=None)
     argv = daemon_client.default_spawn_argv(args, name="sim", idle_timeout=42.0)
-    assert argv[:3] == [sys.executable, "-m", "rogo.daemon_client"]
+    assert argv[:4] == [sys.executable, "-m", "rogo.cli", "serve"]
     assert "--sim" in argv
     assert argv[argv.index("--name") + 1] == "sim"
     assert argv[argv.index("--idle-timeout") + 1] == "42.0"
