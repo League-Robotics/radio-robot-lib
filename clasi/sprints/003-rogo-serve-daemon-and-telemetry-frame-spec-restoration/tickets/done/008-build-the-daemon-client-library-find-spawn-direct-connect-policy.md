@@ -1,9 +1,13 @@
 ---
 id: 008
 title: 'Build the daemon client library: find / spawn / direct-connect policy'
-status: open
-use-cases: [SUC-001, SUC-002]
-depends-on: ["004", "006"]
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+depends-on:
+- '004'
+- '006'
 github-issue: ''
 issue: rebuild-rogo-serve-daemon-on-v6-named-sockets-pipe-mode-sim.md
 completes_issue: true
@@ -47,22 +51,22 @@ the reply back into the same result shapes.
 
 ## Acceptance Criteria
 
-- [ ] Auto-detect-only mode: connects to a running daemon when one
+- [x] Auto-detect-only mode: connects to a running daemon when one
       exists for the resolved robot name; falls back to
       `rogo.connection.resolve()` unchanged when none is found, with no
       process spawned.
-- [ ] Auto-spawn-if-absent mode: spawns `rogo serve` as a subprocess
+- [x] Auto-spawn-if-absent mode: spawns `rogo serve` as a subprocess
       when no daemon is found, waits for it to become reachable within a
       bounded timeout, then connects; raises a clear error (not a hang)
       if the spawned daemon never becomes reachable.
-- [ ] The object returned by either mode presents the same call surface
+- [x] The object returned by either mode presents the same call surface
       `rogo.connection.resolve()`'s `Connection` already does, so a
       caller's existing dispatch code does not need to branch on
       direct-vs-daemon-proxied.
-- [ ] An auto-spawned daemon self-terminates after the configured idle
+- [x] An auto-spawned daemon self-terminates after the configured idle
       timeout with no connected clients (verified with a short timeout
       in the test).
-- [ ] `daemon_client.py` has no dependency on `cli.py` (it is a library
+- [x] `daemon_client.py` has no dependency on `cli.py` (it is a library
       module several callers depend on, not the other way around).
 
 ## Implementation Plan
