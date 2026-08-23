@@ -1,0 +1,179 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "robot_name": "togov",
+    "uid": "togov",
+    "hardware_model": "Nezha 4-motor mecanum",
+    "common_name": "mecanum-bot",
+    "drivetrain_type": "mecanum"
+  },
+  "connection": {
+    "device_announcement_name": "togov",
+    "serial_last_6": "ade9b4",
+    "_i2c_addresses": {}
+  },
+  "vision": {
+    "robot_tag_id": 101,
+    "camera_distance_scale": 1.0,
+    "tag_offset_x": 0.0,
+    "tag_offset_y": 0.0,
+    "tag_offset_yaw": 0.0
+  },
+  "geometry": {
+    "trackwidth": 126,
+    "rotational_slip": 0.92,
+    "rotation_gain_pos": 1.0,
+    "rotation_offset": 0.0,
+    "rotation_gain_neg": 1.0,
+    "rotation_offset_neg": 0.0,
+    "_drive_axle_offset_mm": {
+      "x": 0.0,
+      "y": 0.0
+    },
+    "_odometry_chip_upside_down": false,
+    "_rotation_calibration_note": "identity = no turn correction. Replace with a measured fit (actual = gain*commanded + offset[deg], per direction) from a camera sweep; see tovez.json's _rotation_calibration_note."
+  },
+  "motors": {
+    "output_deadband": 0.03,
+    "reversal_dwell": 100.0,
+    "vel_kp": 0.3,
+    "vel_ki": 0.5,
+    "vel_kff": 0.15,
+    "vel_i_max": 20.0,
+    "vel_kaw": 3.0,
+    "vel_filt_alpha": 0.15
+  },
+  "drive": {
+    "duty_per_speed_left": 0.00187325,
+    "duty_per_speed_right": 0.00187325,
+    "crawl_pulse": 0.0,
+    "wheel_gain_left_accel": 1.0,
+    "wheel_intercept_left_accel": 0.0,
+    "wheel_gain_left_decel": 1.0,
+    "wheel_intercept_left_decel": 0.0,
+    "wheel_gain_right_accel": 1.0,
+    "wheel_intercept_right_accel": 0.0,
+    "wheel_gain_right_decel": 1.0,
+    "wheel_intercept_right_decel": 0.0,
+    "_sprint_114_note": "a_max/a_decel/v_body_max/j_max/yaw_jerk_max added 2026-07-20 (sprint 114 ticket 002, config-as-truth completion): gen_boot_config.py no longer carries these as Python-side *_DEFAULT fallback constants -- every value below is seeded with the exact former default, value-preserving (verified byte-identical boot_config.cpp regen). togov is touched only to stay schema-complete, not bench-retuned (togov mecanum bench characterization is out of sprint 114's scope). This note originally also covered a dozen sibling control.* keys (heading/lead/distance/model-tau/outer-loop/turn-rate) -- ALL deleted (119-003, config-attic sweep): no living consumer survived 115-003's motion-stack excision.",
+    "_shaper_note": "decel-into-the-goal campaign (2026-07-22): a_max/a_decel/j_max/yaw_jerk_max read again by gen_boot_config.py's shaper_config_for_config() (Motion::VelocityShaper) -- see tovez.json's own _shaper_note for the full history/derivation. alpha_max/alpha_decel are new this campaign; 7.0rad/s^2 matches tovez.json's own value/derivation, touched only to stay schema-complete (togov mecanum bench characterization remains out of scope, same posture as this file's own _sprint_114_note above). j_max/yaw_jerk_max power the jerk-limited S-curve stage (same day) -- values unchanged.",
+    "_drive_calibration_note": "duty_per_speed_* [duty/(mm/s)]: open-loop wheel calibration, the inverse of the measured plant gain (speed_sweep 2026-07-27: L ~560, R ~510 mm/s per duty; ceiling ~500 mm/s). Per-wheel because the two gearboxes differ ~10%. crawl_pulse [-1,1]: fixed pulse amplitude for sub-breakaway wheel speeds, Bresenham-dithered in App::Drive; 0 disables. Measured breakaway is 1-6% duty and state-dependent (src/tests/firmware/duty_min/RESULTS.md) -- the earlier 0.20 was sized against a duty_sweep criterion that the standalone prober disproved, so crawl ships OFF pending a re-measure of the low end.",
+    "_wheel_correction_note": "IDENTITY as of 2026-07-31 (stakeholder). The fitted values (tovez: gain ~1.47) were measured against a duty_per_speed that was itself wrong by ~1.6x, so the pair was circularly calibrated -- each fitted against the other's error -- and the correction ended up pointing the WRONG WAY: it divided a 150mm/s request down to 96 before the duty conversion, on a robot that was already under-delivering. duty_per_speed is now a baked measured constant (App::Drive::kDutyPerSpeed), so this affine stage has nothing left to correct and is held at identity. Do not re-fit it against duty_per_speed again; refit only against camera-measured travel, and say so here. gain 1 / intercept 0 = no correction."
+  },
+  "wheel_control": {
+    "v_min": 0.0,
+    "bias_max": 0.0,
+    "tau_adapt": 0.0,
+    "a_steady": 0.0,
+    "deficit_threshold": 0.0,
+    "deficit_window": 0.0,
+    "pid_kp": 0.0,
+    "pid_ki": 0.0,
+    "pid_i_max": 0.0,
+    "pid_kaff": 0.0,
+    "pid_max": 0.0,
+    "pos_err_max": 0.0,
+    "stall_speed": 0.0,
+    "stall_demand": 0.0,
+    "stall_window": 0.0,
+    "_stall_note": "2026-08-11 (136-001): added so this file can be built at all -- gen_boot_config.py has required all three since the 2026-08-08 stall-detection directive (config-as-truth, sprint 114 posture) and they had been added to tovez.json/gopiv.json only, which left togov unbuildable -- the gap .claude/rules/hardware-bench-testing.md's 2026-08-09 fleet-facts note already flagged ('togov.json still has the gap and is still unbuildable'). Held at 0.0, the documented INERT state -- matching this file's own existing wheel_control posture (see _wheel_controller_note below: togov has no drive characterization of its own, so every Stage B/C key ships 0/disabled rather than borrowing tovez's numbers for an uncharacterized drivetrain), the same posture gopiv.json's 2026-08-09 precedent established for a different uncharacterized robot. Do not borrow tovez's measured 15.0/40.0/500.0 -- that would be a fabricated calibration, not a default.",
+    "_pos_err_max_note": "133-002: Stage B's position-error clamp [mm] -- the INPUT-side bound on the I term, distinct from pid_i_max's OUTPUT-side [mm/s] bound; both retained. 0 = unclamped, matching every other wheel_control key on this robot: togov has no drive characterization of its own, so both Stage B and Stage C stay disabled rather than borrowing tovez's numbers (see the note below).",
+    "_wheel_controller_note": "130-004 (wheel-speed-controller-moves-into-drive.md): App::Drive's unified three-timescale controller. togov (mecanum, 4 wheels) has NO population duty-sweep characterization of its own -- ticket 001's sweep ran on tovez's differential drive pair only. All wheel_*/deficit_* keys held at 0 (both Stage B fast-PID AND Stage C bias-trim adaptation disabled, matching this file's own control.wheel_gain_*/_wheel_correction_note precedent of shipping IDENTITY/inert values rather than borrowing tovez's numbers for an uncharacterized drivetrain) -- unlike the planner._uncalibrated borrow-with-flag pattern elsewhere in this file, 0 here is a SAFE, meaningful disabled state (Stage A's existing conversion map keeps working unmodified), not a placeholder standing in for a value the code requires nonzero to function. Replace with togov's own duty-sweep results before enabling either stage."
+  },
+  "planner": {
+    "v_max": 400.0,
+    "omega_max": 3.0,
+    "control_period": 32.0,
+    "actuation_delay": 32.0,
+    "settle_rest_velocity": 10.0,
+    "settle_rest_omega": 0.16,
+    "settle_epsilon_linear": 4.0,
+    "settle_epsilon_angular": 0.035,
+    "heading_hold_gain": 2.0,
+    "decel_plan_fraction": 0.4,
+    "align_tol": 0.017453,
+    "align_max_nudges": 6,
+    "_align_note": "134-003 terminal fine-align. togov (mecanum) has NO trim characterization of its own -- these are tovez's measured values, copied purely to stay schema-complete (the same posture as this file's planner._domain_note above), NOT a claim that the ~1.8 deg corrective-pivot quantum they are sized to is this drivetrain's. _uncalibrated=true flags that. Re-derive from togov's own nudge sweep before reading a tour number off this profile. [rad]; 0.017453 rad == 1.0 deg.",
+    "_plant_gain": 1370.0,
+    "_plant_tau": 0.23,
+    "_uncalibrated": true,
+    "_domain_note": "129-009 (config consolidation): togov (mecanum) has NO Motion::Planner plant ID of its own yet -- values are copied from tovez.json's differential-drive plant measurement (2026-07-26, gain ~1370 mm/s per duty, tau ~230ms) purely to stay schema-complete (REQUIRED block, same posture as this file's own control._sprint_114_note precedent for a_max/a_decel/... above), NOT a claim that they are correct for this drivetrain. _uncalibrated=true flags that. Replace with togov's own plant ID (square_tour_sim.py tourLimits()-style sweep) before trusting this block for tuning/regression comparisons. See tovez.json's own planner block for the full field-by-field provenance these values were copied from.",
+    "_timing_note": "control_period/actuation_delay are '= App::RobotLoop::kCycle' by construction; both moved 50.0 -> 32.0 with kCycle on 2026-08-07. See data/robots/tovez.json's own planner._timing_note for the measurements and the full history."
+  },
+  "planner_shaper": {
+    "a_max": 300.0,
+    "a_decel": 250.0,
+    "alpha_max": 6.0,
+    "alpha_decel": 5.0,
+    "jerk_max": 1500.0,
+    "yaw_jerk_max": 30.0
+  },
+  "navigator": {
+    "speed": 150.0,
+    "max_wheel_step": 125.0,
+    "behind_angle": 1.5707963267948966,
+    "turn_first_angle": 0.8726646259971648,
+    "approach_radius": 0.0,
+    "approach_speed": 0.0,
+    "default_arrival_tolerance": 100.0,
+    "yaw_sign": 1.0,
+    "_navigator_note": "135-004: seeded from Motion::NavigatorLimits' own compile-time defaults (src/firm/motion/navigator/arc_solver.h) -- same pattern as tovez.json's own navigator block (see that file's note for the full rationale). yaw_sign=1.0 (identity, unmeasured) pending this robot's own bench pass -- tovez.json's -1.0 is a tovez-specific measured fact (src/tests/bench/goto_otos.py's own YAW_SIGN), not assumed to transfer to a different drivetrain without its own measurement."
+  },
+  "otos": {
+    "offset_x": -51.5,
+    "offset_y": 0.0,
+    "offset_yaw": 0.0,
+    "linear_scale": 1.0,
+    "angular_scale": 1.0,
+    "_ekf_r_otos_theta": 0.01
+  },
+  "estimator": {
+    "weight_heading_otos": 0.0,
+    "weight_omega_otos": 0.0,
+    "staleness": 60.0,
+    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. togov is touched only to stay schema-complete, matching this file's own control._sprint_114_note precedent. (118 ticket 004, land-at-zero-completion-delete-stop-lead.md: this section's own former fourth key -- a boot-time anticipation-lead constant -- is DELETED; the mechanism it fed no longer exists, see App::MoveQueue::tick()'s own doc comment for the land-at-zero completion predicate that replaces it.)"
+  },
+  "wheels": {
+    "wheel_diameter_mm": 80.0,
+    "ticks_per_rev": 360,
+    "ticks_per_mm": null
+  },
+  "encoders": {
+    "has_encoders": true,
+    "encoder_count": 4
+  },
+  "gripper": {
+    "has_gripper": false,
+    "gripper_offset_mm": null
+  },
+  "peripherals": {
+    "laser_port": null
+  },
+  "_legacy_drive_limits": {
+    "motor_deadband": null,
+    "max_cmd": null,
+    "cmd_to_mm_per_s": null,
+    "max_drive_mm_s": null,
+    "max_turn_deg_s": null,
+    "min_drive_mm_s": null,
+    "crawl_threshold_mm_s": null,
+    "crawl_cmd": null
+  },
+  "_mecanum_geometry": {
+    "half_track_mm": 63.0,
+    "half_wheelbase_mm": 63.0
+  },
+  "_mecanum_calibration": {
+    "mm_per_wheel_deg_fr": null,
+    "mm_per_wheel_deg_fl": null,
+    "mm_per_wheel_deg_br": null,
+    "mm_per_wheel_deg_bl": null,
+    "fwd_sign_fr": 1,
+    "fwd_sign_fl": -1,
+    "fwd_sign_br": 1,
+    "fwd_sign_bl": -1,
+    "vy_body_max": 400.0,
+    "a_max_y": 800.0,
+    "j_max_y": 0.0
+  }
+}

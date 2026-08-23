@@ -1,0 +1,12 @@
+{
+  "camera_position": {
+    "height_cm": 128.22990496814816,
+    "nadir_x_cm": 3.0570142285481654,
+    "nadir_y_cm": -2.798700632324644
+  },
+  "name": "arducam-ov9782-usb-camera",
+  "playfield": "main-playfield",
+  "settings": {
+    "exposure": "100"
+  }
+}

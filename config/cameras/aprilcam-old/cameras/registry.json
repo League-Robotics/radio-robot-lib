@@ -1,0 +1,138 @@
+{
+  "cameras": {
+    "avf:0x1100000046d0946": {
+      "dir": "brio-501",
+      "enum": 1,
+      "last_seen": "2026-07-15T05:59:25.681393+00:00",
+      "location": "0x1100000046d0946",
+      "name": "Brio 501",
+      "pid": 2374,
+      "serial": null,
+      "unique_id": "avf:0x1100000046d0946",
+      "vid": 1133
+    },
+    "avf:0x21141000c456366": {
+      "dir": "arducam-ov9782-usb-camera",
+      "enum": 3,
+      "last_seen": "2026-07-15T05:59:25.887980+00:00",
+      "location": "0x21141000c456366",
+      "name": "Arducam OV9782 USB Camera",
+      "pid": 25446,
+      "serial": null,
+      "unique_id": "avf:0x21141000c456366",
+      "vid": 3141
+    },
+    "avf:0x211411132e415b1": {
+      "dir": "global-shutter-camera",
+      "enum": 2,
+      "last_seen": "2026-06-08T04:35:58.804591+00:00",
+      "location": "0x211411132e415b1",
+      "name": "Global Shutter Camera",
+      "pid": 5553,
+      "serial": null,
+      "unique_id": "avf:0x211411132e415b1",
+      "vid": 13028
+    },
+    "avf:0x2121420345f2131": {
+      "dir": "usb2-video",
+      "enum": 6,
+      "last_seen": "2026-06-19T13:47:46.728192+00:00",
+      "location": "0x2121420345f2131",
+      "name": "USB2 Video",
+      "pid": 8497,
+      "serial": null,
+      "unique_id": "avf:0x2121420345f2131",
+      "vid": 13407
+    },
+    "avf:0x2143200345f2131": {
+      "dir": "usb2-video-7",
+      "enum": 7,
+      "last_seen": "2026-07-02T00:06:53.803204+00:00",
+      "location": "0x2143200345f2131",
+      "name": "USB2 Video",
+      "pid": 8497,
+      "serial": null,
+      "unique_id": "avf:0x2143200345f2131",
+      "vid": 13407
+    },
+    "avf:26972155-A8D6-4C39-802B-56AA00000001": {
+      "dir": "samizdat-camera",
+      "enum": 4,
+      "last_seen": "2026-07-11T04:32:33.325043+00:00",
+      "location": "26972155-A8D6-4C39-802B-56AA00000001",
+      "name": "Samizdat Camera",
+      "pid": null,
+      "serial": null,
+      "unique_id": "avf:26972155-A8D6-4C39-802B-56AA00000001",
+      "vid": null
+    },
+    "loc:26972155-a8d6-4c39-802b-56aa00000001": {
+      "dir": "samizdat-camera-8",
+      "enum": 8,
+      "last_seen": "2026-06-27T05:54:47.089470+00:00",
+      "location": "26972155-A8D6-4C39-802B-56AA00000001",
+      "name": "Samizdat Camera",
+      "pid": null,
+      "serial": null,
+      "unique_id": "loc:26972155-a8d6-4c39-802b-56aa00000001",
+      "vid": null
+    },
+    "name:camera-1": {
+      "dir": "camera-1",
+      "enum": 13,
+      "last_seen": "2026-07-15T04:38:13.995631+00:00",
+      "location": null,
+      "name": "camera-1",
+      "pid": null,
+      "serial": null,
+      "unique_id": "name:camera-1",
+      "vid": null
+    },
+    "name:camera-3": {
+      "dir": "camera-3",
+      "enum": 12,
+      "last_seen": "2026-07-15T05:43:51.034388+00:00",
+      "location": null,
+      "name": "camera-3",
+      "pid": null,
+      "serial": null,
+      "unique_id": "name:camera-3",
+      "vid": null
+    },
+    "vidpid:046d:0946@0x1100000046d0946": {
+      "dir": "brio-501-9",
+      "enum": 9,
+      "last_seen": "2026-06-27T15:58:54.840907+00:00",
+      "location": "0x1100000046d0946",
+      "name": "Brio 501",
+      "pid": 2374,
+      "serial": null,
+      "unique_id": "vidpid:046d:0946@0x1100000046d0946",
+      "vid": 1133
+    },
+    "vidpid:32e4:15b1@0x211411132e415b1": {
+      "dir": "global-shutter-camera-5",
+      "enum": 5,
+      "last_seen": "2026-06-08T17:23:00.561260+00:00",
+      "location": "0x211411132e415b1",
+      "name": "Global Shutter Camera",
+      "pid": 5553,
+      "serial": null,
+      "unique_id": "vidpid:32e4:15b1@0x211411132e415b1",
+      "vid": 13028
+    },
+    "vidpid:345f:2131@0x2143200345f2131": {
+      "dir": "usb2-video-11",
+      "enum": 11,
+      "last_seen": "2026-06-27T15:58:54.847137+00:00",
+      "location": "0x2143200345f2131",
+      "name": "USB2 Video",
+      "pid": 8497,
+      "serial": null,
+      "unique_id": "vidpid:345f:2131@0x2143200345f2131",
+      "vid": 13407
+    }
+  },
+  "next_enum": 15,
+  "version": 1
+}

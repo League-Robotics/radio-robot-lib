@@ -1,0 +1,8 @@
+{
+  "device_name": "Global Shutter Camera",
+  "playfield": "main-playfield",
+  "resolution": [
+    1920,
+    1080
+  ]
+}

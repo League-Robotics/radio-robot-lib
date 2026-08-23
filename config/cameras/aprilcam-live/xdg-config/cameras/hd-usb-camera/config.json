@@ -1,0 +1,10 @@
+{
+  "camera_position": {
+    "height_cm": 144.0,
+    "nadir_x_cm": 3.47,
+    "nadir_y_cm": -2.85
+  },
+  "name": "hd-usb-camera",
+  "playfield": "secondary-playfield",
+  "settings": {}
+}

@@ -1,0 +1,13 @@
+{
+  "device_name": "arducam-ov9782-usb-camera-15",
+  "playfield": "main-playfield",
+  "resolution": [
+    1280,
+    800
+  ],
+  "camera_position": {
+    "height": 127.0,
+    "x_offset": 0.0,
+    "y_offset": 0.0
+  }
+}

@@ -13,3 +13,7 @@ __pycache__/
 
 # editor / os
 .DS_Store
+# dotconfig — assembled env files contain decrypted secrets
+.env
+.env.*
+!.env.example

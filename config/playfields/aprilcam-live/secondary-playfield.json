@@ -1,0 +1,20 @@
+{
+  "name": "secondary-playfield",
+  "display_name": "Secondary Playfield",
+  "playfield": {
+    "width_cm": 108.5,
+    "height_cm": 70.8,
+    "origin": "field-center",
+    "description": "White welding-table field. Origin at the geometric center of the four corner ArUco markers (no center AprilTag on this field). X increases east, Y increases north; north is the far edge as seen by hd-usb-camera.",
+    "display_name": "Secondary Playfield"
+  },
+  "april_tags": [],
+  "aruco_tags": [
+    { "slug": "aruco-northwest-u4", "type": "aruco_tag", "id": 4, "cardinal": "northwest", "x": -54.25, "y":  35.4 },
+    { "slug": "aruco-northeast-u1", "type": "aruco_tag", "id": 1, "cardinal": "northeast", "x":  54.25, "y":  35.4 },
+    { "slug": "aruco-southeast-u2", "type": "aruco_tag", "id": 2, "cardinal": "southeast", "x":  54.25, "y": -35.4 },
+    { "slug": "aruco-southwest-u3", "type": "aruco_tag", "id": 3, "cardinal": "southwest", "x": -54.25, "y": -35.4 }
+  ],
+  "rectangles": [],
+  "dots": []
+}

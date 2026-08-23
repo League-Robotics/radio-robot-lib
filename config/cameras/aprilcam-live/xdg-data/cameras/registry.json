@@ -1,0 +1,41 @@
+{
+  "cameras": {
+    "avf:0x1100000046d0946": {
+      "device_name": "Brio 501",
+      "hardware_key": "avf:0x1100000046d0946",
+      "last_seen": "2026-08-23T01:26:55.509918+00:00",
+      "number": 1,
+      "slug": "brio-501"
+    },
+    "avf:0x21141110c456366": {
+      "device_name": "Arducam OV9281 USB Camera",
+      "hardware_key": "avf:0x21141110c456366",
+      "last_seen": "2026-08-23T01:26:56.879872+00:00",
+      "number": 5,
+      "slug": "arducam-ov9281-usb-camera"
+    },
+    "avf:0x211412032e40317": {
+      "device_name": "HD USB CAMERA",
+      "hardware_key": "avf:0x211412032e40317",
+      "last_seen": "2026-08-23T01:26:57.448228+00:00",
+      "number": 2,
+      "slug": "hd-usb-camera"
+    },
+    "avf:0x21141400c456366": {
+      "device_name": "Arducam OV9782 USB Camera",
+      "hardware_key": "avf:0x21141400c456366",
+      "last_seen": "2026-08-23T01:26:58.111293+00:00",
+      "number": 3,
+      "slug": "arducam-ov9782-usb-camera"
+    },
+    "avf:0x2122200345f2131": {
+      "device_name": "USB2 Video",
+      "hardware_key": "avf:0x2122200345f2131",
+      "last_seen": "2026-08-23T01:26:59.225006+00:00",
+      "number": 4,
+      "slug": "usb2-video"
+    }
+  },
+  "next_number": 6,
+  "version": 1
+}

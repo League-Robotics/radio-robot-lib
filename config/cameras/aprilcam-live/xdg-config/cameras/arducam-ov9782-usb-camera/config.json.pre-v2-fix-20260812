@@ -1,0 +1,26 @@
+{
+  "camera_position": {
+    "height": 127.0,
+    "x_offset": 0.0,
+    "y_offset": 0.0
+  },
+  "device_name": "Arducam OV9782 USB Camera",
+  "name": "arducam-ov9782-usb-camera",
+  "playfield": "main-playfield",
+  "resolution": [
+    1280,
+    800
+  ],
+  "settings": {
+    "_note": "Applied at camera-open time. The camera powers up at exposure-time-abs=6 of a 1..5000 range (default 157) with auto-exposure-mode=1 (manual), i.e. ~4% of default exposure and no adaptation -- the field renders nearly black and tag 100 drops out away from the image centre. Measured 2026-08-08.",
+    "controls": {
+      "exposure-time-abs": "157",
+      "gain": "20"
+    },
+    "program": "uvc-util"
+  },
+  "static_marker_ids": [
+    "aruco_corners",
+    "apriltag:1"
+  ]
+}

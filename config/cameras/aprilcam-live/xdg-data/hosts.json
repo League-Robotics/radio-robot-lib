@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "hosts": [
+    {
+      "num": 1,
+      "kind": "local",
+      "host": "gala",
+      "addresses": [
+        "192.168.1.40",
+        "127.0.0.1"
+      ],
+      "cameras": [
+        {
+          "num": 1,
+          "enum": 0,
+          "index": 0,
+          "name": "Brio 501",
+          "slug": "brio-501"
+        },
+        {
+          "num": 2,
+          "enum": 0,
+          "index": 2,
+          "name": "Arducam OV9782 USB Camera",
+          "slug": "arducam-ov9782-usb-camera"
+        },
+        {
+          "num": 3,
+          "enum": 1,
+          "index": 3,
+          "name": "USB2 Video",
+          "slug": "usb2-video"
+        },
+        {
+          "num": 4,
+          "enum": 4,
+          "index": 3,
+          "name": "Samizdat Camera",
+          "slug": "samizdat-camera"
+        },
+        {
+          "num": 5,
+          "enum": 0,
+          "index": 1,
+          "name": "HD USB CAMERA",
+          "slug": "hd-usb-camera"
+        }
+      ]
+    },
+    {
+      "num": 2,
+      "kind": "remote",
+      "host": "vidar",
+      "addresses": [
+        "192.168.1.144"
+      ],
+      "cameras": [
+        {
+          "num": 1,
+          "enum": 6,
+          "index": 0,
+          "name": "imx296-88000",
+          "slug": "imx296-88000"
+        },
+        {
+          "num": 2,
+          "enum": 7,
+          "index": 1,
+          "name": "imx296-80000",
+          "slug": "imx296-80000"
+        },
+        {
+          "num": 3,
+          "enum": 0,
+          "index": 16,
+          "name": "HD Pro Webcam C920",
+          "slug": "hd-pro-webcam-c920"
+        }
+      ]
+    }
+  ]
+}

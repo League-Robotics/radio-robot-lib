@@ -1,0 +1,28 @@
+{
+  "camera_position": {
+    "height": 127.0,
+    "x_offset": 0.0,
+    "y_offset": 0.0
+  },
+  "device_name": "Arducam OV9782 USB Camera",
+  "playfield": "main-playfield",
+  "resolution": [
+    1280,
+    800
+  ],
+  "settings": {
+    "controls": {
+      "auto-exposure-mode": "1",
+      "auto-exposure-priority": "0",
+      "auto-white-balance-temp": "false",
+      "exposure-time-abs": "6",
+      "gain": "2",
+      "white-balance-temp": "4600"
+    },
+    "program": "uvc-util"
+  },
+  "static_marker_ids": [
+    "aruco_corners",
+    "apriltag:1"
+  ]
+}

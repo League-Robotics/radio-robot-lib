@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Playfield layout  —  coordinate origin at A1 (center of field)
+  Field: 134.3 cm W × 89.3 cm H  →  ±67.15 x,  ±44.65 y
+  Scale: 4.5 px / cm
+  SVG formula:  svg_x = 392 + x*4.5,  svg_y = 291 - y*4.5
+
+  Color ring (8 positions, clockwise from upper-left):
+    (−35,+24) purple   (0,+24) black    (+35,+24) orange
+    (+35,0)   red      (+35,−24) green  (0,−24) magenta
+    (−35,−24) blue     (−35,0) red  ← duplicate red flagged
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="784" height="582"
+     viewBox="0 0 784 582"
+     font-family="monospace" font-size="10">
+
+  <rect width="784" height="582" fill="#1a1a1a"/>
+
+  <text x="392" y="26" text-anchor="middle" fill="#cccccc" font-size="15" font-weight="bold">
+    AprilCam Playfield  —  134.3 × 89.3 cm  (origin = A1)
+  </text>
+
+  <!-- Field rectangle -->
+  <rect x="90" y="90" width="604" height="402"
+        fill="#222e18" stroke="#556633" stroke-width="2"/>
+
+  <!-- Cross-hairs -->
+  <line x1="90"  y1="291" x2="694" y2="291" stroke="#2a2a2a" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="392" y1="90"  x2="392" y2="492" stroke="#2a2a2a" stroke-width="1" stroke-dasharray="4,4"/>
+
+  <!-- ── X-axis labels ── -->
+  <line x1="90.5"  y1="492" x2="90.5"  y2="499" stroke="#555" stroke-width="1"/>
+  <line x1="392"   y1="492" x2="392"   y2="499" stroke="#555" stroke-width="1"/>
+  <line x1="693.5" y1="492" x2="693.5" y2="499" stroke="#555" stroke-width="1"/>
+  <text x="90.5"   y="511" text-anchor="middle" fill="#666" font-size="9">−67</text>
+  <text x="392"    y="511" text-anchor="middle" fill="#666" font-size="9">0</text>
+  <text x="693.5"  y="511" text-anchor="middle" fill="#666" font-size="9">+67</text>
+  <text x="392"    y="526" text-anchor="middle" fill="#888" font-size="10">x (cm)</text>
+
+  <!-- ── Y-axis labels ── -->
+  <line x1="84" y1="90"  x2="90" y2="90"  stroke="#555" stroke-width="1"/>
+  <line x1="84" y1="291" x2="90" y2="291" stroke="#555" stroke-width="1"/>
+  <line x1="84" y1="492" x2="90" y2="492" stroke="#555" stroke-width="1"/>
+  <text x="80" y="94"  text-anchor="end" fill="#666" font-size="9">+44.65</text>
+  <text x="80" y="295" text-anchor="end" fill="#666" font-size="9">0</text>
+  <text x="80" y="496" text-anchor="end" fill="#666" font-size="9">−44.65</text>
+  <text x="22" y="291" text-anchor="middle" fill="#888" font-size="10"
+        transform="rotate(-90,22,291)">y (cm)</text>
+
+  <!-- ═══════════════════════════════════
+       ArUco tags
+       svg_x = 392 + x*4.5,  svg_y = 291 − y*4.5
+       ═══════════════════════════════════ -->
+
+  <!-- U1 (−67, +44.65) → (90.5, 90) -->
+  <rect x="72.5" y="72" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="90.5" y="86"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U1</text>
+  <text x="90.5" y="99"  text-anchor="middle" fill="#3366aa" font-size="8">−67, +44.65</text>
+
+  <!-- U2 (0, +44.65) → (392, 90) -->
+  <rect x="374" y="72" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="392" y="86"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U2</text>
+  <text x="392" y="99"  text-anchor="middle" fill="#3366aa" font-size="8">0, +44.65</text>
+
+  <!-- U3 (+67, +44.65) → (693.5, 90) -->
+  <rect x="675.5" y="72" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="693.5" y="86"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U3</text>
+  <text x="693.5" y="99"  text-anchor="middle" fill="#3366aa" font-size="8">+67, +44.65</text>
+
+  <!-- U8 (−67, 0) → (90.5, 291) -->
+  <rect x="72.5" y="273" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="90.5" y="287"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U8</text>
+  <text x="90.5" y="300"  text-anchor="middle" fill="#3366aa" font-size="8">−67, 0</text>
+
+  <!-- U4 (+67, 0) → (693.5, 291) -->
+  <rect x="675.5" y="273" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="693.5" y="287"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U4</text>
+  <text x="693.5" y="300"  text-anchor="middle" fill="#3366aa" font-size="8">+67, 0</text>
+
+  <!-- U7 (−67, −44.65) → (90.5, 492) -->
+  <rect x="72.5" y="474" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="90.5" y="488"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U7</text>
+  <text x="90.5" y="501"  text-anchor="middle" fill="#3366aa" font-size="8">−67, −44.65</text>
+
+  <!-- U6 (0, −44.65) → (392, 492) -->
+  <rect x="374" y="474" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="392" y="488"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U6</text>
+  <text x="392" y="501"  text-anchor="middle" fill="#3366aa" font-size="8">0, −44.65</text>
+
+  <!-- U5 (+67, −44.65) → (693.5, 492) -->
+  <rect x="675.5" y="474" width="36" height="36" rx="4"
+        fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+  <text x="693.5" y="488"  text-anchor="middle" fill="#5599ff" font-size="12" font-weight="bold">U5</text>
+  <text x="693.5" y="501"  text-anchor="middle" fill="#3366aa" font-size="8">+67, −44.65</text>
+
+  <!-- ═══════════════════════════════════
+       AprilTag A1 — origin (0,0) → (392, 291)
+       ═══════════════════════════════════ -->
+  <rect x="373" y="272" width="38" height="38" rx="5"
+        fill="#2a1500" stroke="#ffcc00" stroke-width="2.5"/>
+  <text x="392" y="287"  text-anchor="middle" fill="#ffcc00" font-size="13" font-weight="bold">A1</text>
+  <text x="392" y="300"  text-anchor="middle" fill="#aa8800" font-size="8">0, 0</text>
+  <text x="392" y="311"  text-anchor="middle" fill="#887700" font-size="7">(origin)</text>
+
+  <!-- ═══════════════════════════════════
+       Color ring — 8 positions clockwise from upper-left
+       x ∈ {−35, 0, +35},  y ∈ {−24, 0, +24}  (excluding center)
+       svg_x = 392 + x*4.5,  svg_y = 291 − y*4.5
+         (−35,+24) → (234.5, 183)   (0,+24) → (392, 183)   (+35,+24) → (549.5, 183)
+         (−35,  0) → (234.5, 291)                            (+35,  0) → (549.5, 291)
+         (−35,−24) → (234.5, 399)   (0,−24) → (392, 399)   (+35,−24) → (549.5, 399)
+       ═══════════════════════════════════ -->
+
+  <!--
+    Color rectangles: 5 cm wide × 4 cm high  →  22.5 px × 18 px
+    Centered on position.  Label inside; coords below.
+    rx=2 for slight rounding.
+  -->
+
+  <!-- helper: rect centered on (cx,cy) with half-w=11.25, half-h=9 -->
+
+  <!-- 1. purple  (−35, +24) → (234.5, 183) -->
+  <rect x="223.25" y="174" width="22.5" height="18" rx="2"
+        fill="#b400b4" stroke="#dd44dd" stroke-width="1.5"/>
+  <text x="234.5" y="186" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">purple</text>
+  <text x="234.5" y="202" text-anchor="middle" fill="#994499" font-size="8">−35, +24</text>
+
+  <!-- 2. black  (0, +24) → (392, 183) -->
+  <rect x="380.75" y="174" width="22.5" height="18" rx="2"
+        fill="#505050" stroke="#888" stroke-width="1.5"/>
+  <text x="392" y="186" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">black</text>
+  <text x="392" y="202" text-anchor="middle" fill="#666" font-size="8">0, +24</text>
+
+  <!-- 3. orange  (+35, +24) → (549.5, 183) -->
+  <rect x="538.25" y="174" width="22.5" height="18" rx="2"
+        fill="#ff8000" stroke="#ffaa44" stroke-width="1.5"/>
+  <text x="549.5" y="186" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">orange</text>
+  <text x="549.5" y="202" text-anchor="middle" fill="#aa6622" font-size="8">+35, +24</text>
+
+  <!-- 4. red  (+35, 0) → (549.5, 291) -->
+  <rect x="538.25" y="282" width="22.5" height="18" rx="2"
+        fill="#dc0000" stroke="#ff5555" stroke-width="1.5"/>
+  <text x="549.5" y="294" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">red</text>
+  <text x="549.5" y="310" text-anchor="middle" fill="#aa3333" font-size="8">+35, 0</text>
+
+  <!-- 5. green  (+35, −24) → (549.5, 399) -->
+  <rect x="538.25" y="390" width="22.5" height="18" rx="2"
+        fill="#00c800" stroke="#44ee44" stroke-width="1.5"/>
+  <text x="549.5" y="402" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">green</text>
+  <text x="549.5" y="418" text-anchor="middle" fill="#449944" font-size="8">+35, −24</text>
+
+  <!-- 6. magenta  (0, −24) → (392, 399) -->
+  <rect x="380.75" y="390" width="22.5" height="18" rx="2"
+        fill="#c800c8" stroke="#ee44ee" stroke-width="1.5"/>
+  <text x="392" y="402" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">magenta</text>
+  <text x="392" y="418" text-anchor="middle" fill="#994499" font-size="8">0, −24</text>
+
+  <!-- 7. blue  (−35, −24) → (234.5, 399) -->
+  <rect x="223.25" y="390" width="22.5" height="18" rx="2"
+        fill="#0064dc" stroke="#4488ff" stroke-width="1.5"/>
+  <text x="234.5" y="402" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">blue</text>
+  <text x="234.5" y="418" text-anchor="middle" fill="#4466aa" font-size="8">−35, −24</text>
+
+  <!-- 8. red  (−35, 0) → (234.5, 291) -->
+  <rect x="223.25" y="282" width="22.5" height="18" rx="2"
+        fill="#dc0000" stroke="#ff5555" stroke-width="1.5"/>
+  <text x="234.5" y="294" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="bold">red</text>
+  <text x="234.5" y="310" text-anchor="middle" fill="#aa3333" font-size="8">−35, 0</text>
+
+  <!--
+    ═══════════════════════════════════
+    Dots — 8 positions around the color ring
+    Corners (±50, ±30): large orange  r=9
+    Midpoints (0,±30) and (±50,0):    small colored  r=5
+    svg_x = 392 + x*4.5,  svg_y = 291 − y*4.5
+      (−50,+30)→(167,156)  (0,+30)→(392,156)  (+50,+30)→(617,156)
+      (−50,  0)→(167,291)                      (+50,  0)→(617,291)
+      (−50,−30)→(167,426)  (0,−30)→(392,426)  (+50,−30)→(617,426)
+    ═══════════════════════════════════ -->
+
+  <!-- NW corner orange large -->
+  <circle cx="167" cy="156" r="9" fill="#ff8000" stroke="#ffcc88" stroke-width="1.5"/>
+  <text x="167" y="144" text-anchor="middle" fill="#ff8000" font-size="8">−50, +30</text>
+
+  <!-- N green small -->
+  <circle cx="392" cy="156" r="5" fill="#00c800" stroke="#44ee44" stroke-width="1.5"/>
+  <text x="392" y="144" text-anchor="middle" fill="#00c800" font-size="8">0, +30</text>
+
+  <!-- NE corner orange large -->
+  <circle cx="617" cy="156" r="9" fill="#ff8000" stroke="#ffcc88" stroke-width="1.5"/>
+  <text x="617" y="144" text-anchor="middle" fill="#ff8000" font-size="8">+50, +30</text>
+
+  <!-- E red small -->
+  <circle cx="617" cy="291" r="5" fill="#dc0000" stroke="#ff5555" stroke-width="1.5"/>
+  <text x="632" y="295" text-anchor="start" fill="#dc0000" font-size="8">+50, 0</text>
+
+  <!-- SE corner orange large -->
+  <circle cx="617" cy="426" r="9" fill="#ff8000" stroke="#ffcc88" stroke-width="1.5"/>
+  <text x="617" y="447" text-anchor="middle" fill="#ff8000" font-size="8">+50, −30</text>
+
+  <!-- S yellow small -->
+  <circle cx="392" cy="426" r="5" fill="#dcdc00" stroke="#eeee44" stroke-width="1.5"/>
+  <text x="392" y="447" text-anchor="middle" fill="#dcdc00" font-size="8">0, −30</text>
+
+  <!-- SW corner orange large -->
+  <circle cx="167" cy="426" r="9" fill="#ff8000" stroke="#ffcc88" stroke-width="1.5"/>
+  <text x="167" y="447" text-anchor="middle" fill="#ff8000" font-size="8">−50, −30</text>
+
+  <!-- W blue small -->
+  <circle cx="167" cy="291" r="5" fill="#0064dc" stroke="#4488ff" stroke-width="1.5"/>
+  <text x="152" y="295" text-anchor="end" fill="#0064dc" font-size="8">−50, 0</text>
+
+  <!-- ═══════════════════════════════════
+       Legend
+       ═══════════════════════════════════ -->
+  <g transform="translate(90,546)">
+    <rect x="0" y="-16" width="604" height="30" rx="4" fill="#111" stroke="#333" stroke-width="1"/>
+
+    <rect x="8" y="-8" width="14" height="14" rx="2" fill="#0f0f2a" stroke="#5599ff" stroke-width="1.5"/>
+    <text x="28" y="4" fill="#5599ff" font-size="10">ArUco 4×4 (Ux)</text>
+
+    <rect x="160" y="-8" width="14" height="14" rx="2" fill="#2a1500" stroke="#ffcc00" stroke-width="2"/>
+    <text x="180" y="4" fill="#ffcc00" font-size="10">AprilTag (Ax)  origin=(0,0)</text>
+
+    <rect x="353" y="-7" width="14" height="11" rx="1" fill="#888"/>
+    <text x="373" y="4" fill="#aaa" font-size="10">Color rect 5×4 cm (±35, ±24)</text>
+    <circle cx="510" cy="0" r="7" fill="#ff8000"/>
+    <text x="522" y="4" fill="#ff8000" font-size="10">Corner dot (large)</text>
+    <circle cx="595" cy="0" r="4" fill="#888" stroke="#aaa" stroke-width="1"/>
+    <text x="604" y="4" fill="#aaa" font-size="10">Dot (small)</text>
+
+  </g>
+
+</svg>

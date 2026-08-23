@@ -1,0 +1,8 @@
+{
+  "device_name": "HD USB CAMERA",
+  "playfield": "main-playfield",
+  "resolution": [
+    1920,
+    1080
+  ]
+}

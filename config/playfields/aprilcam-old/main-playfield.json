@@ -1,0 +1,51 @@
+{
+  "name": "main-playfield",
+  "display_name": "Main Playfield",
+  "playfield": {
+    "width_cm": 134.3,
+    "height_cm": 89.3,
+    "origin": "apriltag-center-a1",
+    "description": "Origin at AprilTag A1 (center of field). X increases east, Y increases north.",
+    "display_name": "Main Playfield"
+  },
+  "april_tags": [
+    {
+      "slug": "apriltag-center-a1",
+      "type": "april_tag",
+      "id": 1,
+      "cardinal": "center",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "aruco_tags": [
+    { "slug": "aruco-northwest-u1", "type": "aruco_tag", "id": 1, "cardinal": "northwest", "x": -67,   "y":  44.65 },
+    { "slug": "aruco-north-u2",     "type": "aruco_tag", "id": 2, "cardinal": "north",      "x":   0,   "y":  44.65 },
+    { "slug": "aruco-northeast-u3", "type": "aruco_tag", "id": 3, "cardinal": "northeast",  "x":  67,   "y":  44.65 },
+    { "slug": "aruco-west-u8",      "type": "aruco_tag", "id": 8, "cardinal": "west",       "x": -67,   "y":   0    },
+    { "slug": "aruco-east-u4",      "type": "aruco_tag", "id": 4, "cardinal": "east",       "x":  67,   "y":   0    },
+    { "slug": "aruco-southwest-u7", "type": "aruco_tag", "id": 7, "cardinal": "southwest",  "x": -67,   "y": -44.65 },
+    { "slug": "aruco-south-u6",     "type": "aruco_tag", "id": 6, "cardinal": "south",      "x":   0,   "y": -44.65 },
+    { "slug": "aruco-southeast-u5", "type": "aruco_tag", "id": 5, "cardinal": "southeast",  "x":  67,   "y": -44.65 },
+    { "slug": "aruco-west-internal-u9",  "type": "aruco_tag", "id":  9, "cardinal": "west", "x": -35,   "y":   0    },
+    { "slug": "aruco-east-internal-u10", "type": "aruco_tag", "id": 10, "cardinal": "east", "x":  35,   "y":   0    }
+  ],
+  "rectangles": [
+    { "slug": "rect-northwest-purple",  "type": "rectangle", "color": "purple",  "cardinal": "northwest", "x": -35, "y":  24, "width_cm": 5, "height_cm": 4 },
+    { "slug": "rect-north-black",       "type": "rectangle", "color": "black",   "cardinal": "north",     "x":   0, "y":  24, "width_cm": 5, "height_cm": 4 },
+    { "slug": "rect-northeast-orange",  "type": "rectangle", "color": "orange",  "cardinal": "northeast", "x":  35, "y":  24, "width_cm": 5, "height_cm": 4 },
+    { "slug": "rect-southeast-green",   "type": "rectangle", "color": "green",   "cardinal": "southeast", "x":  35, "y": -24, "width_cm": 5, "height_cm": 4 },
+    { "slug": "rect-south-magenta",     "type": "rectangle", "color": "magenta", "cardinal": "south",     "x":   0, "y": -24, "width_cm": 5, "height_cm": 4 },
+    { "slug": "rect-southwest-blue",    "type": "rectangle", "color": "blue",    "cardinal": "southwest", "x": -35, "y": -24, "width_cm": 5, "height_cm": 4 }
+  ],
+  "dots": [
+    { "slug": "dot-northwest-orange", "type": "dot", "color": "orange", "cardinal": "northwest", "size": "large", "x": -50, "y":  30 },
+    { "slug": "dot-north-green",      "type": "dot", "color": "green",  "cardinal": "north",     "size": "small", "x":   0, "y":  30 },
+    { "slug": "dot-northeast-orange", "type": "dot", "color": "orange", "cardinal": "northeast", "size": "large", "x":  50, "y":  30 },
+    { "slug": "dot-east-red",         "type": "dot", "color": "red",    "cardinal": "east",      "size": "small", "x":  50, "y":   0 },
+    { "slug": "dot-southeast-orange", "type": "dot", "color": "orange", "cardinal": "southeast", "size": "large", "x":  50, "y": -30 },
+    { "slug": "dot-south-yellow",     "type": "dot", "color": "yellow", "cardinal": "south",     "size": "small", "x":   0, "y": -30 },
+    { "slug": "dot-southwest-orange", "type": "dot", "color": "orange", "cardinal": "southwest", "size": "large", "x": -50, "y": -30 },
+    { "slug": "dot-west-blue",        "type": "dot", "color": "blue",   "cardinal": "west",      "size": "small", "x": -50, "y":   0 }
+  ]
+}

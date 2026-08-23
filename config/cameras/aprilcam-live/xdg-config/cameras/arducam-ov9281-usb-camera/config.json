@@ -1,0 +1,5 @@
+{
+  "name": "arducam-ov9281-usb-camera",
+  "playfield": "main-playfield",
+  "settings": {"auto_exposure": 1, "exposure": 300}
+}

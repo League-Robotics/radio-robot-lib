@@ -1,0 +1,168 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "robot_name": "tovez nocal",
+    "uid": "tovez",
+    "hardware_model": "DFRobot Nezha",
+    "common_name": "classroom-bot"
+  },
+  "connection": {
+    "device_announcement_name": "tovez",
+    "serial_last_6": "f137c0",
+    "wifi_ip": "192.168.4.11",
+    "_i2c_addresses": {}
+  },
+  "vision": {
+    "robot_tag_id": 100,
+    "camera_distance_scale": 1.0022,
+    "tag_offset_x": 47.5,
+    "tag_offset_y": 0.0,
+    "tag_offset_z": 120.0,
+    "tag_offset_yaw": 0.0
+  },
+  "geometry": {
+    "trackwidth": 128,
+    "otos_untrusted": true,
+    "rotational_slip": 1.0,
+    "rotation_gain_pos": 1.006,
+    "rotation_offset": 12.1,
+    "rotation_gain_neg": 1.006,
+    "rotation_offset_neg": 12.1,
+    "_drive_axle_offset_mm": {
+      "x": 0.0,
+      "y": 0.0
+    },
+    "_odometry_chip_upside_down": false,
+    "_rotation_calibration_note": "125-007 (adjacent-sim-plant-rotation-calibration-for-angle-stop-move-overshoot.md): sim-plant-measured, NOT camera-measured -- these correct the SIM plant's own ANGLE-stop coast-down overshoot (WheelPlant's first-order tau=0.13s duty->velocity lag, TestSim/wheel_plant.h -- the wheels keep coasting for a beat after the stop threshold fires, same physical mechanism real hardware's own actuation lag produces, .clasi/knowledge/actuation-latency-delay-in-plan.md), NOT geometry/stiction (contrast tovez.json's own hardware fit). Measured at omega=+/-2.0 rad/s (square_tour.py's own runTurnMove() rate) against SimLoop.get_true_pose(): identity calibration overshoots by a roughly-constant +11.8..+13.0 deg for target angles >=45 deg (45->56.9, 90->103.0, 180->193.0), least-squares-fit over that range to gain~1.006/offset~12.1 deg. Verified after fitting: 90 deg lands at 90.2 (err +0.2), 180 deg at 179.9 (err -0.1); the fit is intentionally NOT tuned for very small angles (<45 deg), which square_tour.py never commands (every corner is exactly 90 deg) and which the coast-down model saturates nonlinearly toward zero anyway (15 deg identity-overshoot measured +6.5, not +13 -- a single affine pair cannot cover both regimes, and this ticket's only consumer needs 90 deg). Requires 125-007's own sim_configure_drivetrain() plumbing (sim_ctypes.cpp/sim_boot_config.py) to take effect at all -- editing this JSON alone was previously a silent no-op for the sim path (SimHarness's own App::RobotLoop never got setRotationCalibration() called before that ticket). Symmetric pos/neg because the sim plant has no directional asymmetry coded (WheelPlant's dv/dt model is sign-symmetric); confirmed by measuring both directions. NOT a substitute for tovez.json's own camera-measured hardware values -- see that file's own note for why hardware needs a DIFFERENT (negative-offset) correction for a different physical reason."
+  },
+  "motors": {
+    "fwd_sign_left": 1,
+    "fwd_sign_right": -1,
+    "output_deadband": 0.03,
+    "reversal_dwell": 100.0,
+    "vel_kp": 0.002,
+    "vel_ki": 0.0,
+    "vel_kff": 0.002,
+    "vel_i_max": 0.0,
+    "vel_kaw": 0.0,
+    "vel_filt_alpha": 1.0,
+    "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",
+    "_neutral_note": "NEUTRAL baseline (stakeholder 2026-07-18): this is the no-calibration profile, so the gains are the most vanilla usable set, not a tuning. vel_kp = 0.002 = 1/500: full duty at the plant's ~500 mm/s full-scale speed (duty = error / v_max, the plainest proportional normalization; a pure-P loop droops by design). vel_kff = 0.002 = 1/500 too -- the SAME vanilla inverse-plant slope, and the open-loop law itself: with the PID disabled (TestGUI PID checkbox) the motor drives duty = kff * velocityTarget, so kff=0 would make PID-off dead rather than open-loop. vel_ki = 0 (no integrator), vel_imax/vel_kaw = 0 (inert with ki=0; kaw=0 = anti-windup off). vel_filt = 1.0 (no EMA smoothing, raw measured velocity; NOTE: no live SET key -- build-time bake only). This config is the source of truth for the drive/control parameters -- there are to be NO tunable defaults in the source. (The former UPDATE 2026-07-20 sentence here, about a half-dozen sibling control.* heading/distance/model-tau keys, is moot -- those keys were deleted, 119-003 config-attic sweep, no living consumer survived 115-003's motion-stack excision.)"
+  },
+  "drive": {
+    "duty_per_speed_left": 0.001182,
+    "duty_per_speed_right": 0.001182,
+    "crawl_pulse": 0.0,
+    "wheel_gain_left_accel": 1.0,
+    "wheel_intercept_left_accel": 0.0,
+    "wheel_gain_left_decel": 1.0,
+    "wheel_intercept_left_decel": 0.0,
+    "wheel_gain_right_accel": 1.0,
+    "wheel_intercept_right_accel": 0.0,
+    "wheel_gain_right_decel": 1.0,
+    "wheel_intercept_right_decel": 0.0,
+    "_sprint_114_note": "a_max/a_decel/v_body_max/j_max/yaw_jerk_max added 2026-07-20 (sprint 114 ticket 002, config-as-truth completion): gen_boot_config.py no longer carries these as Python-side *_DEFAULT fallback constants -- every value below is seeded with the exact former default, value-preserving (verified byte-identical boot_config.cpp regen). This note originally also covered a half-dozen sibling control.* heading/lead keys -- ALL deleted (119-003, config-attic sweep): no living consumer survived 115-003's motion-stack excision.",
+    "_shaper_note": "decel-into-the-goal campaign (2026-07-22): a_max/a_decel/j_max/yaw_jerk_max read again by gen_boot_config.py's shaper_config_for_config() (Motion::VelocityShaper) -- see tovez.json's own _shaper_note for the full history/derivation. alpha_max/alpha_decel are new this campaign (a_max/a_decel's angular sibling); 7.0rad/s^2 matches tovez.json's own value/derivation (taper ~16.4deg from omega=2rad/s). j_max/yaw_jerk_max power the jerk-limited S-curve stage (same day) -- values unchanged, carried forward from their pre-existing sprint-114 bake.",
+    "_duty_per_speed_correction_note": "2026-08-03 (132-009): corrected from the stale 0.00187325 to 0.001182 to match tovez.json's own fix -- same physical hardware (see _domain_note below), same reasoning; see tovez.json's own _duty_per_speed_correction_note for the full writeup.",
+    "_drive_calibration_note": "duty_per_speed_* [duty/(mm/s)]: open-loop wheel calibration, the inverse of the measured plant gain (speed_sweep 2026-07-27: L ~560, R ~510 mm/s per duty; ceiling ~500 mm/s). Per-wheel because the two gearboxes differ ~10%. crawl_pulse [-1,1]: fixed pulse amplitude for sub-breakaway wheel speeds, Bresenham-dithered in App::Drive; 0 disables. Measured breakaway is 1-6% duty and state-dependent (src/tests/firmware/duty_min/RESULTS.md) -- the earlier 0.20 was sized against a duty_sweep criterion that the standalone prober disproved, so crawl ships OFF pending a re-measure of the low end.",
+    "_wheel_correction_note": "IDENTITY as of 2026-07-31 (stakeholder). The fitted values (tovez: gain ~1.47) were measured against a duty_per_speed that was itself wrong by ~1.6x, so the pair was circularly calibrated -- each fitted against the other's error -- and the correction ended up pointing the WRONG WAY: it divided a 150mm/s request down to 96 before the duty conversion, on a robot that was already under-delivering. duty_per_speed is now a baked measured constant (App::Drive::kDutyPerSpeed), so this affine stage has nothing left to correct and is held at identity. Do not re-fit it against duty_per_speed again; refit only against camera-measured travel, and say so here. gain 1 / intercept 0 = no correction."
+  },
+  "wheel_control": {
+    "v_min": 0.0,
+    "bias_max": 0.0,
+    "tau_adapt": 0.0,
+    "a_steady": 0.0,
+    "deficit_threshold": 0.0,
+    "deficit_window": 0.0,
+    "pid_kp": 0.0,
+    "pid_ki": 0.0,
+    "pid_i_max": 0.0,
+    "pid_kaff": 0.0,
+    "pid_max": 0.0,
+    "pos_err_max": 0.0,
+    "stall_speed": 0.0,
+    "stall_demand": 0.0,
+    "stall_window": 0.0,
+    "_stall_note": "2026-08-11 (136-001): added so this profile's own _complete_cfg() fixture (src/tests/sim/unit/test_gen_boot_config_required_keys.py) stays independently sufficient -- gen_boot_config.py has required all three since the 2026-08-08 stall-detection directive (config-as-truth, sprint 114 posture) and they had been added to tovez.json/gopiv.json only, which meant this file's own missing wheel_control.stall_speed masked every one of that fixture's parametrized cases behind one shared missing-key failure (37 failures, one root cause). Held at 0.0, the documented INERT state, matching gopiv.json's 2026-08-09 precedent (see that file's own _stall_note) -- this is the NO-CALIBRATION profile (see this file's own _wheel_controller_note below: every wheel_control key held at 0/disabled on purpose), so borrowing tovez.json's measured 15.0/40.0/500.0 would be a fabricated calibration on a profile whose entire point is to ship nothing tuned.",
+    "_pos_err_max_note": "133-002: Stage B's position-error clamp [mm] -- the INPUT-side bound on the I term, distinct from pid_i_max's OUTPUT-side [mm/s] bound; both retained. 0 = unclamped, matching every other key in this no-calibration profile: Stage B and Stage C are held inert here on purpose, so there is nothing for this bound to bound.",
+    "_wheel_controller_note": "130-004: App::Drive's unified three-timescale controller. This is the NO-CALIBRATION profile (see this file's own _wheel_correction_note above: wheel_gain/intercept held at IDENTITY on purpose) -- both Stage B fast-PID and Stage C bias-trim adaptation held at 0/disabled to match, so this profile stays a pure open-loop-map baseline with no additional correction layered on top."
+  },
+  "planner": {
+    "v_max": 400.0,
+    "omega_max": 3.0,
+    "control_period": 32.0,
+    "actuation_delay": 32.0,
+    "settle_rest_velocity": 10.0,
+    "settle_rest_omega": 0.16,
+    "settle_epsilon_linear": 4.0,
+    "settle_epsilon_angular": 0.035,
+    "heading_hold_gain": 2.0,
+    "decel_plan_fraction": 0.4,
+    "align_tol": 0.017453,
+    "align_max_nudges": 6,
+    "_align_note": "134-003 terminal fine-align. Same physical hardware as tovez.json, so it carries that file's measured operating point forward verbatim -- see tovez.json's own planner._align_note for the 333-nudge derivation and the explicit instruction not to tighten align_tol. [rad]; 0.017453 rad == 1.0 deg.",
+    "_plant_gain": 1370.0,
+    "_plant_tau": 0.23,
+    "_domain_note": "129-009 (config consolidation): same physical hardware as tovez.json (same uid/serial) -- carries that file's plant-ID-measured Motion::Planner block forward verbatim rather than a separately-derived set, the same 'same hardware, same plant' posture control.duty_per_speed_*/_drive_calibration_note already established for this profile. See tovez.json's own planner._domain_note/_timing_note/_settle_note for the full measurement history/derivation -- not re-quoted here to avoid a copy that can drift out of sync with the source measurement. 130-009 removed require_settle/settle_window and the M4 duty-stage/trim keys this block used to carry -- see boot_config.h's PlannerBootConfig doc comment.",
+    "_timing_note": "control_period/actuation_delay are '= App::RobotLoop::kCycle' by construction; both moved 50.0 -> 32.0 with kCycle on 2026-08-07. See data/robots/tovez.json's own planner._timing_note for the measurements and the full history."
+  },
+  "planner_shaper": {
+    "a_max": 300.0,
+    "a_decel": 250.0,
+    "alpha_max": 6.0,
+    "alpha_decel": 5.0,
+    "jerk_max": 1500.0,
+    "yaw_jerk_max": 30.0
+  },
+  "navigator": {
+    "speed": 150.0,
+    "max_wheel_step": 125.0,
+    "behind_angle": 1.5707963267948966,
+    "turn_first_angle": 0.8726646259971648,
+    "approach_radius": 0.0,
+    "approach_speed": 0.0,
+    "default_arrival_tolerance": 100.0,
+    "yaw_sign": 1.0,
+    "_navigator_note": "135-004: seeded from Motion::NavigatorLimits' own compile-time defaults (src/firm/motion/navigator/arc_solver.h) -- same pattern as tovez.json's own navigator block (see that file's note for the full rationale). yaw_sign=1.0 (identity, unmeasured) pending this robot's own bench pass -- tovez.json's -1.0 is a tovez-specific measured fact (src/tests/bench/goto_otos.py's own YAW_SIGN), not assumed to transfer to a different drivetrain without its own measurement."
+  },
+  "otos": {
+    "offset_x": -47.7,
+    "offset_y": 3.5,
+    "offset_yaw": 0.0,
+    "linear_scale": 1.0,
+    "angular_scale": 1.0
+  },
+  "estimator": {
+    "weight_heading_otos": 0.0,
+    "weight_omega_otos": 0.0,
+    "staleness": 60.0,
+    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. (118 ticket 004, land-at-zero-completion-delete-stop-lead.md: this section's own former fourth key -- a boot-time anticipation-lead constant with a four-retune history and no stable value -- is DELETED; the mechanism it fed no longer exists, see App::MoveQueue::tick()'s own doc comment for the land-at-zero completion predicate that replaces it.)"
+  },
+  "wheels": {
+    "wheel_diameter_mm": 80.77,
+    "ticks_per_rev": 360,
+    "ticks_per_mm": 1.4187
+  },
+  "encoders": {
+    "has_encoders": true,
+    "encoder_count": 2
+  },
+  "gripper": {
+    "has_gripper": false,
+    "gripper_offset_mm": null
+  },
+  "peripherals": {
+    "laser_port": 4
+  },
+  "_legacy_drive_limits": {
+    "_units_note": "All speeds mm/s; motor_deadband is mm/s (stakeholder 2026-07-20): the smallest wheel speed that actually moves the plant, = outputDeadband(0.03 duty) / vel_kff(0.002) = 15 mm/s. Firmware/host convert to duty as needed; no code default -- config is the source of truth.",
+    "motor_deadband": 15.0,
+    "max_cmd": 1.0,
+    "cmd_to_mm_per_s": 500.0,
+    "max_drive_mm_s": 600.0,
+    "max_turn_deg_s": 229.18,
+    "min_drive_mm_s": 16.0,
+    "crawl_threshold_mm_s": 16.0,
+    "crawl_cmd": 15.0
+  }
+}
