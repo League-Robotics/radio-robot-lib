@@ -53,6 +53,18 @@ import this module back -- the one-directional edge sprint.md's
 architecture review specifically verified (see `daemon.py`'s own module
 docstring, "Injection, not import" section).
 
+Sprint 003 ticket 010 completes this for `cmd_mcp()`, the one
+long-lived subcommand ticket 009 deliberately left untouched: `cmd_mcp()`
+now resolves through `daemon_client.get_connection(args, spawn=True)`
+too -- the identical auto-spawn-if-absent call `cmd_repl()` already
+makes -- rather than `connection.resolve()` directly, so an MCP session
+shares a daemon with any concurrent one-shot command (or another
+long-lived session) instead of holding the robot/relay/sim connection
+exclusively for itself. `rogo.mcp_server`'s own tool bodies need no
+changes for this: the `Session` `daemon_client.ClientConnection.session`
+hands back presents the identical call surface a direct connection's
+`.session` already does (see `rogo.mcp_server`'s own module docstring).
+
 **The stakeholder's soft-warning decision (sprint 001
 stakeholder_approval gate), binding for `drive --mm`:** a command that
 reaches `DiffDriveAdapter`'s `kUnknown` planner gap (no planner behind
@@ -944,6 +956,12 @@ def cmd_calibrate_distance(args: argparse.Namespace) -> int:
 # circular, since THIS function needs `rogo.mcp_server.serve()`); this
 # function's own job is exactly `cmd_repl()`'s shape: resolve, hand off,
 # translate the handoff's own exceptions to an exit code, always close.
+# Ticket 010 makes that "exactly cmd_repl()'s shape" literal for
+# resolution too: `cmd_mcp()` now calls `daemon_client.get_connection(
+# args, spawn=True)`, the identical auto-spawn-if-absent call `cmd_repl()`
+# already makes, rather than `connection.resolve()` -- an MCP session is
+# a long-lived tool exactly like `repl`, so it shares a daemon with any
+# concurrent one-shot command instead of holding the connection alone.
 # ---------------------------------------------------------------------------
 
 def cmd_mcp(args: argparse.Namespace) -> int:
@@ -959,14 +977,33 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     `--allow-remote` too. Validates `--listen`/`--allow-remote` BEFORE
     resolving the robot/relay/sim connection, so a malformed or
     disallowed flag fails fast rather than after paying for a
-    (possibly slow, possibly sim-rebuilding) connection first."""
+    (possibly slow, possibly sim-rebuilding) connection first.
+
+    Resolves through `daemon_client.get_connection(args, spawn=True)`
+    (ticket 010) rather than `connection.resolve()` directly -- exactly
+    `cmd_repl()`'s own shape (see that function's own docstring): an MCP
+    session is itself a long-lived tool, so it prefers an already-
+    running `rogo serve` daemon for the resolved target, or auto-spawns
+    one when none is running, rather than holding the serial/sim
+    connection exclusively for itself. This is what lets a concurrent
+    one-shot command (or another `rogo mcp`/`rogo repl` session) reach
+    the same robot without contention while this server is running
+    (SUC-002's own multi-client acceptance criterion) -- `rogo mcp`
+    itself no longer calls `connection.resolve()` at all."""
     try:
         mcp_server.resolve_listen_target(args.listen, args.allow_remote)
     except mcp_server.ListenTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    conn = connection.resolve(args)
+    try:
+        conn = daemon_client.get_connection(args, spawn=True)
+    except daemon_client.RobotNameRequiredError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except daemon_client.DaemonUnavailableError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     try:
         return mcp_server.serve(conn.session, listen=args.listen, allow_remote=args.allow_remote)
     except mcp_server.ListenTargetError as exc:
