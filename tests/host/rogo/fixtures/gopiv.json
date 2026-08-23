@@ -1,0 +1,158 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "robot_name": "gopiv",
+    "uid": "gopiv",
+    "hardware_model": "DFRobot Nezha",
+    "common_name": "robot"
+  },
+  "connection": {
+    "device_announcement_name": "gopiv",
+    "serial_last_6": "407711",
+    "radio_channel": 5,
+    "wifi_ip": "192.168.4.10",
+    "_i2c_addresses": {}
+  },
+  "vision": {
+    "robot_tag_id": 100,
+    "camera_distance_scale": 1.0,
+    "tag_offset_x": 0,
+    "tag_offset_y": 0.0,
+    "tag_offset_z": 120.0,
+    "tag_offset_yaw": 0.0,
+    "_note": "gopiv is a BENCH TEST RIG (one motor, no wheels, never on the playfield); no physical AprilTag is mounted. robot_tag_id inherited from the template for schema completeness only."
+  },
+  "geometry": {
+    "trackwidth": 128,
+    "otos_untrusted": true,
+    "rotational_slip": 1.0,
+    "rotation_gain_pos": 1.0,
+    "rotation_offset": 0.0,
+    "rotation_gain_neg": 1.0,
+    "rotation_offset_neg": 0.0,
+    "_drive_axle_offset_mm": {
+      "x": 0.0,
+      "y": 0.0
+    },
+    "_odometry_chip_upside_down": false
+  },
+  "motors": {
+    "travel_calib_left": 0.70486,
+    "travel_calib_right": 0.70486,
+    "fwd_sign_left": 1,
+    "fwd_sign_right": -1,
+    "output_deadband": 0.03,
+    "reversal_dwell": 100.0,
+    "vel_kp": 0.0016,
+    "vel_ki": 0.005,
+    "vel_kff": 0.0008,
+    "vel_i_max": 0.3,
+    "vel_kaw": 20.0,
+    "vel_filt_alpha": 0.3
+  },
+  "drive": {
+    "duty_per_speed_left": 0.001182,
+    "duty_per_speed_right": 0.001182,
+    "crawl_pulse": 0.0,
+    "wheel_gain_left_accel": 1.0,
+    "wheel_intercept_left_accel": 0.0,
+    "wheel_gain_left_decel": 1.0,
+    "wheel_intercept_left_decel": 0.0,
+    "wheel_gain_right_accel": 1.0,
+    "wheel_intercept_right_accel": 0.0,
+    "wheel_gain_right_decel": 1.0,
+    "wheel_intercept_right_decel": 0.0
+  },
+  "wheel_control": {
+    "v_min": 0.0,
+    "bias_max": 0.0,
+    "tau_adapt": 30.0,
+    "a_steady": 0.0,
+    "deficit_threshold": 0.0,
+    "deficit_window": 0.0,
+    "pid_kp": 0.0,
+    "pid_ki": 6.0,
+    "pid_i_max": 60.0,
+    "pid_kaff": 0.0,
+    "pid_max": 100.0,
+    "pos_err_max": 10.0,
+    "stall_speed": 0.0,
+    "stall_demand": 0.0,
+    "stall_window": 0.0,
+    "_stall_note": "2026-08-09: added so this robot can be BUILT at all -- gen_boot_config.py requires all three (config-as-truth, sprint 114) and they were added to tovez.json only, which left gopiv and togov unbuildable. Held at 0, which is the documented INERT state, not a guess: tovez.json's own _stall_note says 'the whole detector is inert on any robot whose JSON leaves stall_window at 0'. gopiv has no drive characterization of its own, and tovez's numbers (15.0 / 40.0 / 500.0) are DESIGN CHOICES derived from tovez's own measured v_min, deadband and planner.a_max -- none of which have been measured here -- so borrowing them would be a fabricated calibration, not a default. Same posture togov.json takes for its uncharacterized wheel_control group. Replace with gopiv's own numbers before relying on stall detection on this robot. NOTE: togov.json still has this gap and is still unbuildable."
+  },
+  "planner": {
+    "v_max": 400.0,
+    "omega_max": 3.0,
+    "control_period": 32.0,
+    "actuation_delay": 32.0,
+    "settle_rest_velocity": 10.0,
+    "settle_rest_omega": 0.16,
+    "settle_epsilon_linear": 4.0,
+    "settle_epsilon_angular": 0.035,
+    "heading_hold_gain": 0.0,
+    "decel_plan_fraction": 0.4,
+    "align_tol": 0.0,
+    "align_max_nudges": 0,
+    "_timing_note": "control_period/actuation_delay are '= App::RobotLoop::kCycle' by construction; both moved 50.0 -> 32.0 with kCycle on 2026-08-07. See data/robots/tovez.json's own planner._timing_note for the measurements and the full history."
+  },
+  "planner_shaper": {
+    "a_max": 300.0,
+    "a_decel": 250.0,
+    "alpha_max": 6.0,
+    "alpha_decel": 5.0,
+    "jerk_max": 1500.0,
+    "yaw_jerk_max": 30.0
+  },
+  "navigator": {
+    "speed": 150.0,
+    "max_wheel_step": 125.0,
+    "behind_angle": 1.5707963267948966,
+    "turn_first_angle": 0.8726646259971648,
+    "approach_radius": 0.0,
+    "approach_speed": 0.0,
+    "default_arrival_tolerance": 100.0,
+    "yaw_sign": 1.0,
+    "_navigator_note": "135-004: seeded from Motion::NavigatorLimits' own compile-time defaults (src/firm/motion/navigator/arc_solver.h) -- same pattern as tovez.json's own navigator block (see that file's note for the full rationale). yaw_sign=1.0 (identity, unmeasured) pending this robot's own bench pass -- tovez.json's -1.0 is a tovez-specific measured fact (src/tests/bench/goto_otos.py's own YAW_SIGN), not assumed to transfer to a different drivetrain without its own measurement."
+  },
+  "otos": {
+    "offset_x": 0.0,
+    "offset_y": 0.0,
+    "offset_yaw": 0.0,
+    "linear_scale": 1.0,
+    "angular_scale": 1.0
+  },
+  "estimator": {
+    "weight_heading_otos": 0.0,
+    "weight_omega_otos": 0.0,
+    "staleness": 60.0
+  },
+  "wheels": {
+    "wheel_diameter_mm": 80.77,
+    "ticks_per_rev": 360,
+    "ticks_per_mm": 1.4187
+  },
+  "encoders": {
+    "has_encoders": true,
+    "encoder_count": 2,
+    "_note": "the rig has ONE physical motor; the firmware's differential config still models two channels."
+  },
+  "gripper": {
+    "has_gripper": false,
+    "gripper_offset_mm": null
+  },
+  "peripherals": {
+    "laser_port": 4
+  },
+  "_provenance_note": "2026-08-05: reconstructed FROM THE RUNNING DEVICE via protocol v5 GetConfig read-back of all eight groups (rogo repl 'get <group>' against gopiv, firmware 0.20260804.6, every group BAKED) -- the gopiv.json that built 0.20260804.6 was not in this repo. All wire-group values are the device's own, float32 round-trip artifacts rounded back (0.7048599720001221 -> 0.70486 etc.). Non-wire sections (identity/vision/wheels/encoders/gripper/peripherals) are template-shaped from tovez.json and marked where they are placeholders. Radio channel: the firmware pins channel 0 in main.cpp (no config field, no wire verb); the 2026-08-05 bench flash carries a main.cpp literal radio.begin(1) NOT committed anywhere -- adding a proper radio-channel config field is the durable fix.",
+  "_legacy_drive_limits": {
+    "motor_deadband": null,
+    "max_cmd": null,
+    "cmd_to_mm_per_s": null,
+    "max_drive_mm_s": null,
+    "max_turn_deg_s": null,
+    "min_drive_mm_s": null,
+    "crawl_threshold_mm_s": null,
+    "crawl_cmd": null
+  }
+}

@@ -4,6 +4,8 @@ build/
 *.so
 *.dylib
 *.a
+# rogo's on-demand tools/sim build cache (rogo.connection.ensure_sim_binary)
+tools/sim/.build/
 
 # python
 __pycache__/

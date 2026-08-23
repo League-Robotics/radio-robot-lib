@@ -84,8 +84,15 @@ motion surface (`WHEELS_X`/`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W`) decode
 and dispatch correctly but have no planner behind them yet. The
 wifi-link design (dual-plane TCP-REPL + UDP-protocol over one AT
 module) is specified and bench-proven in a sibling firmware repo but
-not yet implemented against this library's own transport. The next
-planned body of work is importing the Rogo CLI (relay-aware drive/
-turn/goto/config/REPL/calibrate/sim/MCP-server tooling) from
-`radio-robot-elite` and adapting it onto this repo's v6 host, tracked
-in `clasi/issues/import-rogo-cli-adapt-robot-radio-to-v6-host.md`.
+not yet implemented against this library's own transport. The Rogo CLI
+(the `rogo` console command, `src/host/rogo/`) has been imported from
+`radio-robot-elite` and adapted onto this repo's own v6 host: `drive`,
+`turn`, `goto`, `config`, `calibrate`, `repl`, and `mcp` all run against
+a robot, relay, or `tools/sim` through `robot_v6`'s `Transport`/
+`Session`, realizing UC-014/UC-015/UC-016 (`docs/design/usecases.md`)
+and closing out
+`clasi/issues/import-rogo-cli-adapt-robot-radio-to-v6-host.md`. No
+further body of work is currently tracked beyond that sprint's own Open
+Questions — a `rogo serve` relay daemon, a camera-based `--auto`
+calibration mode, and `go_to_w`'s world-frame pose source all remain
+deliberately deferred, not scheduled.

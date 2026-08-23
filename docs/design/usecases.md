@@ -23,8 +23,9 @@ the consolidated cross-reference index.
 - **Firmware developer** — implements or extends a concrete `Adapter`
   (`DiffDriveAdapter`, a new port, or a new transport) against the
   `ProtocolHandler` contract.
-- **CLI / tooling user** — drives a robot through the planned Rogo CLI
-  rather than writing a Python/JavaScript program directly.
+- **CLI / tooling user** — drives a robot through the Rogo CLI (`rogo`,
+  `src/host/rogo/`) rather than writing a Python/JavaScript program
+  directly.
 
 ---
 
@@ -370,23 +371,29 @@ the consolidated cross-reference index.
   - A value that fails to parse at all is a decode failure (NAK), not a
     rejection — distinct from an unknown name — `protocol#6`.
 
-## UC-014 — Drive a robot interactively via CLI (planned — Rogo import)
+## UC-014 — Drive a robot interactively via CLI
 
 - **Actor:** CLI / tooling user
-- **Preconditions:** The Rogo CLI has been imported and adapted onto
-  `robot_v6`/protocol v6 per
-  `clasi/issues/import-rogo-cli-adapt-robot-radio-to-v6-host.md`
-  (not yet implemented as of this writing).
+- **Preconditions:** The Rogo CLI is installed (the `rogo` console
+  script, `[project.scripts]`) and adapted onto `robot_v6`/protocol v6,
+  implemented in `src/host/rogo/cli.py` (argument parsing and dispatch),
+  `src/host/rogo/connection.py` (target resolution), `robot_v6/motion.py`
+  (the six motion-API operations as wire calls), and `src/host/rogo/repl.py`
+  (the interactive/piped/argument-list command loop) — see
+  `clasi/sprints/001-import-rogo-cli-onto-the-v6-host/sprint.md`.
 - **Main flow:**
   1. User invokes `rogo drive <args>` / `rogo turn <args>` / `rogo goto
-     <args>` (or the interactive REPL) against a robot reachable through
+     <args>` (or `rogo repl`) against a robot reachable through
      `robot_v6`'s `Transport` — a real robot, a relay server, or
      `tools/sim` (UC-011), all through the same client code (the
      stakeholder's own "either of those, the same way" requirement,
      `transport.py` docstring).
-  2. CLI translates the command into the corresponding `robot_v6`
-     motion-API call and reports the outcome/telemetry back to the
-     terminal.
+  2. `rogo.cli` translates the command into the corresponding
+     `robot_v6.motion` call and reports the outcome/telemetry back to
+     the terminal. `rogo goto` maps onto the wire-level `GO_TO_R` verb
+     only (robot-frame; world-frame `go_to_w` is deferred until a pose
+     source exists, `specification.md#13`) — not a camera-based closed
+     loop (sprint.md's Design Rationale Decision 3).
 - **Postconditions:** Robot executes the requested motion; CLI reflects
   the reliability-layer outcome (ack/nack, completion reason) to the
   user.
@@ -394,47 +401,70 @@ the consolidated cross-reference index.
   - Relay/robot unreachable → CLI surfaces a transport-level error
     rather than hanging (per `TransportClosed` vs. an ordinary read
     timeout distinction already in `transport.py`).
-  - A requested motion (e.g. `goto`) targets a verb with no kinematic
-    effect on the connected adapter (UC-002/UC-003's current gap) → CLI
-    surfaces the resulting `err`/`kUnknown` outcome rather than
-    reporting silent success.
+  - A requested motion (e.g. `goto`, or `drive --mm`) targets a verb
+    with no kinematic effect on the connected adapter (UC-002/UC-003's
+    current gap) → CLI prints the resulting `err`/`kUnknown` outcome as
+    a soft warning and still exits 0 — a documented stakeholder
+    decision, not a silent success or a crash (`rogo.cli`'s
+    `_print_soft_warning()`).
 
-## UC-015 — Calibrate a robot via CLI (planned — Rogo import)
+## UC-015 — Calibrate a robot via CLI
 
 - **Actor:** CLI / tooling user
-- **Preconditions:** Rogo's `calibration` subpackage has been ported;
-  per-robot config the calibration flow reads/writes already exists in
-  `config/robots/` (`config/MANIFEST.md`, per the issue's notes).
+- **Preconditions:** Rogo's calibration flow is implemented in
+  `src/host/rogo/calibrate.py` — manual, tape-measure/protractor-verified
+  trial sequencing only; the camera-based `--auto` mode elite had does
+  not port (sprint.md's Design Rationale Decision 4) — and
+  `src/host/rogo/config.py`, which loads/persists the per-robot config
+  already staged in `config/robots/` (`config/MANIFEST.md`).
 - **Main flow:**
-  1. User invokes `rogo calibrate <robot>`.
-  2. CLI drives a calibration routine (e.g. measuring effective track
-     width / `rotational_slip`, `motion-api#2.1`) against the robot over
-     `robot_v6`, and writes results back to that robot's JSON config.
-- **Postconditions:** Robot's config file reflects newly measured
-  calibration values (e.g. effective track width) for use by future
-  motion commands.
+  1. User invokes `rogo calibrate turns` (measures `rotational_slip`) or
+     `rogo calibrate distance` (measures the new `distance_scale`
+     field) against the *active* robot resolved via
+     `config/robots/active_robot.json` — there is no `<robot>` name
+     argument.
+  2. `rogo.calibrate` drives a batch of manual trials (each a `WHEELS_V`
+     spin/straight-line run via `robot_v6.motion`, defaulting to a
+     human-measurable 90° target rotation for `turns`,
+     `DEFAULT_TURN_TARGET_DEG`), prompts for the operator's tape-measure/
+     protractor result each time, computes an updated
+     `rotational_slip`/`distance_scale` value (`motion-api#2.1`), and
+     writes it back via `rogo.config.save_robot_config()` on
+     confirmation.
+- **Postconditions:** Robot's config file reflects the newly measured
+  calibration value (`rotational_slip` or `distance_scale`) for use by
+  future `rogo turn`/motion commands.
 - **Error flows:**
-  - Measured value falls outside a sane range → CLI should reject the
-    write and report rather than silently persisting a bad calibration
-    (mirrors the specification's own caution against bending
-    `trackwidth` to make turns land, `motion-api#2.1`).
+  - Measured value falls outside a sane range → `rogo.calibrate.compute_calibration()`
+    rejects the write and reports why rather than silently persisting a
+    bad calibration (mirrors the specification's own caution against
+    bending `trackwidth` to make turns land, `motion-api#2.1`).
 
-## UC-016 — Expose robot control via an MCP server (planned — Rogo import)
+## UC-016 — Expose robot control via an MCP server
 
 - **Actor:** CLI / tooling user (or an external tool/agent acting as the
   MCP client)
-- **Preconditions:** Rogo's `robot_mcp.py` has been ported and adapted
-  to `robot_v6`.
+- **Preconditions:** `src/host/rogo/mcp_server.py` is implemented,
+  exposing 8 tools (`hello`, `stop`, `drive`, `turn`, `goto`,
+  `config_get`, `config_set`, `calibrate_turns`) that delegate to the
+  same `robot_v6.motion`/`rogo.config`/`rogo.calibrate` calls
+  `rogo.cli`'s own subcommands use.
 - **Main flow:**
-  1. User invokes `rogo mcp` (or equivalent) to start an MCP server
-     process that exposes robot motion/config/telemetry operations as
-     MCP tools.
-  2. An external MCP client (an agent or another tool) calls those
-     tools; the server translates each call into `robot_v6` traffic
-     against the connected robot/relay/sim, the same way UC-014's direct
-     CLI commands do.
+  1. User invokes `rogo mcp` to start an MCP server process that
+     exposes those tools. It defaults to `stdio` transport (no network
+     surface at all); `--listen HOST:PORT` opts into TCP instead,
+     restricted to loopback unless `--allow-remote` is also given
+     (sprint.md's Migration Concerns security note).
+  2. An external MCP client (an agent or another tool) calls a tool;
+     the server translates the call into `robot_v6`/`rogo.config`/
+     `rogo.calibrate` traffic against the connected robot/relay/sim, the
+     same way UC-014's direct CLI commands do.
 - **Postconditions:** External tooling can drive and observe a robot
   without embedding `robot_v6` directly.
 - **Error flows:**
-  - Same transport/adapter-gap error flows as UC-014, surfaced through
-    the MCP tool-call error channel instead of terminal output.
+  - Same transport/adapter-gap error flows as UC-014 (a `kUnknown`
+    outcome is reported as a `warning`/`error` key in the tool's own
+    result, not raised), plus a genuine unreachable-target failure
+    (`TransportClosed`, or a wait that never resolves) raised as
+    `rogo.mcp_server.UnreachableTargetError` and surfaced through the
+    MCP tool-call error channel rather than hanging.
