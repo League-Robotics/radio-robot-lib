@@ -1,5 +1,15 @@
 ---
-status: pending
+status: in-progress
+sprint: '001'
+tickets:
+- 001-001
+- 001-002
+- 001-003
+- 001-004
+- 001-005
+- 001-006
+- 001-007
+- 001-008
 ---
 
 # Import the Rogo CLI and adapt robot_radio to the v6 host
