@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Add rogo estop command
-status: executing
+status: done
 branch: sprint/004-add-rogo-estop-command
 use-cases:
 - SUC-001
