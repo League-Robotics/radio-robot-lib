@@ -76,6 +76,15 @@ exits 0. This module surfaces that via `_await_ack_and_err()` +
 `_print_soft_warning()` below, used by `drive --mm`'s `WHEELS_X` path.
 `drive --ms`/`stream`/`turn` all go over `WHEELS_V`, `DiffDriveAdapter`'s
 one real verb (protocol.md#5) -- no soft-warning path applies to them.
+
+Sprint 004 ticket 001 adds `estop`, `cmd_stop()`'s panic-path sibling:
+`cmd_estop()`/`_run_estop()` follow the exact same resolve/run/report/
+close shape (`daemon_client.get_connection(args, spawn=False)` --
+auto-detect only, never auto-spawn, so a panic stop never pays daemon-
+startup latency), sending `robot_v6.motion.estop(session)`'s unsequenced
+`ESTOP` instead of `STOP`'s sequenced one. See `_run_estop()`'s own
+docstring for why a pump timeout is not a failure here, unlike
+`_run_hello()`'s.
 """
 
 from __future__ import annotations
@@ -311,6 +320,59 @@ def cmd_stop(args: argparse.Namespace) -> int:
     conn = daemon_client.get_connection(args, spawn=False)
     try:
         return _run_stop(conn.session)
+    except TransportClosed as exc:
+        print(f"error: connection closed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.transport.close()
+
+
+def _run_estop(session: Session) -> int:
+    """`estop`'s session-only body -- see `_run_hello()`'s own docstring
+    for why this split exists (shared by `cmd_estop()` and, later,
+    `rogo.repl`, though repl reuse is out of scope for this ticket).
+
+    `ESTOP` is unsequenced -- no `#id`, never acked/nacked
+    (motion-api.md#3.7, protocol.md#8.3's exemption set) -- so there is
+    no ack/id to wait on the way `_run_stop()` waits on `STOP`'s. This
+    pumps briefly (bounded by `_DEFAULT_TIMEOUT`, same as `_run_hello()`)
+    for the robot's bare `estop` confirmation line (protocol.md#8.3) and
+    prints it when it arrives, but UNLIKE `_run_hello()` (which returns 1
+    when its own `device` banner never arrives), a pump timeout here is
+    NOT a failure -- sprint.md's Design Rationale: a human or agent
+    issuing a panic stop benefits from on-screen confirmation when one
+    arrives, but the protocol gives no timing guarantee for it, so its
+    absence cannot be treated as a command failure. This always returns
+    0; `cmd_estop()`'s own `TransportClosed` handling is the only path
+    to a nonzero exit."""
+    motion.estop(session)
+    replies = _pump_until(session, lambda rs: any(r.verb == "estop" for r in rs))
+    confirmed = any(r.verb == "estop" for r in replies)
+    if confirmed:
+        print("ESTOP sent; robot confirmed (estop)")
+    else:
+        print(
+            f"ESTOP sent; no confirmation received within {_DEFAULT_TIMEOUT}s "
+            "(not a failure -- protocol.md#8.3 does not guarantee reply timing)"
+        )
+    return 0
+
+
+def cmd_estop(args: argparse.Namespace) -> int:
+    """Send the unsequenced `ESTOP` panic stop -- the CLI surface for the
+    daemon's estop-priority path sprint 003 built
+    (`daemon_client.is_estop_request()`). Distinct from `cmd_stop()`'s
+    sequenced, PLANNED `STOP`: this must never wait behind another
+    client's in-flight command, so it resolves through
+    `daemon_client.get_connection(args, spawn=False)` -- auto-detect
+    only, NEVER auto-spawn (see `cmd_hello()`'s own docstring for why
+    every one-shot command uses this call), because spawning a daemon
+    during a panic stop would add startup latency to the one command
+    that must not pay it. See `_run_estop()`'s own docstring for why a
+    pump timeout is not a failure here, unlike `_run_hello()`'s."""
+    conn = daemon_client.get_connection(args, spawn=False)
+    try:
+        return _run_estop(conn.session)
     except TransportClosed as exc:
         print(f"error: connection closed: {exc}", file=sys.stderr)
         return 1
@@ -1208,6 +1270,19 @@ def build_parser() -> argparse.ArgumentParser:
         "stop", help="Send the sequenced STOP command")
     connection.add_target_arguments(p_stop)
     p_stop.set_defaults(func=cmd_stop)
+
+    p_estop = sub.add_parser(
+        "estop",
+        help="Send the unsequenced ESTOP panic stop -- jumps every "
+             "client's queue on a running daemon; distinct from the "
+             "sequenced 'stop'",
+        description="Send the unsequenced ESTOP panic stop (protocol.md#8.3): "
+                     "no #id, never acked/nacked, jumps every client's queue "
+                     "on a running daemon and aborts an in-progress wait. "
+                     "Distinct from the sequenced 'stop', which queues "
+                     "normally behind other work.")
+    connection.add_target_arguments(p_estop)
+    p_estop.set_defaults(func=cmd_estop)
 
     p_drive = sub.add_parser(
         "drive",

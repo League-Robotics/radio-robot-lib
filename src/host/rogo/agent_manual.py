@@ -37,8 +37,8 @@ semantics, and the operational knowledge `--help` text does not carry.
 
 `rogo` talks to a protocol-v6 robot, relay, or `tools/sim` -- a single
 plain-ASCII line grammar (no COBS/CRC/binary command plane). Every
-one-shot subcommand below (`hello`, `stop`, `drive`, `turn`, `goto`,
-`config get`/`set`, `calibrate turns`/`distance`) resolves one
+one-shot subcommand below (`hello`, `stop`, `estop`, `drive`, `turn`,
+`goto`, `config get`/`set`, `calibrate turns`/`distance`) resolves one
 connection and exits, but AUTO-DETECTS an already-running `rogo serve`
 daemon for its resolved target first and routes through it when one
 exists (falling back to a direct connection, unchanged, when none is
@@ -58,6 +58,7 @@ rogo [--agent] <subcommand> ...
 |---|---|
 | `hello` | One-shot probe: send `HELLO`, print the device banner. |
 | `stop` | Send the sequenced `STOP` (a PLANNED stop, not a halt). |
+| `estop` | Send the unsequenced `ESTOP` (the PANIC stop, distinct from `stop`) -- jumps every client's queue on a running daemon. |
 | `drive` | `rogo drive <L> <R> [--ms N \| --mm N \| stream] [--resend MS]` -- one `WHEELS_V`/`WHEELS_X` call, or a `WHEELS_V` keepalive stream until Ctrl-C. |
 | `turn` | `rogo turn <degrees> [--speed]` -- one `WHEELS_V` call using the active robot's rotation model. |
 | `goto` | `rogo goto <x> <y> [--speed] [--arrive] [--timeout]` -- one `GO_TO_R` call, robot-frame only. |
@@ -121,6 +122,32 @@ STOP acked (#1)
 
 Exit 0 if acked; exit 1 (`STOP sent (#N) but not acked within 3.0s`,
 stderr) otherwise.
+
+### `rogo estop [--sim|--connect|--port]`
+
+Sends the unsequenced `ESTOP` (protocol.md#8.3's exemption set -- no
+`#id`, never acked/nacked, must execute even while the stream is
+stalled on a sequence gap): the PANIC path, distinct from the planned,
+sequenced `stop` above -- do not conflate the two. Resolves through
+`daemon_client.get_connection(args, spawn=False)` -- auto-detect only,
+NEVER auto-spawn, so a panic stop never pays daemon-startup latency; on
+a running `rogo serve` daemon (section 8) the request classifies as
+estop-priority and jumps ahead of every other client's already-queued
+work, aborting another client's in-progress completion wait
+immediately.
+
+Pumps briefly (default 3s) for the robot's bare `estop` confirmation
+line (protocol.md#8.3) and prints it if it arrives:
+
+```
+$ rogo estop --sim
+ESTOP sent; robot confirmed (estop)
+```
+
+A pump timeout with NO confirmation line is NOT a failure -- `estop`
+still exits 0, since the protocol gives no timing guarantee for that
+line. Exit 1 only on a genuine transport failure (`error: connection
+closed: ...`, stderr) -- never on the absence of a confirmation.
 
 ### `rogo drive <left> <right> [--ms N | --mm N | stream] [--resend MS] [--sim|--connect|--port]`
 
@@ -422,7 +449,7 @@ rogo serve: 'sim' listening at /Users/you/.rogo/run/sim.sock -- Ctrl-C to stop
 
 ### Auto-detect (one-shot subcommands)
 
-`hello`/`stop`/`drive`/`turn`/`goto`/`config get`/`config set`/
+`hello`/`stop`/`estop`/`drive`/`turn`/`goto`/`config get`/`config set`/
 `calibrate turns`/`calibrate distance` each look for an already-running
 `rogo serve` daemon for their resolved target FIRST: if one is found,
 the command runs through it (no new process spawned, no connection
@@ -454,13 +481,16 @@ immediately rather than letting it run to its own natural timeout. This
 is what keeps one client's long-running move from ever delaying another
 client's emergency stop when several are sharing one daemon.
 
-`rogo` itself has no dedicated `estop` subcommand today -- `stop`
-(section 3) is a PLANNED stop and is intentionally NOT treated as
-estop-priority (it queues normally, exactly like every other command).
-An agent that specifically needs to trigger the estop-priority path
-calls `robot_v6.motion.estop(session)` directly against a resolved
-`Session` (daemon-proxied or direct alike) rather than through a `rogo`
-CLI invocation.
+`rogo estop` (section 3) is the CLI surface for this: it sends the same
+unsequenced `ESTOP` through `daemon_client.get_connection(args,
+spawn=False)`, so a running daemon classifies it as estop-priority
+automatically (`is_estop_request()`) -- no separate flag, no different
+wire verb, just the normal client path. `stop` (section 3) remains a
+PLANNED stop and is intentionally NOT treated as estop-priority (it
+queues normally, exactly like every other command) -- do not conflate
+the two. An agent that wants the estop-priority path without shelling
+out to `rogo estop` can still call `robot_v6.motion.estop(session)`
+directly against a resolved `Session` (daemon-proxied or direct alike).
 
 ---
 

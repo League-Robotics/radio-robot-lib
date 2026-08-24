@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,8 @@ from pathlib import Path
 import pytest
 
 from robot_v6 import motion
+from robot_v6.reliability import Session
+from robot_v6.transport import Transport
 from rogo import connection, daemon, daemon_client
 from rogo import daemon_protocol as dp
 
@@ -108,6 +111,172 @@ def test_find_daemon_connects_to_an_already_running_daemon(running_sim_daemon):
         assert found.session.highest_acked == 0
     finally:
         found.transport.close()
+
+
+# ---------------------------------------------------------------------------
+# find_daemon()'s liveness probe vs. a genuinely busy worker thread
+# (sprint 004 ticket 002's own regression test -- the mechanism itself,
+# isolated from CLI-subprocess/sim timing noise; complements, not
+# replaces, tests/host/rogo/test_daemon_e2e_multi_client.py's CLI-level
+# end-to-end preemption proof). No real `tools/sim` or CLI subprocess
+# here -- an in-process fake `Connection` (the "drive" dispatch body
+# never touches `Session` at all) plus a REAL `DaemonServer` +
+# `UnixSocketListener` pair over a REAL Unix socket, matching sprint 003
+# ticket 011's own lesson that a unit-level classification check alone
+# is not sufficient proof for this kind of gap.
+# ---------------------------------------------------------------------------
+
+class _InertTransport(Transport):
+    """A `Transport` that is never actually read from or written to --
+    the busy "drive" dispatch handler below ignores the `Session` it is
+    handed entirely, so this only needs to exist and satisfy
+    `Session`'s own constructor, not do anything real."""
+
+    def _read_chunk(self, timeout: float | None) -> bytes:
+        return b""
+
+    def _write_bytes(self, data: bytes) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _make_fake_connection() -> connection.Connection:
+    transport = _InertTransport()
+    return connection.Connection(transport=transport, session=Session(transport))
+
+
+def _send_request(sock: socket.socket, request: dp.Request) -> None:
+    sock.sendall((dp.encode_request(request) + "\n").encode("utf-8"))
+
+
+def _read_reply(sock: socket.socket, *, timeout: float = 5.0) -> dp.Reply:
+    sock.settimeout(timeout)
+    buf = b""
+    while b"\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise AssertionError("connection closed before a full reply line arrived")
+        buf += chunk
+    line, _, _rest = buf.partition(b"\n")
+    return dp.decode_reply(line.decode("utf-8"))
+
+
+def test_find_daemon_probe_returns_promptly_while_the_worker_is_busy_with_a_long_dispatch():
+    """The regression test for the liveness-probe fast path itself
+    (`daemon.LIVENESS_PROBE_VERB`, `UnixSocketListener._serve_client()`):
+    with `DaemonServer`'s single worker thread genuinely occupied
+    dispatching a long-running call, `daemon_client.find_daemon()`'s own
+    connectivity probe -- issued by a completely separate client
+    connection -- must still return well within `DEFAULT_FIND_TIMEOUT_S`,
+    without waiting for the busy dispatch to free the worker. Before this
+    ticket's fix, the probe (`session_highest_acked`) was an ordinary
+    priority-1 request submitted through the SAME `DaemonServer.submit()`
+    queue as everything else, so it queued FIFO behind the busy dispatch
+    and the probe would time out instead."""
+    tmp_dir = _short_tmp_dir()
+    try:
+        drive_started = threading.Event()
+        release_drive = threading.Event()
+
+        def fake_drive(session, params, abort):
+            del session, params, abort
+            drive_started.set()
+            # Busy until explicitly released below (or a generous 5s
+            # safety timeout) -- nothing here ever sets `abort`; this
+            # test is not exercising the estop/abort mechanism, only
+            # whether the liveness probe can outrun an ordinary busy
+            # dispatch.
+            release_drive.wait(timeout=5.0)
+            return {"done": True}
+
+        server = daemon.DaemonServer(_make_fake_connection(), {"drive": fake_drive})
+        server.start()
+        socket_path = daemon.socket_path_for_name("tovez", socket_dir=tmp_dir)
+        listener = daemon.UnixSocketListener(server, socket_path)
+        listener.start()
+        try:
+            drive_client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            drive_client.connect(str(socket_path))
+            try:
+                _send_request(drive_client, dp.Request(id=1, verb="drive"))
+                assert drive_started.wait(timeout=2.0), "drive dispatch never started"
+
+                start = time.monotonic()
+                found = daemon_client.find_daemon(
+                    "tovez", socket_dir=tmp_dir, timeout=daemon_client.DEFAULT_FIND_TIMEOUT_S,
+                )
+                elapsed = time.monotonic() - start
+            finally:
+                release_drive.set()
+                drive_reply = _read_reply(drive_client)
+                drive_client.close()
+
+            assert drive_reply.result == {"done": True}
+            assert found is not None, "probe must succeed even while the worker is busy"
+            try:
+                assert elapsed < daemon_client.DEFAULT_FIND_TIMEOUT_S, (
+                    f"probe took {elapsed:.3f}s -- it queued behind the busy worker "
+                    f"instead of using the liveness-probe fast path"
+                )
+            finally:
+                found.transport.close()
+        finally:
+            listener.stop()
+            server.stop()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_liveness_probe_does_not_reset_the_idle_activity_clock():
+    """`run_daemon_worker()`'s idle-timeout tracking
+    (`daemon_client._with_activity_tracking()`) must be unaffected by
+    liveness probes -- a probe answered by `UnixSocketListener` outside
+    the dispatch table never reaches a wrapped handler at all, so it
+    must not reset `last_activity` (which would incorrectly keep an
+    otherwise-idle daemon alive just because a client polled it)."""
+    last_activity = [time.monotonic() - 100.0]
+    table = daemon_client._with_activity_tracking(
+        {"ping": lambda session, params, abort: "pong"}, last_activity,
+    )
+    stamp_before = last_activity[0]
+
+    tmp_dir = _short_tmp_dir()
+    try:
+        server = daemon.DaemonServer(_make_fake_connection(), table)
+        server.start()
+        socket_path = daemon.socket_path_for_name("tovez", socket_dir=tmp_dir)
+        listener = daemon.UnixSocketListener(server, socket_path)
+        listener.start()
+        try:
+            found = daemon_client.find_daemon(
+                "tovez", socket_dir=tmp_dir, timeout=daemon_client.DEFAULT_FIND_TIMEOUT_S,
+            )
+            assert found is not None
+            found.transport.close()
+
+            # The liveness probe alone must not have touched last_activity.
+            assert last_activity[0] == stamp_before
+
+            # A real dispatched request through the wrapped table, by
+            # contrast, must still update it -- proving the assertion
+            # above is because the probe bypasses the table, not because
+            # activity tracking itself is broken.
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(str(socket_path))
+            try:
+                _send_request(client, dp.Request(id=1, verb="ping"))
+                reply = _read_reply(client)
+            finally:
+                client.close()
+            assert reply.result == "pong"
+            assert last_activity[0] > stamp_before
+        finally:
+            listener.stop()
+            server.stop()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
