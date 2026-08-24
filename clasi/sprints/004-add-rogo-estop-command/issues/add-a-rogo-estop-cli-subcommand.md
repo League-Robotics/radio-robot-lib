@@ -3,6 +3,7 @@ status: in-progress
 sprint: '004'
 tickets:
 - 004-001
+- 004-002
 ---
 
 # Add a `rogo estop` CLI subcommand
