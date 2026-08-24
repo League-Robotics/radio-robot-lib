@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Add rogo estop CLI subcommand routed through daemon auto-detect
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on:
@@ -131,31 +131,31 @@ not this one's.
 
 ## Acceptance Criteria
 
-- [ ] `rogo estop` sends `robot_v6.motion.estop(session)` — the
+- [x] `rogo estop` sends `robot_v6.motion.estop(session)` — the
       unsequenced `ESTOP` (no `#id`, never acked, never made to wait
       behind a sequenced command).
-- [ ] Connection resolves via `daemon_client.get_connection(args,
+- [x] Connection resolves via `daemon_client.get_connection(args,
       spawn=False)` — auto-detect only, never auto-spawn — matching
       `cmd_stop()`/`cmd_hello()`.
-- [ ] An `estop` subparser is registered with the same shared target
+- [x] An `estop` subparser is registered with the same shared target
       options as every other one-shot subcommand (`--sim`/`--connect
       HOST:PORT`/`--port PORT`).
-- [ ] `rogo estop --help` text and the top-level `--help` listing both
+- [x] `rogo estop --help` text and the top-level `--help` listing both
       make clear `estop` is the unsequenced panic stop, distinct from
       the sequenced `stop`.
-- [ ] `cmd_estop()` pumps briefly (bounded, reusing
+- [x] `cmd_estop()` pumps briefly (bounded, reusing
       `_pump_until`/`_DEFAULT_TIMEOUT`) for the robot's bare `estop`
       confirmation line (protocol.md §8.3) and prints it when
       received.
-- [ ] A pump timeout with no confirmation line is NOT a failure —
+- [x] A pump timeout with no confirmation line is NOT a failure —
       `cmd_estop()` still exits 0 in that case (sprint.md's Design
       Rationale). The command exits non-zero ONLY on a genuine
       transport failure (`TransportClosed` or connection-resolution
       failure), never on the absence of a confirmation the protocol
       doesn't guarantee timing for.
-- [ ] `rogo estop` against `tools/sim` is verified end to end
+- [x] `rogo estop` against `tools/sim` is verified end to end
       (`cli.main(["estop", "--sim"])` pattern, exit 0).
-- [ ] A test proves `rogo estop`, invoked as the real CLI subcommand
+- [x] A test proves `rogo estop`, invoked as the real CLI subcommand
       (not a raw `motion.estop()`/`daemon_client` call), preempts
       another daemon client's in-flight command through a real running
       `rogo serve` daemon — not merely a unit-level check of
@@ -163,13 +163,13 @@ not this one's.
       ticket 011 found that classification silently broken once
       already despite green unit suites — this is the point of the
       ticket.)
-- [ ] `src/host/rogo/agent_manual.py`'s `MANUAL` documents `estop`:
+- [x] `src/host/rogo/agent_manual.py`'s `MANUAL` documents `estop`:
       what it sends, its distinction from `stop`, its no-auto-spawn
       routing.
-- [ ] `tests/host/rogo/test_agent_manual.py`'s pinning test
+- [x] `tests/host/rogo/test_agent_manual.py`'s pinning test
       (`test_every_subcommand_and_option_appears_in_the_manual`) stays
       green with `estop` added.
-- [ ] Scoped test command passes: `uv run python -m pytest -q
+- [x] Scoped test command passes: `uv run python -m pytest -q
       tests/host/rogo/`.
 
 ## Implementation Plan

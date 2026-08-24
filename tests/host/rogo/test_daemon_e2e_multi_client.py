@@ -228,6 +228,109 @@ def test_estop_from_one_client_preempts_another_clients_in_flight_wait_through_t
 
 
 # ---------------------------------------------------------------------------
+# Sprint 004 ticket 001: the same safety-critical scenario above, but proving
+# `rogo estop` ITSELF -- the new CLI subcommand, invoked as a real
+# subprocess -- reaches the estop-priority path, not just the underlying
+# `robot_v6.motion.estop()`/`daemon_client` primitives the test above
+# already covers. Sprint 003 ticket 011 found `is_estop_request()`'s
+# classification silently broken once already despite every per-ticket
+# unit suite staying green (this file's own module docstring); this test
+# exists so a future regression in `cmd_estop()`'s own wiring (e.g. it
+# somehow stopped resolving through `daemon_client.get_connection()`, or
+# started spawning instead of auto-detecting) would be caught the same
+# way, at the CLI's own entry point rather than assumed from the
+# already-tested primitive underneath it.
+# ---------------------------------------------------------------------------
+
+def test_estop_via_real_cli_subprocess_preempts_another_clients_in_flight_wait_through_the_real_daemon_wiring(
+    built_sim_binary, isolated_socket_dir,
+):
+    del built_sim_binary
+    proc = _spawn_serve("--idle-timeout", "30.0")
+    try:
+        assert _wait_for_daemon("sim", isolated_socket_dir, timeout=10.0) is not None
+
+        client_a = daemon_client.find_daemon("sim", socket_dir=isolated_socket_dir, timeout=2.0)
+        assert client_a is not None
+        try:
+            # Client A: identical setup to the sibling test above -- a
+            # real WHEELS_V, in flight, then a completion wait on the
+            # NEXT (never-issued, so unreachable) sequence id, giving the
+            # daemon's one worker thread a long in-progress wait to
+            # preempt. See that test's own comment for why the next id
+            # (rather than relying on WHEELS_V's own duration_ms) is what
+            # reproduces "still in flight" deterministically against
+            # `tools/sim`'s clockless FakeMotionAdapter.
+            seq_id = motion.wheels_v(client_a.session, 100, 100, 500)
+            unreachable_seq_id = seq_id + 1
+
+            done_box: list = []
+
+            def wait_for_completion():
+                done_box.append(
+                    client_a.session.wait_for_done(unreachable_seq_id, timeout=10.0))
+
+            wait_thread = threading.Thread(target=wait_for_completion)
+            wait_thread.start()
+            # Same rationale as the sibling test: give the daemon's
+            # worker thread a moment to actually be blocked inside
+            # client A's wait before client B's estop is sent, so this
+            # exercises the in-progress-abort path rather than merely
+            # queue-jumping ahead of a still-queued request.
+            time.sleep(0.5)
+
+            # Client B: instead of an in-process `motion.estop()` call
+            # on an already-open session (the sibling test above), spawn
+            # `rogo estop` as a REAL SUBPROCESS -- the actual CLI surface
+            # this ticket adds -- relying on the same
+            # `XDG_RUNTIME_DIR`-scoped auto-detect
+            # `daemon_client.get_connection(args, spawn=False)` `cmd_estop()`
+            # itself uses (isolated_socket_dir's own monkeypatched env is
+            # inherited by the subprocess exactly as `_spawn_serve()`'s
+            # own daemon subprocess already relies on). `subprocess.run()`
+            # blocks until the child exits and reaps it itself -- no
+            # separate `_terminate()` needed for this one, unlike the
+            # long-lived `rogo serve` `proc` above.
+            start = time.monotonic()
+            estop_result = subprocess.run(  # noqa: S603
+                [sys.executable, "-m", "rogo.cli", "estop", "--sim"],
+                capture_output=True, text=True, timeout=10.0,
+            )
+            estop_elapsed = time.monotonic() - start
+
+            wait_thread.join(timeout=10.0)
+            total_elapsed = time.monotonic() - start
+        finally:
+            client_a.transport.close()
+    finally:
+        _terminate(proc)
+
+    assert estop_result.returncode == 0, (
+        f"rogo estop exited {estop_result.returncode}: "
+        f"stdout={estop_result.stdout!r} stderr={estop_result.stderr!r}"
+    )
+    assert "ESTOP sent" in estop_result.stdout
+    assert not wait_thread.is_alive(), "client A's wait_for_done never returned"
+    # Looser bound than the sibling test's own `estop_elapsed < 2.0`: a
+    # real subprocess pays Python interpreter/import startup cost on top
+    # of the RPC round trip an already-open session's direct call does
+    # not. Still tight relative to client A's own 10s client-side
+    # wait_for_done timeout below -- proving `rogo estop` was not served
+    # FIFO behind client A's long wait, which is the point of this test.
+    assert estop_elapsed < 5.0, (
+        f"rogo estop subprocess took {estop_elapsed:.2f}s -- it must jump "
+        f"the queue ahead of client A's in-progress completion wait, not "
+        f"be served FIFO behind it"
+    )
+    assert total_elapsed < 5.0, (
+        f"client A's wait_for_done() took {total_elapsed:.2f}s total -- "
+        f"expected it to be aborted by client B's rogo estop well under "
+        f"its own 10s client-side timeout"
+    )
+    assert done_box == [None]
+
+
+# ---------------------------------------------------------------------------
 # Unix-socket mode: one-shot CLI, `rogo repl`, and `rogo mcp` all sharing
 # ONE already-running daemon concurrently -- AC #1's "rogo mcp and rogo
 # CLI/repl all route through the same running daemon concurrently."
