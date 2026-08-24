@@ -2,7 +2,7 @@
 id: '002'
 title: Bypass the daemon's priority queue for connection-liveness probes so estop
   can always preempt a busy worker
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -93,7 +93,7 @@ assertions.
 
 ## Acceptance Criteria
 
-- [ ] A new, clearly-reserved daemon-protocol wire verb (its exact name
+- [x] A new, clearly-reserved daemon-protocol wire verb (its exact name
       is this ticket's own implementation choice, but it MUST NOT be
       `"ping"`, `"hello"`, or any of the six `session_*` names
       `build_session_dispatch_table()` already defines) is answered
@@ -113,17 +113,17 @@ assertions.
       table (e.g. a reserved/namespaced string), and document the
       reservation at its definition site so no future dispatch table
       accidentally reuses it.
-- [ ] `daemon_client.find_daemon()`'s connectivity probe sends this new
+- [x] `daemon_client.find_daemon()`'s connectivity probe sends this new
       verb instead of `session_highest_acked`. `_wait_for_daemon()` (the
       auto-spawn polling loop) and `get_connection()` need no changes
       beyond this — they already call `find_daemon()` as their probe.
-- [ ] No behavior change to `DaemonServer`'s priority-queue ordering,
+- [x] No behavior change to `DaemonServer`'s priority-queue ordering,
       `_execute()`, the `abort`-event mechanism, or
       `daemon_client.is_estop_request()`'s classification. No change to
       `session_highest_acked`'s own behavior or meaning for any *other*
       caller (it remains an ordinary, non-priority RPC everywhere except
       that it is no longer what the probe itself sends).
-- [ ] The existing (uncommitted, currently red)
+- [x] The existing (uncommitted, currently red)
       `test_estop_via_real_cli_subprocess_preempts_another_clients_in_flight_wait_through_the_real_daemon_wiring`
       in `tests/host/rogo/test_daemon_e2e_multi_client.py` passes.
       Prefer landing it with no change to its own assertions (it was
@@ -131,7 +131,7 @@ assertions.
       encodes the right tight elapsed-time bounds); only touch it if the
       fix genuinely requires a different bound, and say why in the
       commit.
-- [ ] A new, more targeted regression test (in `test_daemon.py` and/or
+- [x] A new, more targeted regression test (in `test_daemon.py` and/or
       `test_daemon_client.py`, not requiring a real `tools/sim` or CLI
       subprocess) proves the mechanism directly: with the daemon's
       single worker thread genuinely occupied by a long-running,
@@ -146,12 +146,12 @@ assertions.
       unit-level check of classification alone is not suffficient
       proof, so this test must still exercise a real `DaemonServer` +
       `UnixSocketListener` pair over a real socket, not a mock.
-- [ ] `run_daemon_worker()`'s idle-timeout tracking (`_with_activity_tracking()`)
+- [x] `run_daemon_worker()`'s idle-timeout tracking (`_with_activity_tracking()`)
       is unaffected by liveness probes — a probe answered outside the
       dispatch table never touches `last_activity`, so it must not reset
       the idle clock. Add or confirm a test for this if one does not
       already cover it.
-- [ ] Full scoped suite passes: `uv run python -m pytest -q
+- [x] Full scoped suite passes: `uv run python -m pytest -q
       tests/host/rogo/`.
 
 ## Implementation Plan

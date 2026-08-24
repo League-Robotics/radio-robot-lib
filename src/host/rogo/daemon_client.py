@@ -581,9 +581,18 @@ def find_daemon(
     try:
         # A cheap probe proving the far end genuinely speaks
         # daemon_protocol, not just "something is listening on this
-        # path" -- session_highest_acked takes no params and answers
-        # instantly regardless of the held connection's own state.
-        wire.call("session_highest_acked", {}, timeout=timeout)
+        # path" -- daemon.LIVENESS_PROBE_VERB is answered directly by
+        # UnixSocketListener._serve_client(), BEFORE DaemonServer.submit(),
+        # so this probe can never queue behind a busy worker thread (see
+        # that constant's own docstring). Previously sent
+        # "session_highest_acked" -- an ordinary priority-1 RPC that COULD
+        # queue behind another client's in-flight dispatch, creating a
+        # chicken-and-egg gap where a cold client's own connectivity probe
+        # could time out and silently fall back to a direct connection
+        # before the daemon's estop-priority path was ever reached (sprint
+        # 004 ticket 002's root-cause fix; see daemon.py's module
+        # docstring's "Liveness-probe fast path" section).
+        wire.call(daemon.LIVENESS_PROBE_VERB, {}, timeout=timeout)
     except (OSError, dp.ProtocolError, DaemonUnavailableError, TransportClosed):
         transport.close()
         return None

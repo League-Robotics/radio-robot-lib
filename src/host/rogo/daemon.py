@@ -139,6 +139,49 @@ this reason. Omit it (the default) to keep the plain `estop_verbs`
 membership check -- unchanged for every existing caller, including
 every test in this module's own suite that constructs a
 `DaemonServer` with a directly-named fake dispatch table.
+
+---- Liveness-probe fast path: bypassing the queue entirely for
+connection-liveness probes (sprint 004 ticket 002) ----
+
+`daemon_client.find_daemon()` -- called by `get_connection(..., spawn=
+False)` before ANY real request is sent -- needs to confirm the far
+end of a Unix socket genuinely speaks `daemon_protocol`, not just that
+something is listening on the path. Answering that probe through
+`DaemonServer.submit()`, like an ordinary request, seems harmless (the
+probe carries no session state) but creates a genuine chicken-and-egg
+gap: a brand-new client's own connectivity probe is an ORDINARY
+priority-1 request with no way to signal urgency, so it can be
+serialized behind an already-dispatching non-estop item with no bound
+on how long that takes -- and only an already-CONNECTED client can
+submit the priority-0 (estop-class) request that would jump ahead of
+it. On a serial robot this meant `rogo estop`, issued while another
+client's `drive` was in flight, could time out during its OWN
+connection-establishment probe and silently fall back to a brand-new
+DIRECT connection -- completely bypassing the daemon and its
+already-correct estop-priority mechanism (see `submit()`'s own
+docstring above) -- before the real `ESTOP` ever had a chance to reach
+the priority queue at all. See sprint 004's own sprint.md Revision
+section for the full incident and root-cause analysis.
+
+`UnixSocketListener._serve_client()` answers `LIVENESS_PROBE_VERB`
+(below) directly, on the listener's own per-client thread, BEFORE
+`DaemonServer.submit()` is ever called for it -- so its latency is
+bounded only by that thread's own read loop, never by `DaemonServer`'s
+current dispatch or queue depth. This is safe precisely because the
+probe needs no session state and no ordering guarantee relative to
+other clients' dispatches -- it only needs to prove "a real daemon is
+listening here," answerable with no `Session` interaction at all.
+`DaemonServer`'s own priority queue, `_execute()`, and its abort
+mechanism are completely unaffected -- this is a listener-level
+shortcut for exactly one reserved verb, not a queue-ordering change,
+and `is_estop_request()`'s classification is untouched (the probe
+never reaches `DaemonServer` to be classified at all). Because it
+never reaches `_execute()`, it also never touches
+`run_daemon_worker()`'s `last_activity` idle-timeout tracking
+(`daemon_client._with_activity_tracking()`) -- a liveness probe alone
+never keeps an otherwise-idle daemon artificially alive, which is
+correct: a client merely polling for aliveness is not "activity" a
+caller would recognize as real use.
 """
 
 from __future__ import annotations
@@ -612,6 +655,32 @@ def ensure_socket_dir(socket_path: Path) -> None:
 # and a CLI invocation at the same time, is this transport's whole point).
 # ---------------------------------------------------------------------------
 
+LIVENESS_PROBE_VERB = "__rogo_daemon_liveness_probe__"
+"""RESERVED wire verb -- see module docstring's "Liveness-probe fast
+path" section for the full rationale. Intercepted directly by
+`UnixSocketListener._serve_client()`, BEFORE `DaemonServer.submit()` is
+ever called, and answered with `Reply.ok(request.id, {"alive": True})`
+-- it carries no session state and is never looked up in a
+`DispatchTable` at all, so it never touches `_execute()`,
+`is_estop_request()`'s classification, or `run_daemon_worker()`'s
+idle-activity tracking. `daemon_client.find_daemon()`'s own
+connectivity probe sends this verb instead of an ordinary RPC,
+specifically so it can never queue behind `DaemonServer`'s single
+worker thread while another client's dispatch is in progress.
+
+DO NOT reuse this string as a key in any caller-supplied
+`DispatchTable` -- a handler registered under it would simply never be
+called, since `_serve_client()` never reaches `submit()` for this verb
+in the first place. Deliberately namespaced/underscore-wrapped to
+avoid colliding with a real per-command verb name, a caller-supplied
+fake dispatch table's own example verbs (`"ping"`/`"hello"`, already
+reused pervasively as such across this test suite's own test
+infrastructure -- `tests/host/rogo/daemon_test_helpers.py`,
+`test_daemon.py`, `test_daemon_transports.py`,
+`test_daemon_sim_e2e.py`), or any of the six `session_*` names
+`daemon_client.build_session_dispatch_table()` defines."""
+
+
 class UnixSocketListener:
     """Binds a Unix domain socket at `socket_path`, accepts connections
     on a background thread, and serves each one on ITS OWN thread: read
@@ -630,6 +699,13 @@ class UnixSocketListener:
     (mirroring `DaemonServer`'s own start()/stop() shape for a
     consistent lifecycle API across both listener transports in this
     module). Also usable as a context manager.
+
+    One verb, `LIVENESS_PROBE_VERB`, is special: `_serve_client()`
+    answers it directly, on this connection's own thread, without ever
+    calling `server.submit()` -- see that constant's own docstring and
+    the module docstring's "Liveness-probe fast path" section for why.
+    Every other verb is unaffected -- routed through `server.submit()`
+    exactly as before.
     """
 
     def __init__(
@@ -742,7 +818,14 @@ class UnixSocketListener:
         (`ProtocolError`) is dropped, not replied to -- there is no
         correlation id to answer against for a line that could not even
         be parsed; the connection stays open for the next (well-formed)
-        line."""
+        line.
+
+        `LIVENESS_PROBE_VERB` is special-cased BEFORE `server.submit()`
+        is ever called: answered immediately, right here on this
+        thread, with `Reply.ok(request.id, {"alive": True})` -- see
+        that constant's own docstring and the module docstring's
+        "Liveness-probe fast path" section for why. Every other verb is
+        unaffected."""
         with client_sock:
             reader = client_sock.makefile("r", encoding="utf-8", newline="\n")
             try:
@@ -754,7 +837,14 @@ class UnixSocketListener:
                         request = decode_request(line)
                     except ProtocolError:
                         continue
-                    reply = self._server.submit(request)
+                    if request.verb == LIVENESS_PROBE_VERB:
+                        # Never DaemonServer.submit() for this one reserved
+                        # verb -- its whole point is to be answerable with
+                        # no session state and no queue involvement at all,
+                        # so it can never queue behind a busy worker thread.
+                        reply = Reply.ok(request.id, {"alive": True})
+                    else:
+                        reply = self._server.submit(request)
                     client_sock.sendall((encode_reply(reply) + "\n").encode("utf-8"))
             except OSError:
                 pass  # client disconnected mid-read/write
