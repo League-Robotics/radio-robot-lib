@@ -56,6 +56,10 @@ in `src/archive/` is compiled or imported by the library.**
 the host build -- see [firmware/microbit/README.md](firmware/microbit/README.md)
 for how to run it and what it verifies.
 
+`docker/pxt-yotta/` is a separate, local PXT/MakeCode build container
+(unrelated to the root `Dockerfile` above) -- see
+[docker/pxt-yotta/README.md](docker/pxt-yotta/README.md).
+
 ## Decisions
 
 | | |
