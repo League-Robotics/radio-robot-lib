@@ -28,6 +28,7 @@ end to end with no hardware at all. See
 ## Layout
 
 ```
+Dockerfile            micro:bit ARM cross-compile check -- see firmware/microbit/README.md
 src/
   archive/            reference copies from radio-robot-elite -- READ ONLY
     diffdrive/          the kernel + its fidelity gate, as extracted
@@ -37,6 +38,9 @@ src/
     robot_v6/          the Python v6 HOST client -- codec, Transport, Session
 tools/
   sim/                a compiled host binary speaking v6 with no robot attached
+firmware/
+  microbit/           CODAL scaffold cross-compiling src/protocol, src/diffdrive,
+                       src/adapter for the micro:bit target -- see its own README
 docs/
   design/
     diffdrive.md          what the kernel is and what it demands of a caller
@@ -47,6 +51,10 @@ docs/
 `src/archive/` is provenance, not product. It is there so the new code can be
 checked against the thing it descends from without a second checkout. **Nothing
 in `src/archive/` is compiled or imported by the library.**
+
+`firmware/microbit/` is a Docker-based ARM cross-compile check, not part of
+the host build -- see [firmware/microbit/README.md](firmware/microbit/README.md)
+for how to run it and what it verifies.
 
 ## Decisions
 

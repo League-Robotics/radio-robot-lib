@@ -6,6 +6,14 @@ build/
 *.a
 # rogo's on-demand tools/sim build cache (rogo.connection.ensure_sim_binary)
 tools/sim/.build/
+# micro:bit CODAL cross-compile (sprint 005): `docker build --output out .`
+# target, and the CODAL target library git-cloned by a host-side (non-
+# Docker) `python3 firmware/microbit/build.py` run.
+/out/
+firmware/microbit/src/libraries/
+firmware/microbit/samples/
+firmware/microbit/MICROBIT.hex
+firmware/microbit/MICROBIT.bin
 
 # python
 __pycache__/

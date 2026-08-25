@@ -1,0 +1,41 @@
+# CI workflow for the micro:bit Docker cross-compile check (sprint 005
+# ticket 002, "Port Docker micro:bit C++ Cross-Compiler from Elite").
+#
+# Ported from radio-robot-elite's own .github/workflows/docker-image.yml,
+# adapted to this repo's default branch (main, not master) and to ticket
+# 001's actual, verified `docker build` invocation and output path
+# (`DOCKER_BUILDKIT=1 docker build -t microbit-tools --output out .`,
+# producing out/MICROBIT.hex and out/MICROBIT.bin — see
+# clasi/sprints/005-.../tickets/done/001-....md's "Verified working
+# invocation" note).
+#
+# Architecture Decision 4 (sprint.md): informational-only. This workflow
+# reports build status but is not wired into branch protection as a
+# required check — that remains a stakeholder/ops decision out of scope
+# for this sprint (sprint.md Open Question 3), matching Elite's own
+# docker-image.yml, which has no such gating either.
+name: Build via Docker
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build using the Docker image
+      env:
+        DOCKER_BUILDKIT: 1
+      run: docker build -t microbit-tools --output out .
+    - name: Directory Listing
+      run: ls -al
+    - name: Upload hex file
+      uses: actions/upload-artifact@v4
+      with:
+        name: Export from Docker
+        path: out/MICROBIT.hex
