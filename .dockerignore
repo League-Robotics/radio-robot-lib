@@ -1,0 +1,28 @@
+# Keep the docker build context small -- only Dockerfile, firmware/microbit/,
+# and src/{protocol,diffdrive,adapter} are actually read (sprint 005 ticket
+# 001). Everything below is host-side tooling/docs/tests irrelevant to the
+# cross-compile and, in the case of .git/.venv, potentially large.
+.git/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
+tests/
+docs/
+tools/
+clasi/
+.clasi/
+.claude/
+.agents/
+
+# local CODAL build artifacts / fetched target libraries from a host-side
+# `python3 build.py` run under firmware/microbit/ -- the container always
+# fetches and builds these fresh.
+firmware/microbit/build/
+firmware/microbit/src/libraries/
+firmware/microbit/samples/
+
+# output of a previous `docker build --output out .` run
+out/
