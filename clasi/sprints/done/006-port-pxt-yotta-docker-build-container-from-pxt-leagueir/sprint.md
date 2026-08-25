@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Port PXT/Yotta Docker Build Container from pxt-leagueir
-status: executing
+status: done
 branch: sprint/006-port-pxt-yotta-docker-build-container-from-pxt-leagueir
 use-cases:
 - SUC-001
