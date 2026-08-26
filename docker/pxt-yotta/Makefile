@@ -55,12 +55,29 @@ info:
 
 # Test the container by running it. Exercises :latest and :gcc5
 # separately so neither tag is left unverified by any Make target.
+#
+# `yotta --version` is NOT sufficient and must never be the whole test:
+# it does not import the build subcommand, so it passed cleanly on an
+# image whose `yotta build` died instantly on a MarkupSafe/Jinja2
+# ImportError (see the pip note in the Dockerfile). `yotta build --help`
+# forces argparse's lazy load of yotta.build -> yotta.lib.cmakegen ->
+# jinja2, which is the exact import chain that broke. `node --version`
+# covers the other silent failure: PXT runs `node prepYotta.js` before
+# `yotta build`, separated by `;`, so a missing node never fails the
+# build -- it just drops GITHUB_ACCESS_TOKEN on the floor.
 .PHONY: test
 test: build
-	@echo "Testing Docker container: $(FULL_IMAGE_NAME)"
-	docker run --rm --entrypoint="" $(FULL_IMAGE_NAME) yotta --version
-	@echo "Testing Docker container: $(FULL_IMAGE_NAME_GCC5)"
-	docker run --rm --entrypoint="" $(FULL_IMAGE_NAME_GCC5) yotta --version
+	@for img in $(FULL_IMAGE_NAME) $(FULL_IMAGE_NAME_GCC5); do \
+		echo "Testing Docker container: $$img"; \
+		docker run --rm --entrypoint="" $$img yotta --version || exit 1; \
+		docker run --rm --entrypoint="" $$img yotta build --help > /dev/null \
+			|| { echo "FAIL: $$img cannot load the yotta build subcommand"; exit 1; }; \
+		docker run --rm --entrypoint="" $$img node --version \
+			|| { echo "FAIL: $$img has no node; prepYotta.js would be skipped"; exit 1; }; \
+		docker run --rm --entrypoint="" $$img arm-none-eabi-gcc -dumpversion \
+			|| { echo "FAIL: $$img has no ARM toolchain"; exit 1; }; \
+	done
+	@echo "All container smoke tests passed."
 
 # Help target
 .PHONY: help
