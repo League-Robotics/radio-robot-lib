@@ -14,7 +14,10 @@ move from the handler to the Adapter, every `ack`/`nack` gains a reason
 token, and the six [motion-api.md](motion-api.md) §9.1 verbs
 (`WHEELS_X`/`WHEELS_V`/`MOVE_X`/`MOVE_V`/`GO_TO_R`/`GO_TO_W`, plus `STOP`'s
 own `now` token) are implemented at the wire/handler layer (`WHEELS` is
-renamed `WHEELS_V`).
+renamed `WHEELS_V`). 2026-08-26 (§8.5): the telemetry-piggybacked
+reliability line is deleted outright — `ack`/`nack` is emitted **only**
+in direct reply to an inbound sequenced line, never periodically, and
+`gapOutstanding_` leaves the handler state with it.
 
 ---
 
@@ -365,7 +368,7 @@ flag first makes a behavioral difference.
 completion channel, now Adapter-owned
 
 The handler POLLS these two methods fresh every time it formats an
-`ack`/`nack` line (§8.1/§8.5) — no callback, no clock, no cached copy
+`ack`/`nack` line (§8.1) — no callback, no clock, no cached copy
 anywhere in `ProtocolHandler`. Monotonic contract: a later `lastDone()`
 value implies every earlier id has also completed, since this library's
 motion runs one command at a time, in order. An adapter with no
@@ -772,22 +775,22 @@ The host may pipeline freely — it never has to wait for an ack before
 sending its next command. The robot acknowledges **cumulatively**: one ack
 covers every earlier id too, which is what lets the scheme survive loss
 with no ring, no per-id storage, and no eviction policy — the entire
-receiver-side state is two numbers.
+receiver-side state is a single number.
 
 Handler state, in full (2026-08-22: `lastDone_` is GONE from this
-list — see §8.8):
+list — see §8.8; 2026-08-26: `gapOutstanding_` is GONE too — see §8.5):
 
 ```cpp
 uint32_t expectedNext_ = 1;   // next sequence id expected from the host
-bool     gapOutstanding_ = false;  // a nack is currently owed (§8.5)
 ```
 
 **Deliberately, there is no `tick()` and no clock anywhere in this list.**
-The periodic half of the scheme (§8.5) rides on the telemetry cadence the
-application already drives — it does not add one of its own. Keeping the
-handler clock-free is load-bearing, not incidental: it is the property that
-lets `feed()` stay a pure function of its input bytes plus this small,
-explicit state, with nothing owed later "on its own."
+There is no periodic half to the scheme at all (2026-08-26, §8.5):
+`feed()` is the only origin of every `ack`/`nack`, each one a direct
+reply to an inbound line. Keeping the handler clock-free is load-bearing,
+not incidental: it is the property that lets `feed()` stay a pure
+function of its input bytes plus this small, explicit state, with
+nothing owed later "on its own."
 
 Every inbound id, for every **sequenced** verb (§8.3's exemption set is the
 only carve-out), is classified into exactly one of three cases:
@@ -864,8 +867,9 @@ not this file's own call the way `ESTOP`/`HELLO`'s exemption originally
 was. All three are exempted because the scheme is structurally
 unbootstrappable and unsafe without them:
 
-- **`HELLO` resets the sequence.** `expectedNext_ = 1`,
-  `gapOutstanding_ = false`, then the banner is emitted — this is the
+- **`HELLO` resets the sequence.** `expectedNext_ = 1` — the handler's
+  entire reliability state since 2026-08-26 (§8.5) — then the banner is
+  emitted; this is the
   session-start resync a host performs on (re)connect. **It does NOT
   reset the Adapter's own `lastDone()`/`lastDoneReason()`** any more
   (2026-08-22, §8.8) — that state moved off this class entirely, and a
@@ -949,26 +953,49 @@ by verb identity) — but it could not tell a garbled square-tour leg apart
 from a merits-rejected one on the wire, which is exactly the gap §8.9
 closes.
 
-### 8.5 Periodic emission — piggybacked on telemetry, still no timer
+### 8.5 Reply-only emission — the telemetry piggyback is DELETED (2026-08-26)
 
-The scheme's loss-survival argument depends on `ack`/`nack` arriving
-*regularly*, not only in direct response to a command — a host that sends
-its last command and then goes quiet would otherwise never learn whether
-that last id actually landed, or what the current `lastDone`/reason ended
-up being.
+**Stakeholder direction, verbatim:** *"An ack or a nack is only a
+response to a message, not a beacon. I do not want to have my
+connections littered with 5 acks or nacks a second."* Observed live on
+an idle bridge session: `< ack 0 0 none` arriving at the telemetry
+cadence with no command ever sent.
 
-**`emitTelemetry()` also emits the current reliability line** on every
-call: `nack <expectedNext_> <lastDone> <reason>` if `gapOutstanding_` is
-set, `ack <expectedNext_ - 1> <lastDone> <reason>` otherwise, where
-`<lastDone>`/`<reason>` are read FRESH off `Adapter::lastDone()`/
-`lastDoneReason()` (§8.8) on every single call — there is no cached copy
-anywhere in `ProtocolHandler`. Telemetry is already periodic and
-application-driven (§3), so this rides that existing cadence for free —
-**no timer, no clock, and no new entry point are added to the handler** to
-make this happen, which is exactly the property §8.1 insisted on keeping.
-It doubles as the retransmit mechanism for a stalled stream: as long as
-telemetry keeps flowing, a gap (numeric OR a decode failure, §8.9) keeps
-producing fresh `nack`s at the telemetry rate with no extra machinery.
+Through 2026-08-25 this section said the opposite — `emitTelemetry()`
+appended the current reliability line (`nack <expectedNext_> <lastDone>
+<reason>` if a gap was outstanding, `ack <expectedNext_ - 1> <lastDone>
+<reason>` otherwise) to every telemetry frame, on the theory that the
+loss-survival argument needed `ack`/`nack` arriving *regularly*, not
+only in reply. That theory bought one thing (a quiet host eventually
+heard the robot's state anyway) and cost the wire an unsolicited ack
+several times a second, forever. **Deleted, not moved:** no periodic,
+beacon, or telemetry-carried `ack`/`nack` of any kind exists any more.
+
+The rule is now one sentence: **an `ack`/`nack` line is emitted only in
+direct response to an inbound sequenced line** — the three rows of
+§8.1's table plus §8.9's decode-failure path — and nothing else in the
+handler ever emits one. `emitTelemetry()` emits `thdr`/`t` frames only.
+
+Loss recovery is host-driven, which §8.9 already required the host to
+be capable of anyway (the host must own its give-up/retry path — this
+library has no clock and structurally cannot own it):
+
+- A lost `ack` heals on the host's own resend: §8.1's `< expectedNext_`
+  row re-acks without re-executing.
+- A lost `nack` heals because every subsequent inbound line — however
+  well-formed — re-triggers `nack <expectedNext_>` while the gap stands
+  (§8.1). A gap still stalls the stream on purpose; it re-nacks per
+  inbound line now, not per telemetry frame.
+- A host that goes quiet after its last command and wants confirmation
+  **polls**: any sequenced verb produces a fresh `ack` carrying
+  `lastDone`/`reason`, and `STATUS` additionally reports
+  `next=<expectedNext_>` (§8.7).
+
+The no-timer/no-clock property §8.1 insists on is untouched — now
+trivially, since there is no periodic half left to schedule. This
+deletion also removes `gapOutstanding_` from the handler state (§8.1):
+its only reader was `emitTelemetry()`'s ack-vs-nack choice, and §8.1's
+table decides every reply from the inbound id alone.
 
 #### 8.5.1 The completion channel's own home — see §8.8
 
@@ -1024,7 +1051,9 @@ virtual DoneReason lastDoneReason() const = 0;   // see §8.8.1
 ```
 
 This removes handler state entirely (`ProtocolHandler` now carries only
-`expectedNext_`/`gapOutstanding_`, §8.1), needs no callback and no clock,
+`expectedNext_`, §8.1 — at the time of this change it also carried
+`gapOutstanding_`, itself deleted 2026-08-26, §8.5), needs no callback
+and no clock,
 and makes the field genuinely live once an Adapter that actually completes
 motions drives it — which nothing in this library did before this change.
 `replyAck()`/`replyNack()` call `adapter_.lastDone()`/`lastDoneReason()`
@@ -1035,7 +1064,8 @@ brief settled the VALUE (`lastDone`) but not whether `HELLO`'s own reset
 should reach into the Adapter to clear it too — the pre-2026-08-22 text
 had HELLO reset `lastDone_ = 0` as part of the same call, back when it was
 handler state. **Resolved: no.** `HELLO`'s reset now only touches
-`expectedNext_`/`gapOutstanding_` — state the HANDLER owns. Reaching
+`expectedNext_` (and, until its 2026-08-26 removal, `gapOutstanding_`,
+§8.5) — state the HANDLER owns. Reaching
 across the seam to clear something the ADAPTER now owns would reintroduce
 exactly the kind of handler-into-adapter coupling this whole move was
 meant to avoid, and there is a real argument that a completed motion
@@ -1135,9 +1165,9 @@ field count, an unparseable numeric field, an unrecognized `TLM` mode,
 bare `RUN` with no function name, or more raw `RUN` tokens than the
 handler's fixed storage can hold) instead calls a dedicated path that
 NACKs `expectedNext_` (still equal to the failed id, since it was never
-accepted) and sets `gapOutstanding_` so a stalled stream keeps re-nacking
-at the telemetry rate (§8.5) exactly like a numeric gap would, until a
-well-formed line finally supplies the same id. `malformedCount()` still
+accepted); a stalled stream keeps re-nacking because every subsequent
+inbound line re-triggers `nack <expectedNext_>` (§8.1) exactly like a
+numeric gap would, until a well-formed line finally supplies the same id. `malformedCount()` still
 increments for a decode failure, exactly as it did before this change.
 
 **What does NOT change:** a numeric gap (`id > expectedNext_`) is still
@@ -1563,11 +1593,11 @@ than picked silently, per this project's own stated practice.
    threading "did I already ack this" state through every handler.
 
 5. **Does `emitTelemetry()`'s piggybacked reliability line come before or
-   after the `thdr`/`t` frame it accompanies?** Not stated. **Resolved:
-   after** — `thdr` (if due), then `t`, then the `ack`/`nack` line. Purely
-   a style choice with no behavioral consequence a test can observe
-   differently either way; documented here so it does not read as an
-   accident.
+   after the `thdr`/`t` frame it accompanies?** Moot as of 2026-08-26
+   (§8.5): `emitTelemetry()` no longer emits any reliability line at
+   all, so there is no ordering left to resolve. (Historical answer,
+   kept for the record: after — `thdr` if due, then `t`, then the
+   `ack`/`nack` line.)
 
 6. **Is `STATUS`'s wrong-arity case still recoverable against an `err`
    the way it implicitly was before?** `STATUS` is sequenced now, so a
@@ -1633,8 +1663,9 @@ Preserved verbatim for the record — this is what §8 said before the
 
 The "handler stays a pure function of the bytes fed to it, nothing to
 tick" property this text worried about protecting is, notably, the SAME
-property §8.1 protects in the new design (`expectedNext_`/`lastDone_`/
-`gapOutstanding_` are ordinary state, not a clock) — the reliability layer
+property §8.1 protects in the new design (`expectedNext_` — and, before
+their own later removals, `lastDone_` and `gapOutstanding_` — is
+ordinary state, not a clock) — the reliability layer
 answers a different question (did the bytes arrive?) than `done` was going
 to (did the motion finish?), and does so without reintroducing the timer
 this section was written to keep out.
@@ -1676,15 +1707,16 @@ in the same spirit as §9.8's own list for the pass before it:
    state.** The pre-2026-08-22 text had `HELLO` reset `lastDone_ = 0` as
    part of the same call, back when it was handler state (§8.3's old
    text). Now that it lives on the Adapter (§8.8), `HELLO`'s reset only
-   touches `expectedNext_`/`gapOutstanding_` — see §8.8's own reasoning
-   for why reaching across the seam would be the wrong call.
+   touches `expectedNext_` (and `gapOutstanding_`, until its 2026-08-26
+   removal, §8.5) — see §8.8's own reasoning for why reaching across the
+   seam would be the wrong call.
 4. **`ack`/`nack` is sent BEFORE the verb's own execute step runs, even
    for a verb (like `STOP`) whose OWN execution can synchronously
    complete a motion.** This means `STOP`'s own ack reflects
    `lastDone`/`lastDoneReason` as they stood immediately BEFORE that
    STOP executed — the completion IT just caused becomes visible
-   starting with the NEXT reply (a later command's ack, or the next
-   telemetry-piggybacked line), not on its own ack. This preserves
+   starting with the NEXT reply (a later command's ack), not on its
+   own ack. This preserves
    dispatch()'s uniform "ack always precedes verb execution, for every
    verb" structure (§8.2/§9.8 item 4 of the pass before this one) rather
    than special-casing STOP to execute-then-ack. Nothing is ever LOST —

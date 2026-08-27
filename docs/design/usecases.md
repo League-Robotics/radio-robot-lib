@@ -251,9 +251,8 @@ the consolidated cross-reference index.
   recovering from a suspected desync.
 - **Main flow:**
   1. Host sends `HELLO` (no id, no fields).
-  2. Robot resets `expectedNext_ = 1`, `gapOutstanding_ = false`, and
-     emits its banner (`device NEZHA2 robot <name> <serial>`) —
-     `protocol#8.3`.
+  2. Robot resets `expectedNext_ = 1` and emits its banner
+     (`device NEZHA2 robot <name> <serial>`) — `protocol#8.3`.
   3. Robot's `lastDone()`/`lastDoneReason()` (Adapter-owned) are **not**
      reset by this — a reconnect does not erase what the robot already
      completed — `protocol#8.8`.

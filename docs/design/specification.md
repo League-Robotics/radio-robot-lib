@@ -125,10 +125,14 @@ and every resolved ambiguity are in `protocol#8`; required behavior:
   handler onto the Adapter in `protocol#8.8`; `DoneReason` vocabulary
   (`none/stop/timeout/estop/aborted`) resolved in `protocol#8.8.1` and
   matches `motion-api#5.1`'s completion reasons.
-- Piggybacked on the existing telemetry cadence (`protocol#8.5`) so a
-  stalled stream keeps re-nacking with no new timer or clock introduced
-  anywhere in the handler — a deliberate, load-bearing constraint
-  (`protocol#8.1`, `protocol#8.0`).
+- **Reply-only** (2026-08-26, `protocol#8.5`): an `ack`/`nack` is emitted
+  only in direct response to an inbound sequenced line — never
+  periodically, never on the telemetry cadence, never as a beacon. A
+  stalled stream keeps re-nacking because each subsequent command is
+  itself nacked (`protocol#8.1`); a quiet host that wants confirmation
+  polls with any sequenced verb (e.g. `STATUS`, which also reports
+  `next=`). Still no timer or clock anywhere in the handler — a
+  deliberate, load-bearing constraint (`protocol#8.1`, `protocol#8.0`).
 - A decode failure the host itself keeps re-sending (a real host bug,
   not transient loss) wedges the stream forever by design; the host
   needs its own give-up path — this library cannot and does not supply
