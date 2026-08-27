@@ -14,13 +14,14 @@
     "_i2c_addresses": {}
   },
   "vision": {
-    "robot_tag_id": 100,
+    "robot_tag_id": 54,
     "camera_distance_scale": 1.0,
     "tag_offset_x": 0,
     "tag_offset_y": 0.0,
     "tag_offset_z": 120.0,
     "tag_offset_yaw": 0.0,
-    "_note": "gopiv is a BENCH TEST RIG (one motor, no wheels, never on the playfield); no physical AprilTag is mounted. robot_tag_id inherited from the template for schema completeness only."
+    "_note": "gopiv is a BENCH TEST RIG (one motor, no wheels, never on the playfield); no physical AprilTag is mounted. robot_tag_id inherited from the template for schema completeness only.",
+    "_tag_id_note": "2026-08-27, stakeholder: this robot physically carries tag 54. Corrected from 100. The 100 in this file did not match the marker actually mounted on the robot -- a stale config value, not a renumbering. Anything that resolved gopiv by tag 100 (an aprilcam mobile-tag registration in particular) must be re-registered against 54, or it will report the wrong robot's centre."
   },
   "geometry": {
     "trackwidth": 128,

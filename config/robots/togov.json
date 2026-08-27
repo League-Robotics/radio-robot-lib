@@ -9,6 +9,7 @@
   },
   "connection": {
     "device_announcement_name": "togov",
+    "radio_channel": 6,
     "serial_last_6": "ade9b4",
     "_i2c_addresses": {}
   },
