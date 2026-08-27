@@ -59,6 +59,26 @@ Spec first (this issue's immediate scope, done OOP), code as follow-up.
 - After the code follow-up: an idle `nc torture 8760` session shows no
   `ack`/`nack` lines at all until a command is sent.
 
+## Status (2026-08-26)
+
+Done: spec rewritten (`a943a3a`), this repo's handler + host client
+fixed (`513c185`, 716 tests pass), and the SHIPPING firmware repo
+`pxt-nezha-diffdrive` fixed the same way (`4a628a0`, 752 tests pass —
+its `WireHandler::emitReliability()` was the actual barrage source on
+the wire). New hex built and flashed to the board UID-registered as
+**tovez** (radio channel 3); verified live over the `torture:8760`
+relay: idle link silent, `PING` → `pong`, `STATUS #1` → exactly one
+ack.
+
+Remaining: the robot answering on **radio channel 4** self-identifies
+as **vevov** (old firmware 1.0.10) and still barrages ~15 acks/sec —
+this is the robot the original capture was listening to (`!C 4`). It
+is not USB-reachable from this machine. When it is plugged in:
+`uv run python tools/make_deploy.py --robot <name> --flash` in
+pxt-nezha-diffdrive. The nezha-upy MicroPython port carries the same
+piggyback (its own `core/protocol.py` `_emit_reliability_line()`) and
+needs the same deletion — tracked separately.
+
 ## Related
 
 - `docs/design/protocol.md` §8.0/§8.1/§8.5/§8.9, `docs/design/specification.md` §4
