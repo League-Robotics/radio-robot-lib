@@ -406,8 +406,9 @@ void ProtocolHandler::dispatch(char* verb, char** fields, size_t fieldCount,
     // A numeric gap: something between expectedNext_ and id never
     // arrived (or arrived out of order). Discard -- do NOT execute, and
     // do not even look up the verb -- and tell the host exactly what we
-    // need next.
-    gapOutstanding_ = true;
+    // need next. Every further inbound line re-triggers this same nack
+    // until the missing id arrives (§8.1) -- that per-inbound-line
+    // repeat is the whole retransmit story now (2026-08-26, §8.5).
     replyNack(expectedNext_);
     return;
   }
@@ -444,7 +445,6 @@ void ProtocolHandler::dispatch(char* verb, char** fields, size_t fieldCount,
   // of whether the ADAPTER goes on to refuse the content on its own
   // merits (docs/design/protocol.md §8.2).
   expectedNext_ = id + 1;
-  gapOutstanding_ = false;
   replyAck(id);
 
   uint8_t errCode = 0;
@@ -458,11 +458,11 @@ void ProtocolHandler::handleDecodeFailure(uint32_t id, uint8_t code) {
   // at all), so nack-ing expectedNext_ unchanged tells the host to
   // resend EXACTLY this id -- "NAK and resend from that point on"
   // (docs/design/protocol.md §8.9, the stakeholder's own framing).
-  // gapOutstanding_ is set so a stalled stream keeps re-nacking at the
-  // telemetry rate (§8.5) exactly like a numeric gap would, until a
-  // well-formed line finally arrives carrying this same id.
+  // A stalled stream keeps re-nacking because every subsequent inbound
+  // line re-triggers nack(expectedNext_) exactly like a numeric gap
+  // would (§8.1), until a well-formed line finally arrives carrying
+  // this same id -- there is no periodic re-nack (2026-08-26, §8.5).
   ++malformedCount_;
-  gapOutstanding_ = true;
   replyNack(expectedNext_);
   replyErr(id, code);
 }
@@ -544,7 +544,6 @@ void ProtocolHandler::handleHello(char** fields, size_t fieldCount) {
   // useful default). Flagged here because the pre-2026-08-22 text
   // explicitly reset `lastDone_` as part of this same call.
   expectedNext_ = 1;
-  gapOutstanding_ = false;
   sendBanner();  // spec §4: HELLO's reply is byte-identical to the
                  // unsolicited boot banner
 }
@@ -1091,21 +1090,9 @@ void ProtocolHandler::emitTelemetry(const Snapshot& snapshot) {
     rememberHeader(snapshot);
   }
   emitFrame(snapshot);
-
-  // The reliability layer's own periodic emission (docs/design/
-  // protocol.md §8.5) -- rides the caller's own telemetry cadence, no
-  // timer of this class's own. A stalled stream (gapOutstanding_) keeps
-  // re-nacking for free at this rate; otherwise this simply re-states
-  // the highest id already accepted, so a host that goes quiet after
-  // its last command still eventually learns it landed. Both branches
-  // poll the Adapter's lastDone()/lastDoneReason() fresh, right now --
-  // there is no cached copy of either on this class any more
-  // (2026-08-22).
-  if (gapOutstanding_) {
-    replyNack(expectedNext_);
-  } else {
-    replyAck(expectedNext_ - 1);
-  }
+  // No reliability line rides here any more (2026-08-26, docs/design/
+  // protocol.md §8.5): an ack/nack is only ever a direct reply to an
+  // inbound sequenced line -- never a beacon on the telemetry cadence.
 }
 
 }  // namespace Protocol

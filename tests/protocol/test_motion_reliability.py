@@ -247,8 +247,8 @@ def test_stop_completes_active_motion_with_reason_stop(tmp_path):
         # not special-cased for STOP), so STOP's OWN ack still reflects
         # lastDone as it stood BEFORE this very STOP executed and
         # completed leg 1 -- the completion becomes visible starting
-        # with the NEXT reply (a later command's ack, or the next
-        # telemetry-piggybacked line), never lost, just one reply later.
+        # with the NEXT reply (a later command's ack), never lost, just
+        # one reply later.
         assert _sink_lines(lib, handle) == [_ack_line(2, 0, DONE_NONE)]
         lib.fmSinkClear(handle)
 
@@ -353,11 +353,13 @@ def test_completion_reason_timeout(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 3. Telemetry emission piggybacks the CURRENT ack/nack, riding the
-#    reliability line's own reason token, mid-motion.
+# 3. Telemetry emission carries NO reliability line (2026-08-26,
+#    docs/design/protocol.md §8.5): mid-motion, the wire stays free of
+#    ack/nack until the HOST gives the handler something to reply to --
+#    a completion is observed on a later command's own ack, by polling.
 # ---------------------------------------------------------------------------
 
-def test_telemetry_piggyback_rides_along_during_a_multi_step_move(tmp_path):
+def test_telemetry_is_silent_and_completion_arrives_on_a_polled_ack(tmp_path):
     lib = _load_shim(tmp_path)
     handle = lib.fmCreate()
     try:
@@ -367,18 +369,25 @@ def test_telemetry_piggyback_rides_along_during_a_multi_step_move(tmp_path):
 
         lib.fmStep(handle)
         lib.fmEmitTelemetryIfActive(handle)
-        lines = _sink_lines(lib, handle)
-        assert lines[-1] == _ack_line(1, 0, DONE_NONE), (
-            "the move hasn't completed yet -- lastDone must still be 0/none")
+        mid_motion = _sink_lines(lib, handle)
+        assert mid_motion, "telemetry frames themselves still flow"
+        assert not any(l.startswith(("ack", "nack")) for l in mid_motion), (
+            "telemetry must not carry a reliability line (§8.5)")
         lib.fmSinkClear(handle)
 
         lib.fmStep(handle)
         lib.fmStep(handle)  # completes on this step
-        lib.fmEmitTelemetryIfActive(handle)  # active() is now false, but the
-                                              # handler doesn't need "active"
-                                              # to emit telemetry -- call it
-                                              # regardless to observe the
-                                              # completed reliability line
+        lib.fmEmitTelemetryIfActive(handle)
+        after_completion = _sink_lines(lib, handle)
+        assert not any(l.startswith(("ack", "nack")) for l in after_completion), (
+            "a completion must NOT be pushed unsolicited -- §8.5")
+        lib.fmSinkClear(handle)
+
+        # The completion is observed by giving the handler something to
+        # reply to: a STATUS poll, whose own ack carries the fresh
+        # (lastDone, reason) pair.
+        _feed(lib, handle, "STATUS #2\n")
+        assert _sink_lines(lib, handle)[0] == _ack_line(2, 1, DONE_STOP)
     finally:
         lib.fmDestroy(handle)
 

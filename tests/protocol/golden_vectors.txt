@@ -351,34 +351,31 @@ OUT NONE
 # ---- Telemetry ----
 
 # Two EMITs in one block: thdr is due once, then t on every call
-# thereafter -- PLUS the reliability layer's own periodic line, now
-# carrying the reason token too. This handle has just been HELLO-reset
-# and never accepted any sequenced command, so "ack 0 0 none" both
-# times.
+# thereafter -- and NOTHING else (2026-08-26, docs/design/protocol.md
+# §8.5: the reliability line that used to ride every EMIT is deleted;
+# an ack/nack is only ever a direct reply to an inbound line).
 EMIT seq:0:412 now:0:38472 flags:1:216 x:0:-1234 y:0:892 h:0:1571 ox:0:-1240 oy:0:889 oh:0:1573
 EMIT seq:0:413 now:0:38504 flags:1:216 x:0:-1198 y:0:901 h:0:1571 ox:0:-1205 oy:0:898 oh:0:1572
 OUT thdr seq now flags x y h ox oy oh
 OUT t 412 38472 d8 -1234 892 1571 -1240 889 1573
-OUT ack 0 0 none
 OUT t 413 38504 d8 -1198 901 1571 -1205 898 1572
-OUT ack 0 0 none
 
-# The same piggyback, but after a real command has been accepted first.
+# Telemetry after a real command has been accepted first: the command's
+# own reply ack appears (a direct reply), the EMIT stays frames-only.
 SETUP wheelsresult 0
 IN WHEELS_V 100 100 1000 #1
 EMIT seq:0:1 now:0:2 x:0:3
 OUT ack 1 0 none
 OUT thdr seq now x
 OUT t 1 2 3
-OUT ack 1 0 none
 
-# The nack arm: a gap left outstanding keeps producing nack at the
-# telemetry rate until the gap is filled.
+# The nack arm: the gap's nack is the REPLY to the inbound line that
+# revealed it; a later EMIT does not repeat it (§8.5) -- the re-nack
+# arrives on the NEXT inbound line instead (§8.1).
 IN WHEELS_V 100 100 1000 #5
 EMIT seq:0:1 now:0:2 x:0:3
 OUT nack 1 0 none
 OUT t 1 2 3
-OUT nack 1 0 none
 
 # ---- debug: robot-to-host only, unaffected by any of these changes ----
 
@@ -458,4 +455,3 @@ EMIT seq:0:9 now:0:99 x:0:1
 OUT ack 1 0 none
 OUT thdr seq now x
 OUT t 9 99 1
-OUT ack 1 0 none

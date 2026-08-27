@@ -48,15 +48,17 @@ def inner(fake_motion_lib):
 def _drive_and_settle(inner: InProcessTransport, session: Session, seq_id: int,
                        *, steps: int = 1) -> None:
     """Confirm `seq_id` is acked, then step its motion to completion.
-    `InProcessTransport` has no clock of its own (unlike a real sim
-    process's --period cadence), so nothing makes a just-updated
-    lastDone/reason wire-visible on its own -- this helper calls
-    `emit_telemetry()` after every step, mirroring what a real robot's
-    own periodic tick does for free (docs/design/protocol.md S8.5)."""
+    Nothing makes a just-updated lastDone/reason wire-visible on its
+    own any more (2026-08-26, docs/design/protocol.md S8.5: telemetry
+    carries no reliability line, and an ack/nack is only ever a direct
+    reply) -- so this helper POLLS after every step: a sequenced STATUS
+    whose own ack carries the fresh (lastDone, reason) pair. NOTE this
+    consumes a sequence id (and an outbound line) per step -- tests
+    using LossyTransport index-based drops must count these."""
     assert session.wait_for_ack(seq_id, timeout=2.0), f"#{seq_id} was never acked"
     for _ in range(steps):
         inner.step()
-        inner.emit_telemetry()
+        session.send("STATUS")
         session.pump(0.2)
     assert session.last_done == seq_id, (
         f"expected last_done == {seq_id}, got {session.last_done}")
@@ -116,12 +118,12 @@ def test_single_motion_command_acks_then_reports_done(inner):
     assert session.last_done == 0, "not done after just the ack"
 
     inner.step()
-    inner.emit_telemetry()
+    session.send("STATUS")  # poll: completion only rides a reply (S8.5)
     session.pump(0.2)
     assert session.last_done == 0, "1/2 steps -- not done yet"
 
     inner.step()  # completes on this step
-    inner.emit_telemetry()
+    session.send("STATUS")
     session.pump(0.2)
     assert session.last_done == seq_id
     assert session.last_done_reason == "stop"
@@ -150,7 +152,11 @@ def test_single_motion_command_acks_then_reports_done(inner):
 # ---------------------------------------------------------------------------
 
 def test_dropped_command_in_a_square_tour_is_nacked_and_resent_and_completes(inner):
-    transport = LossyTransport(inner, drop_outbound={3})
+    # Outbound line 5 is MOVEMENT 3: lines 1-4 are mov1, its settle
+    # poll's STATUS, mov2, and ITS settle poll's STATUS (2026-08-26:
+    # _drive_and_settle polls per step now that telemetry carries no
+    # reliability line, S8.5 -- each poll is an outbound line too).
+    transport = LossyTransport(inner, drop_outbound={5})
     session = Session(transport)
     inner.set_steps_to_complete(1)
 
@@ -223,8 +229,8 @@ def test_dropped_command_in_a_square_tour_is_nacked_and_resent_and_completes(inn
     # producing its own completion -- exactly what "the Motion Layer
     # will execute them in order" means, proven end to end.
     assert session.last_done == id8
-    assert session.highest_acked == id8
-    assert session.pending_count == 0
+    assert session.highest_acked >= id8  # >=: the settle polls' own
+    assert session.pending_count == 0    # STATUS ids ack past id8
 
 
 def test_pipelining_two_motions_past_an_unpaced_resend_queues_the_later_one_behind_the_earlier(
@@ -260,7 +266,7 @@ def test_pipelining_two_motions_past_an_unpaced_resend_queues_the_later_one_behi
 
     for _ in range(5):  # stepsToComplete
         inner.step()
-    inner.emit_telemetry()
+    session.send("STATUS")  # poll: completion only rides a reply (S8.5)
     session.pump(0.3)
     assert session.last_done == id1, "id1 completes FIRST, on its own"
     assert session.last_done_reason == "stop"
@@ -268,13 +274,14 @@ def test_pipelining_two_motions_past_an_unpaced_resend_queues_the_later_one_behi
 
     for _ in range(5):  # stepsToComplete
         inner.step()
-    inner.emit_telemetry()
+    session.send("STATUS")
     session.pump(0.3)
     assert session.last_done == id2, "id2 completes SECOND, with its own done"
-    assert session.highest_acked == 2, (
+    assert session.highest_acked >= id2, (
         "the ACK stream was always correct -- both ids were, "
-        "individually, delivered, decoded, and acked in order -- and "
-        "now the motion effect matches it: neither was superseded")
+        "individually, delivered, decoded, and acked in order (the >= "
+        "covers the settle polls' own STATUS ids) -- and now the "
+        "motion effect matches it: neither was superseded")
 
 
 # ---------------------------------------------------------------------------

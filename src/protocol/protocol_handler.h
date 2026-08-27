@@ -13,8 +13,10 @@
 //
 // No kernel, no motors, no config storage, no transport, and (deliberately
 // — §8.1) NO CLOCK: bytes in via feed(), bytes out via Sink, with exactly
-// two small pieces of state between calls (expectedNext_, gapOutstanding_)
-// plus the pre-existing partial-line buffer and malformed counter.
+// one small piece of state between calls (expectedNext_ — gapOutstanding_
+// is GONE, 2026-08-26, §8.5: its only reader was the deleted telemetry
+// ack piggyback) plus the pre-existing partial-line buffer and malformed
+// counter.
 // `lastDone_` is GONE from this class (2026-08-22) — see adapter.h's own
 // `lastDone()`/`lastDoneReason()` doc comment for where it moved and why.
 //
@@ -51,9 +53,9 @@
 //     ack(expectedNext_ - 1) -- the already-accepted id, not the resent
 //     one, so the host learns "I already have this."
 //   - id > expectedNext_  -> a gap. NOT executed, and the verb is not
-//     even looked up. Replies nack(expectedNext_), and sets
-//     gapOutstanding_ so emitTelemetry() (§8.5) keeps re-nacking for free
-//     until the missing id arrives.
+//     even looked up. Replies nack(expectedNext_); every further inbound
+//     line re-triggers the same nack until the missing id arrives (§8.1)
+//     -- there is no periodic re-nack (2026-08-26, §8.5).
 //   - id == expectedNext_ -> the verb is looked up and its OWN fields
 //     are decoded (arity + per-field parseability) BEFORE any reply is
 //     sent at all (2026-08-22, docs/design/protocol.md §8.9 -- this is
@@ -62,9 +64,9 @@
 //         DECODE FAILURE" -- the line did not arrive intact) -> the
 //         sequence does NOT advance; replies nack(expectedNext_)
 //         (still the SAME id, since it was never accepted) AND
-//         err(id, code); malformedCount() increments;
-//         gapOutstanding_ is set so telemetry keeps re-nacking until
-//         the SAME id arrives well-formed.
+//         err(id, code); malformedCount() increments; every further
+//         inbound line keeps re-nacking until the SAME id arrives
+//         well-formed.
 //       - decoded fine (arity and every field parse), but the ADAPTER
 //         refuses it on merit (e.g. an out-of-range speed) -> the
 //         sequence ADVANCES (it arrived intact); replies ack(id) AND
@@ -211,13 +213,12 @@ class ProtocolHandler {
 
   // thdr: once, on the first call and again whenever the column set
   // changes (docs/design/protocol.md §10.2: `thdr` / `t` — the frame is
-  // self-describing); t: every call; THEN the current reliability
-  // line -- nack(expectedNext_) if a gap is outstanding, ack(expectedNext_
-  // - 1) otherwise (docs/design/protocol.md §8.5), each carrying
-  // whatever the Adapter's lastDone()/lastDoneReason() report AT THE
-  // MOMENT this call runs. This is the ONLY periodic entry point in
-  // this class, and it rides a cadence the CALLER drives -- the handler
-  // itself still owns no timer and no clock.
+  // self-describing); t: every call. NOTHING ELSE (2026-08-26,
+  // docs/design/protocol.md §8.5): the reliability line that used to
+  // ride every call is deleted -- an ack/nack is only ever a direct
+  // reply to an inbound sequenced line, never a beacon. This rides a
+  // cadence the CALLER drives -- the handler itself still owns no timer
+  // and no clock.
   void emitTelemetry(const Snapshot& snapshot);
 
   // Lines dropped as unknown verb, wrong arity, or an unparseable field
@@ -423,10 +424,10 @@ class ProtocolHandler {
   uint32_t malformedCount_ = 0;
 
   // ---- the reliability layer's own state (docs/design/protocol.md §8.1)
-  // -- exactly these two fields now (2026-08-22: lastDone_ moved to the
-  // Adapter, adapter.h), and deliberately NO clock/timer. ----
+  // -- exactly this one field now (2026-08-22: lastDone_ moved to the
+  // Adapter, adapter.h; 2026-08-26: gapOutstanding_ deleted with the
+  // telemetry ack piggyback, §8.5), and deliberately NO clock/timer. ----
   uint32_t expectedNext_ = 1;       // next sequence id expected from the host
-  bool gapOutstanding_ = false;     // a nack is currently owed (§8.5)
 
   // Last-emitted thdr: column set (copied, not borrowed — see
   // rememberHeader() in the .cpp for why a copy is worth the fixed

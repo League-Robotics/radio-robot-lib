@@ -1233,12 +1233,13 @@ def test_in_order_but_rejected_on_merits_gets_both_ack_and_err(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Periodic emission: emitTelemetry() also emits the current reliability
-# line (docs/design/protocol.md §8.5), now including the reason token,
-# polling the Adapter fresh every call (2026-08-22).
+# Reply-only emission (docs/design/protocol.md §8.5, 2026-08-26): the
+# telemetry ack piggyback is DELETED. emitTelemetry() emits thdr/t frames
+# only; an ack/nack is only ever a direct reply to an inbound sequenced
+# line, and a stalled stream re-nacks per inbound line, not per frame.
 # ---------------------------------------------------------------------------
 
-def test_emit_telemetry_appends_ack_when_caught_up(tmp_path):
+def test_emit_telemetry_emits_frames_only_no_reliability_line(tmp_path):
     lib = _load_shim(tmp_path)
     handle = lib.phCreate()
     runner = _GoldenVectorRunner(lib, handle)
@@ -1251,13 +1252,14 @@ def test_emit_telemetry_appends_ack_when_caught_up(tmp_path):
         assert _sink_lines(lib, handle) == [
             "thdr seq now x",
             "t 1 1000 5",
-            _ack(1),
         ]
     finally:
         lib.phDestroy(handle)
 
 
-def test_emit_telemetry_appends_nack_while_a_gap_is_outstanding(tmp_path):
+def test_emit_telemetry_stays_silent_even_while_a_gap_is_outstanding(tmp_path):
+    """An outstanding gap must NOT leak onto the telemetry channel: the
+    re-nack arrives on the next INBOUND line (§8.1), never on a frame."""
     lib = _load_shim(tmp_path)
     handle = lib.phCreate()
     runner = _GoldenVectorRunner(lib, handle)
@@ -1270,38 +1272,38 @@ def test_emit_telemetry_appends_nack_while_a_gap_is_outstanding(tmp_path):
         assert _sink_lines(lib, handle) == [
             "thdr seq now x",
             "t 1 1000 5",
-            _nack(1),
         ]
 
+        # The stalled stream still re-nacks -- per inbound line.
         lib.phSinkClear(handle)
-        runner.apply_action("EMIT", ["seq:0:2", "now:0:1001", "x:0:6"])
-        assert _sink_lines(lib, handle) == ["t 2 1001 6", _nack(1)]
+        _feed(lib, handle, "WHEELS_V 6 6 100 #6\n")
+        assert _sink_lines(lib, handle) == [_nack(1)]
 
         _feed(lib, handle, "WHEELS_V 1 1 100 #1\n")
         lib.phSinkClear(handle)
-        runner.apply_action("EMIT", ["seq:0:3", "now:0:1002", "x:0:7"])
-        assert _sink_lines(lib, handle) == ["t 3 1002 7", _ack(1)]
+        runner.apply_action("EMIT", ["seq:0:2", "now:0:1001", "x:0:6"])
+        assert _sink_lines(lib, handle) == ["t 2 1001 6"]
     finally:
         lib.phDestroy(handle)
 
 
-def test_emit_telemetry_reflects_the_adapters_current_lastdone(tmp_path):
-    """2026-08-22: the piggyback polls the Adapter fresh on every call --
-    changing MockAdapter's canned lastDone/lastDoneReason between two
-    emitTelemetry() calls must be visible on the SECOND one immediately,
-    with no caching anywhere in ProtocolHandler."""
+def test_reply_acks_reflect_the_adapters_current_lastdone(tmp_path):
+    """2026-08-22 (retargeted 2026-08-26 from the deleted telemetry
+    piggyback to reply acks): every ack polls the Adapter's
+    lastDone()/lastDoneReason() fresh -- changing MockAdapter's canned
+    values between two commands must be visible on the SECOND command's
+    own ack immediately, with no caching anywhere in ProtocolHandler."""
     lib = _load_shim(tmp_path)
     handle = lib.phCreate()
-    runner = _GoldenVectorRunner(lib, handle)
     try:
-        runner.apply_action("EMIT", ["seq:0:1", "now:0:1"])
-        assert _sink_lines(lib, handle)[-1] == _ack(0, 0, DONE_NONE)
+        _feed(lib, handle, "STATUS #1\n")
+        assert _sink_lines(lib, handle)[0] == _ack(1, 0, DONE_NONE)
         lib.phSinkClear(handle)
 
         lib.phSetLastDone(handle, 9)
         lib.phSetLastDoneReason(handle, DONE_TIMEOUT)
-        runner.apply_action("EMIT", ["seq:0:2", "now:0:2"])
-        assert _sink_lines(lib, handle)[-1] == _ack(0, 9, DONE_TIMEOUT)
+        _feed(lib, handle, "STATUS #2\n")
+        assert _sink_lines(lib, handle)[0] == _ack(2, 9, DONE_TIMEOUT)
     finally:
         lib.phDestroy(handle)
 
@@ -1919,14 +1921,14 @@ def test_tlm_hdr_forces_a_fresh_thdr_before_the_next_t_frame(tmp_path):
         # Establish the header once -- the ordinary first-frame case.
         runner.apply_action("EMIT", ["seq:0:1", "now:0:1000", "x:0:5"])
         assert _sink_lines(lib, handle) == [
-            "thdr seq now x", "t 1 1000 5", _ack(0),
+            "thdr seq now x", "t 1 1000 5",
         ]
         lib.phSinkClear(handle)
 
         # Same column set again -- thdr must NOT repeat (baseline §10.2
         # behavior, the contrast case for what follows).
         runner.apply_action("EMIT", ["seq:0:2", "now:0:1001", "x:0:6"])
-        assert _sink_lines(lib, handle) == ["t 2 1001 6", _ack(0)]
+        assert _sink_lines(lib, handle) == ["t 2 1001 6"]
         lib.phSinkClear(handle)
 
         # Simulate losing the header and ask for a fresh one.
@@ -1938,7 +1940,7 @@ def test_tlm_hdr_forces_a_fresh_thdr_before_the_next_t_frame(tmp_path):
         # though the column set is still identical to the last frame.
         runner.apply_action("EMIT", ["seq:0:3", "now:0:1002", "x:0:7"])
         assert _sink_lines(lib, handle) == [
-            "thdr seq now x", "t 3 1002 7", _ack(1),
+            "thdr seq now x", "t 3 1002 7",
         ]
     finally:
         lib.phDestroy(handle)
@@ -1958,16 +1960,14 @@ def test_emit_telemetry_header_reprinted_only_on_column_change(tmp_path):
         assert _sink_lines(lib, handle) == [
             "thdr seq now x",
             "t 1 1000 5",
-            _ack(0),
             "t 2 1001 6",
-            _ack(0),
         ]
 
         lib.phSinkClear(handle)
         runner.apply_action(
             "EMIT", ["seq:0:3", "now:0:1002", "x:0:7", "y:0:8"])
         assert _sink_lines(lib, handle) == [
-            "thdr seq now x y", "t 3 1002 7 8", _ack(0),
+            "thdr seq now x y", "t 3 1002 7 8",
         ]
     finally:
         lib.phDestroy(handle)

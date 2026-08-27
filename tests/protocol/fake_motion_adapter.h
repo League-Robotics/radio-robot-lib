@@ -334,11 +334,11 @@ class FakeMotionAdapter : public Adapter {
   // ---- telemetry projection (NOT part of Protocol::Adapter -- the
   // harness calls this once per frame it wants to emit, then hands the
   // Snapshot straight to ProtocolHandler::emitTelemetry(), the same
-  // shape DiffDriveAdapter::buildSnapshot() already established). This
-  // is what makes the ack/nack piggyback ride along for real during a
-  // multi-step move, exactly as the ticket asks: "emit telemetry frames
-  // as it progresses ... so the ack/nack piggyback rides along and is
-  // exercised for real." ----
+  // shape DiffDriveAdapter::buildSnapshot() already established).
+  // 2026-08-26 (protocol.md §8.5): emitTelemetry() emits frames ONLY --
+  // the ack/nack line that used to ride along is deleted; completion
+  // state reaches a host on the ack of its next command (e.g. a STATUS
+  // poll), which the tests now exercise instead. ----
   const Snapshot& buildSnapshot() {
     size_t n = 0;
     columns_[n++] = Column{"active", active() ? 1 : 0, false};

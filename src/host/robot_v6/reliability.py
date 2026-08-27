@@ -136,11 +136,16 @@ class Session:
         self._last_done = 0
         self._last_done_reason = "none"
 
-        # Resend-storm guard (docs/design/protocol.md S8.5: a gap keeps
-        # re-nacking at the telemetry rate on its own) -- see
-        # `_maybe_resend_from()`.
+        # Resend-storm guard (docs/design/protocol.md S8.1: a stalled
+        # stream re-nacks on EVERY subsequent inbound line, so a
+        # pipelined backlog provokes a burst of identical nacks) -- see
+        # `_maybe_resend_from()`. Since 2026-08-26 (S8.5) the robot
+        # never emits an ack/nack unprompted, so the host also owns
+        # completion polling (`_maybe_poll_status()`), paced by the
+        # same cooldown.
         self._last_nack_next: int | None = None
         self._last_resend_time = 0.0
+        self._last_status_poll = 0.0
 
     # ---- observable state ----------------------------------------
 
@@ -257,14 +262,13 @@ class Session:
         forward, in order").
 
         Guarded by a cooldown, not fired on every single nack line
-        seen: `emitTelemetry()` re-emits the SAME nack at the telemetry
-        rate for as long as a gap is outstanding (S8.5), specifically
-        so a host that missed the first one catches a later one for
-        free -- if this method resent on every single one of those, a
-        stalled stream would retransmit its entire backlog dozens of
-        times a second for as long as the gap lasted, which helps
-        nothing and floods the link right when it is already in
-        trouble. Resending happens at most once per `resend_cooldown`
+        seen: a stalled stream re-nacks the SAME next-id on EVERY
+        subsequent inbound line (S8.1) -- a pipelined backlog therefore
+        provokes one identical nack per line already in flight -- and
+        if this method resent on every single one of those, a stalled
+        stream would retransmit its entire backlog many times over,
+        which helps nothing and floods the link right when it is
+        already in trouble. Resending happens at most once per `resend_cooldown`
         seconds for the SAME `next_id`; a nack naming a DIFFERENT
         `next_id` (the gap moved -- the missing command finally arrived
         and a new one opened further along) always resends immediately
@@ -282,12 +286,38 @@ class Session:
         for pending_id in sorted(i for i in self._pending if i >= next_id):
             self._transport.send_line(self._pending[pending_id])
 
+    def _maybe_poll_status(self) -> None:
+        """Completion polling (docs/design/protocol.md S8.5,
+        2026-08-26): `lastDone`/its reason only ever arrive riding a
+        direct reply now, so a host awaiting a completion must give the
+        robot something to reply TO. A sequenced `STATUS` is the spec's
+        own suggestion -- the ack it provokes carries a fresh
+        (`lastDone`, reason) pair. Paced by `resend_cooldown`; skipped
+        while the pending buffer is full (the backlog's own acks/nacks
+        will carry the same state)."""
+        now = time.monotonic()
+        if now - self._last_status_poll < self._resend_cooldown:
+            return
+        if len(self._pending) >= self._max_pending:
+            return
+        self._last_status_poll = now
+        self.send("STATUS")
+
     # ---- waiting ----------------------------------------------------
 
     def wait_for_ack(self, seq_id: int, timeout: float | None = 5.0) -> bool:  # [s]
         """Block, pumping internally, until a cumulative ack has
         retired `seq_id` (`highest_acked >= seq_id`) or `timeout`
-        seconds elapse. Returns whether it was retired in time."""
+        seconds elapse. Returns whether it was retired in time.
+
+        Deliberately PASSIVE (no probe, no resend of its own): recovery
+        from a lost line is triggered by the NEXT command the caller
+        sends -- its own nack auto-resends the backlog
+        (`_maybe_resend_from()`), the stakeholder-blessed choreography
+        the flagship square-tour test pins. A caller whose ack never
+        arrives and who has nothing further to send reads the False
+        return as its cue to act (docs/design/protocol.md S8.9: the
+        host owns its give-up path)."""
         deadline = None if timeout is None else time.monotonic() + timeout
         while self._highest_acked < seq_id:
             remaining = None if deadline is None else deadline - time.monotonic()
@@ -326,5 +356,9 @@ class Session:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 return None
+            # 2026-08-26 (S8.5): completion state only ever rides a
+            # direct reply now, so give the robot something to reply to
+            # while we wait -- see _maybe_poll_status().
+            self._maybe_poll_status()
             self.pump(0.1 if remaining is None else min(0.1, remaining))
         return DoneEvent(id=seq_id, reason=self._last_done_reason)

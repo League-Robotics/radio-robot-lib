@@ -56,8 +56,11 @@ def test_drive_a_motion_and_observe_telemetry_and_completion_via_ack(sim_transpo
 
     # The sim's own --period 10 cadence drives FakeMotionAdapter::step()
     # and emitTelemetry() on its own -- no test-side step() call at all,
-    # unlike the in-process reliability tests. wait_for_done() must
-    # observe the completion arrive via the ack/nack piggyback for real.
+    # unlike the in-process reliability tests. Telemetry carries no
+    # reliability line any more (2026-08-26, protocol.md S8.5), so
+    # wait_for_done() must observe the completion via its OWN sequenced
+    # STATUS polls -- each poll's ack carries the fresh lastDone -- for
+    # real, against the real sim.
     done = session.wait_for_done(seq_id, timeout=5.0)
     assert done is not None, "lastDone never reached the commanded id in time"
     assert done.id == seq_id

@@ -418,8 +418,8 @@ def test_recovers_after_every_adversarial_input_in_one_session(fuzz_driver):
     interleaved after every case; every one must come back clean, and
     (being unsequenced and state-resetting) each one's expected output
     is the SAME fixed banner regardless of anything any earlier case did
-    to expectedNext_/gapOutstanding_ -- the property a sequenced PING
-    could not offer here (see this module's own docstring point 2)."""
+    to expectedNext_ -- the property a sequenced PING could not offer
+    here (see this module's own docstring point 2)."""
     chunks = []
     for _name, case_chunks in ADVERSARIAL_CASES:
         chunks.extend(case_chunks)
