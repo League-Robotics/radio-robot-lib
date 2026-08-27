@@ -48,11 +48,11 @@ cd docker/pxt-yotta
 make build
 ```
 
-A single `make build` tags the resulting image **both**
-`pext/yotta:latest` and `pext/yotta:gcc5` — the `pxt-microbit` target
-vendored by this repo's ecosystem (e.g. `pxt-nezha-diffdrive`) requests
-the `:gcc5` tag specifically, so both need to exist locally for PXT to
-find a local image instead of falling back to the cloud compiler.
+`make build` produces **only** `pext/yotta:latest`, and pulls
+`pext/yotta:gcc5` from Docker Hub. The two tags are different images on
+purpose — see "The two tags are not the same image" below. Both must
+exist locally or PXT falls back to the cloud compiler for whichever
+variant's tag is missing.
 
 Or to rebuild without cache:
 
@@ -60,12 +60,45 @@ Or to rebuild without cache:
 make rebuild
 ```
 
+## The two tags are not the same image
+
+`pxt-microbit` asks for a **different image per micro:bit variant**:
+
+| variant | board | build engine | image |
+|---|---|---|---|
+| `mbcodal` | micro:bit V2 | codal | `pext/yotta:latest` |
+| `mbdal` | micro:bit V1 | yotta | `pext/yotta:gcc5` |
+
+Only `:latest` is ours to build. `:gcc5` is pulled from Docker Hub.
+
+The `gcc5` in that tag is load-bearing, not decorative: the V1 yotta
+target's `NRF51822.ld` budget is calibrated against the GCC 5.4
+toolchain, and this `Dockerfile` (Ubuntu 20.04) ships GCC 9.2.1.
+Measured against `pxt-nezha-diffdrive` on 2026-08-25, building the V1
+variant with a GCC 9 image tagged `:gcc5`:
+
+```
+ld: source/pxt-microbit-app section `.text' will not fit in region `FLASH'
+ld: region `FLASH' overflowed by 5648 bytes
+```
+
+The upstream GCC 5.4.1 image links the *same sources* cleanly. The
+failure mode is nasty because it reads as "my program got too big" in
+the consuming project, and the consuming project is where people go
+looking. `make test` now asserts the `:gcc5` image really reports GCC
+5.x so the tag can never quietly lie again.
+
+The upstream image is **amd64-only**, so on Apple Silicon it runs under
+emulation. That is slower, but it is the toolchain the V1 link budget
+assumes, and the V1 hex is discarded anyway — correctness costs nothing
+here.
+
 ## Configuration
 
 No configuration is needed in this repo — PXT finds `pext/yotta:latest`
-and `pext/yotta:gcc5` locally by tag name alone once they have been
-built. A consuming MakeCode target's own `pxtarget.json` names the tag
-it wants via `compileService.dockerImage`, e.g.:
+and `pext/yotta:gcc5` locally by tag name alone once they are present.
+A consuming MakeCode target's own `pxtarget.json` names the tag it wants
+via `compileService.dockerImage`, e.g.:
 
 ```json
 {
@@ -90,12 +123,15 @@ extensions in another repo. The build process:
 
 ## Available Make Targets
 
-- `make build` - Build the Docker image, tagged both `:latest` and `:gcc5`
-- `make rebuild` - Build with no cache (force rebuild), both tags
-- `make push` - Push both tags to a registry (requires login)
-- `make clean` - Remove both tagged images locally
+- `make build` - Build `:latest` (ours) and ensure `:gcc5` (upstream) is pulled
+- `make rebuild` - Build `:latest` with no cache (force rebuild)
+- `make pull-gcc5` - Pull the upstream GCC 5.4.1 image for the V1 variant
+- `make push` - Push `:latest` to a registry (requires login). Never
+  `:gcc5` — that image is upstream's, not ours to republish
+- `make clean` - Remove `:latest`; keeps the slow emulated `:gcc5` pull
+- `make clean-gcc5` - Remove the upstream `:gcc5` image
 - `make info` - Show image information
-- `make test` - Test the container under both tags
+- `make test` - Smoke-test both tags, including the `:gcc5` GCC-version check
 - `make help` - Show help message
 
 ## Testing
@@ -106,14 +142,21 @@ To test the container locally:
 make test
 ```
 
-This builds the image and runs `yotta --version` inside it under both
-the `:latest` and `:gcc5` tags to confirm yotta is actually installed
-and runnable, not just that the image built. Equivalently, by hand:
+`yotta --version` on its own is **not** a sufficient test and must never
+be the whole of one. It does not import the build subcommand, so it
+passed cleanly on an image whose `yotta build` died instantly on a
+MarkupSafe/Jinja2 `ImportError` (see the pip note in the `Dockerfile`).
+`make test` therefore checks, per tag:
 
-```bash
-docker run --rm --entrypoint="" pext/yotta:latest yotta --version
-docker run --rm --entrypoint="" pext/yotta:gcc5 yotta --version
-```
+- `yotta --version` — yotta is installed
+- `yotta build --help` — forces argparse's lazy load of
+  `yotta.build` → `yotta.lib.cmakegen` → `jinja2`, the exact import
+  chain that broke
+- `node --version` — PXT runs `node prepYotta.js; yotta build`. The
+  separator is `;`, so a missing node never fails the build; it just
+  silently drops `GITHUB_ACCESS_TOKEN` on the floor
+- `arm-none-eabi-gcc -dumpversion` — the toolchain is present, and for
+  `:gcc5`, that it really is 5.x
 
 ## Deployment
 

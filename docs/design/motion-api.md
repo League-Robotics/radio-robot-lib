@@ -447,9 +447,25 @@ assumed everywhere else.
   then-silent host produced **936 mm of continued travel with no decay**.
   Confirm the robot actually stopped — active flag clear, encoders holding —
   and re-issue if it did not.
-- **Roughly 5% of moves are lost silently over the radio.** The enqueue
+- **Moves are lost silently over the radio.** The enqueue
   acknowledgement is generated locally, so it proves the host spoke, not that
   the robot heard. Confirm motion actually started before believing it.
+
+  **The "roughly 5%" figure this invariant carried through 2026-08-26 is
+  FLAGGED, not withdrawn (2026-08-27), and the discrepancy runs in the
+  unsafe direction.** It is sourced to a named bench test
+  (`src/tests/bench/radio_move_reliability.py`) measuring lost *moves*,
+  which is a different quantity from the lost *lines* measured in
+  `protocol#8.0` — so it is not simply superseded and is not rewritten
+  here. But a move cannot survive a lost command line, and per-line
+  delivery on ch4 measured 66.5-83.3% on 2026-08-27 against a 99.5% wired
+  control. Those cannot both describe the same link at the same time:
+  either the bench run saw a much better channel (delivery drifted 17
+  points inside two hours, so this is entirely possible), or it measured
+  post-retry loss, or the channel has changed. **Until it is re-run,
+  assume the loss rate is the higher one.** An invariant that
+  under-states loss tells an operator to be mildly careful when it should
+  be telling them to verify every move — `protocol#8.0`, `protocol#9.11`.
 - **Ids are unique for the session and strictly incrementing** — this is
   now enforced structurally, not by an error code: `protocol.md` §8's
   reliability layer requires the handler to see a MONOTONIC sequence, so a
@@ -682,7 +698,7 @@ Every measured number above comes from one of these.
 | 39.8 cm / 5.9 s versus 2.9 cm / 0.10 s | `.claude/rules/playfield-testing.md` |
 | `estop` failing 5 of 6; 936 mm of travel | measured on `vevov`, 2026-08-03 |
 | polling a move: 197.5 mm → 0.3 mm | measured over the relay, 2026-08-19 |
-| ~5% of moves lost, ack proves nothing | `src/tests/bench/radio_move_reliability.py` |
+| ~5% of moves lost, ack proves nothing (figure FLAGGED 2026-08-27 — see §6; `protocol#8.0` measures 17-33% per-line loss on ch4) | `src/tests/bench/radio_move_reliability.py` |
 | arrival tolerance 100 mm → 10 mm, error 76 mm → 12.7 mm | `tovez.json`, camera-truth measurement |
 
 Paths without a repository are in `radio-robot-elite`.

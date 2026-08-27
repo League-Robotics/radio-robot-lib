@@ -68,13 +68,32 @@ that reduce to the two wheel primitives the wire already carries.
 Full per-verb table (arity, sequenced/unsequenced, reply shape) is
 `protocol#6`; do not duplicate it here. Load-bearing summary:
 
-- **Sequenced** (require `#id`): `ID VER STATUS HELP GET SET TLM
-  WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP RUN`.
+- **Sequenced** (require `#id`): `GET SET TLM WHEELS_X WHEELS_V MOVE_X
+  MOVE_V GO_TO_R GO_TO_W STOP RUN`.
 - **Unsequenced** (never carry an id, maximally forgiving of trailing
   content): `HELLO` (resets the sequence), `ESTOP` (panic stop, always
   executes and always replies `estop`), `PING` (liveness, answers even
-  while the stream is stalled on a gap) — full rationale for each
-  exemption in `protocol#8.3`.
+  while the stream is stalled on a gap), and — as of 2026-08-27 —
+  `HELP`, `ID`, `VER`, `STATUS`.
+- **The rule that decides membership** (`protocol#8.3`): a verb is
+  sequenced **iff its correctness depends on its position in the
+  stream** — either because executing it twice changes the robot, or
+  because answering it out of order yields a wrong answer. `GET` is
+  read-only but sequenced on the second clause (a `GET` racing a pending
+  `SET` returns a stale value with nothing marking it stale); it is the
+  rule working, not an exception to it.
+- **Unsequenced verbs still carry a conditional reminder**
+  (`protocol#8.3`, 2026-08-27): when a gap or decode-failure stall is
+  outstanding, `PING`/`HELP`/`ID`/`VER`/`STATUS` emit `nack
+  <expectedNext_> <lastDone> <reason>` after their own reply. On a clean
+  stream they emit nothing. `ESTOP` (bare `estop`, never queues) and
+  `HELLO` (resets the state it would report on) are excluded. Sequence
+  gating and reply emission are separable; only the first was ever
+  objected to.
+- **Probing is three verbs with three jobs** (`protocol#8.3`): `PING` =
+  alive; `STATUS` = alive and where the sequence stands; `HELLO` = start
+  over. **`HELLO` is not a health check** — it resets `expectedNext_`,
+  and firing it at a live session can wedge it permanently.
 - **Outcome model** (`protocol#6.1`): `ok` no longer exists — acceptance
   is the transport-layer `ack` alone. `err <code> #<id>` reports an
   application-level rejection (see the error code table there). `ret
@@ -99,8 +118,13 @@ an empty allowlist, not a stub (`protocol#6.3`, `protocol#9.10` item 1).
 
 ## 4. The reliability layer (protocol#8)
 
-The core delivery guarantee for a wire with measured ~5% loss
-(`motion-api#6`, `protocol#8.0`). Full state machine, wraparound policy,
+The core delivery guarantee for a lossy, time-varying wire
+(`protocol#8.0`). **The "~5%" figure this section carried through
+2026-08-26 is withdrawn** — measurements on 2026-08-27 put per-line
+delivery at 66.5%/75.0%/83.3% across three ch4 runs against a 99.5% wired
+control, and no replacement figure is stated because those runs span 17
+points inside two hours (`protocol#8.0`, `protocol#9.11`). See the
+open discrepancy against `motion-api#6` noted there. Full state machine, wraparound policy,
 and every resolved ambiguity are in `protocol#8`; required behavior:
 
 - Every sequenced command carries `#<n>`; the host may pipeline freely
@@ -125,14 +149,25 @@ and every resolved ambiguity are in `protocol#8`; required behavior:
   handler onto the Adapter in `protocol#8.8`; `DoneReason` vocabulary
   (`none/stop/timeout/estop/aborted`) resolved in `protocol#8.8.1` and
   matches `motion-api#5.1`'s completion reasons.
-- **Reply-only** (2026-08-26, `protocol#8.5`): an `ack`/`nack` is emitted
-  only in direct response to an inbound sequenced line — never
-  periodically, never on the telemetry cadence, never as a beacon. A
-  stalled stream keeps re-nacking because each subsequent command is
-  itself nacked (`protocol#8.1`); a quiet host that wants confirmation
-  polls with any sequenced verb (e.g. `STATUS`, which also reports
-  `next=`). Still no timer or clock anywhere in the handler — a
-  deliberate, load-bearing constraint (`protocol#8.1`, `protocol#8.0`).
+- **Reply-only** (2026-08-26, widened 2026-08-27, `protocol#8.5`): an
+  `ack`/`nack` is emitted only in direct response to an inbound line —
+  never periodically, never on the telemetry cadence, never as a beacon.
+  The invariant that enforces it is structural, not a rule: **every
+  emission originates in `feed()`, and the handler holds no clock and no
+  periodic entry point**, so periodicity is impossible rather than merely
+  prohibited. A stalled stream keeps re-nacking because each subsequent
+  command is itself nacked (`protocol#8.1`); a quiet host that wants
+  confirmation reads `STATUS`, which reports `next=`, `done=` and
+  `reason=` in its own payload with no ack needed and no id consumed.
+- **Gap probing is a resend, not a poke** (2026-08-27, `protocol#8.5`): a
+  host with a lost command and nothing further to send retransmits its
+  oldest still-pending command rather than putting a fresh sequenced line
+  on the wire to draw a `nack`. `protocol#8.1`'s middle row is built for
+  it, and it consumes no sequence id.
+- **Handler reliability state** is `expectedNext_` plus `gapOutstanding_`
+  (`protocol#8.1`). The latter was deleted 2026-08-26 with the piggyback
+  and restored 2026-08-27 **scoped as a predicate on a reply** — it gates
+  the conditional reminder and restores no periodic emission of any kind.
 - A decode failure the host itself keeps re-sending (a real host bug,
   not transient loss) wedges the stream forever by design; the host
   needs its own give-up path — this library cannot and does not supply
@@ -235,8 +270,10 @@ library (`protocol#7`, `diffdrive#6`).
   when distance matters more than smoothness), `estop()` (zero now,
   **latched**, panic path only) (`motion-api#3.7`). Safety invariants
   that hold across every operation and mode — no unbounded form exists,
-  a queued stop is not a stop, one estop is not proof of a stop, ~5% of
-  moves are lost silently — are `motion-api#6`.
+  a queued stop is not a stop, one estop is not proof of a stop, moves are
+  lost silently at a rate that is measured but unstable — are
+  `motion-api#6`, whose own "~5%" is flagged for re-verification against
+  `protocol#8.0`.
 - **Three execution modes** (A background/fiber, B manual tick, C
   blocking) apply uniformly; over the wire, "tick" means drain telemetry
   already pushed and test completion — **it never means poll**, measured

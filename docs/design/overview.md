@@ -49,9 +49,12 @@ serial port at all.
   test harnesses, plus a no-hardware acceptance path through
   `tools/sim`.
 - **Survive a lossy radio link by design.** The wire protocol assumes
-  real packet loss (measured ~5%) and answers it with a mandatory,
+  real, substantial packet loss and answers it with a mandatory,
   strictly-incrementing sequence id and cumulative ack/nack — not an
-  afterthought bolted onto an already-shipped grammar.
+  afterthought bolted onto an already-shipped grammar. (The "~5%" figure
+  this bullet carried through 2026-08-26 is withdrawn as unsupported;
+  measured per-line delivery on ch4 ranges 66.5-83.3% against a 99.5%
+  wired control, and is unstable — `protocol#8.0`.)
 - **A minimal, single-sourced wire format.** One ASCII line grammar, no
   binary framing, no CRC, case used structurally to separate commands
   from replies so a robot's own output can never be mistaken for a

@@ -16,8 +16,17 @@ token, and the six [motion-api.md](motion-api.md) §9.1 verbs
 own `now` token) are implemented at the wire/handler layer (`WHEELS` is
 renamed `WHEELS_V`). 2026-08-26 (§8.5): the telemetry-piggybacked
 reliability line is deleted outright — `ack`/`nack` is emitted **only**
-in direct reply to an inbound sequenced line, never periodically, and
-`gapOutstanding_` leaves the handler state with it.
+in direct reply to an inbound line, never periodically, and
+`gapOutstanding_` left the handler state with it. 2026-08-27 (§8.3,
+§9.11): the unsequenced set grows from three verbs to seven — `HELP`,
+`ID`, `VER` and `STATUS` join `HELLO`/`ESTOP`/`PING` — under a stated
+rule (a verb is sequenced iff its correctness depends on its position in
+the stream); `status` gains `done=`/`reason=`; `ID` gains a mandatory
+`name` field (§6.4); an unknown `GET` name now returns `err 1` like
+`SET` instead of nothing; and `gapOutstanding_` returns, scoped, as the
+predicate for a conditional "your last command didn't land" reminder that
+five unsequenced verbs carry when — and only when — the stream is
+stalled. §8.0's "~5%" loss premise is withdrawn as unsupported.
 
 ---
 
@@ -129,11 +138,13 @@ free-standing correlation token a caller could pick arbitrarily.
 An id is still spelled **`#<n>`** and is still always the **last token** of
 its line — commands and replies alike.
 
-- **Mandatory** on every sequenced verb (`ID VER STATUS HELP GET SET TLM
-  WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP RUN` — see §8.3 for
-  the three exceptions, `HELLO`, `ESTOP`, and (as of 2026-08-22) `PING`,
-  none of which ever carry one at all). A sequenced verb arriving with no
-  id is malformed.
+- **Mandatory** on every sequenced verb (`GET SET TLM WHEELS_X WHEELS_V
+  MOVE_X MOVE_V GO_TO_R GO_TO_W STOP RUN` — see §8.3 for the seven
+  unsequenced verbs, `HELLO`, `ESTOP`, `PING`, and (as of 2026-08-27)
+  `HELP`, `ID`, `VER`, `STATUS`, none of which ever carry one at all). A
+  sequenced verb arriving with no id is malformed. **`ID VER STATUS HELP`
+  left this list on 2026-08-27** — see §8.3 for the rule that moved them
+  and §9.11 for why.
 - The digits are bare and unsigned: `#+5`, `#-5`, and `# 5` are all
   malformed — §2's "optionally signed" applies to data fields, not the id,
   and needs a dedicated digits-only parser rather than the general integer
@@ -176,6 +187,63 @@ id is either present, well-formed, and sequence-checked, or the line simply
 cannot be classified at all. See §8.4 for the replacement rule, and §8.3
 for `ESTOP`'s own (still exceptional, but differently exceptional) status.
 
+### 2.4 The `HELLO` banner is NOT this grammar (2026-08-27)
+
+**Stakeholder direction:** the banner carries colons because it belongs to
+a **separately specified protocol** — the device-announcement format in
+`microbit-radio-relay/docs/announce.md` — and not to the v6 line grammar
+described above.
+
+    DEVICE:<role>:<common_name>:<device_name>:<serial>
+
+    DEVICE:NEZHA2:robot:vevov:1198504156        (a robot)
+    DEVICE:RADIOBRIDGE:relay:getez:1779042496   (a relay)
+
+Five fields, sentinel first, in the same order for both device classes.
+That is the whole point: **one discovery parser finds robots and relays
+alike.** Through 2026-08-26 this library emitted the same five fields
+space-delimited and lowercased (`device NEZHA2 robot vevov 1198504156`),
+which carried identical information and was silently unparseable by the
+tooling that consumes it — `probe_type` accepts only the colon form, so
+every robot probed came back with `role`, `common_name`, `device_name`
+and `serial` unset. Two spellings of one format is the defect; this
+resolves it toward the format that was specified first and elsewhere.
+
+The announced `<serial>` is the decimal `FICR.DEVICEID[1]`, which is the
+same value the device registry already holds, so it cross-checks against
+`device_id` for free.
+
+**Consequences, stated because this line is a deliberate foreign body:**
+
+- **It is exempt from §9.6's colon-to-space migration.** That decision
+  governs the v6 line grammar. The banner is not a v6 line, has no verb,
+  no fields in the §2 sense, and never carries an id — the migration
+  never had jurisdiction over it.
+- **It is exempt from §2.1's case rule, and this one has a real cost —
+  see the flag below.**
+- **`HELLO` itself is unchanged**: still uppercase, still zero-arity,
+  still unsequenced, still resets `expectedNext_` (§8.3). Only the shape
+  of the line it emits in reply is specified elsewhere.
+
+> **FLAGGED for the stakeholder — the uppercase sentinel interacts with
+> §2.1.** That section's guarantee is that a robot's own output can never
+> parse as a command, which is what makes a shared radio channel safe from
+> self-sustaining floods: a lowercase first token is dropped silently and
+> is explicitly *not* counted malformed. `DEVICE:NEZHA2:robot:vevov:...`
+> is uppercase, so on a shared channel every other robot tokenises it as
+> one unknown token with no trailing `#id`, fails id resolution, and takes
+> §8.4's item 1/2 path. **It does not flood** — that path emits no reply
+> at all — but it does increment `malformedCount()` on every listening
+> robot, so a diagnostic counter now counts ordinary neighbour traffic.
+>
+> **A lowercase sentinel (`device:NEZHA2:robot:vevov:1198504156`) would
+> keep the colon delimiter, all five fields, and the shared parse, while
+> preserving §2.1 exactly.** Its cost is one extra accepted spelling in
+> `probe_type` — which that code needs regardless, since relays will keep
+> announcing `DEVICE:`. The uppercase form is what is specified and what
+> is implemented here; the alternative is recorded so the choice is
+> visible rather than inherited.
+
 ---
 
 ## 3. `ProtocolHandler`
@@ -198,7 +266,7 @@ class ProtocolHandler {
   void feed(const char* data, size_t length);
 
   // Unsolicited emissions the app drives, not the wire.
-  void sendBanner();                        // device NEZHA2 robot <name> <serial>
+  void sendBanner();                        // DEVICE:NEZHA2:robot:<name>:<serial> — §2.4
   void sendReady();                         // ready
   void sendDebug(const char* text);         // debug <text>  -- robot-to-host ONLY
   void emitTelemetry(const Snapshot& snapshot);  // thdr once, then t per frame
@@ -511,18 +579,22 @@ gives one of them (`WHEELS_V`) real effect (§5).
 §8.** The reply column shows each verb's own *informational* reply only;
 every sequenced verb ALSO emits the transport-layer `ack`/`nack`
 described in §8, as a separate line, alongside whatever is shown here.
-**`PING` is unsequenced as of 2026-08-22** — it joins `HELLO`/`ESTOP` in
-never carrying an id (§8.3).
+**`PING` is unsequenced as of 2026-08-22**, and **`HELP`/`ID`/`VER`/
+`STATUS` joined it on 2026-08-27** — none of the seven ever carries an id
+(§8.3). An unsequenced verb emits no `ack`/`nack` of its own on a clean
+stream, but five of them DO carry a conditional reminder when the stream
+is stalled — see §8.3's reminder rule, which is a different thing from
+the transport reply a sequenced verb always gets.
 
 | verb | sequenced? | command | own reply | notes |
 |---|---|---|---|---|
-| `HELLO` | no | — | `device NEZHA2 robot <name> <serial>` | resets the sequence (§8.3) |
+| `HELLO` | no | — | `DEVICE:NEZHA2:robot:<name>:<serial>` | resets the sequence (§8.3); **not a v6 line — see §2.4** |
 | `PING` | **no** (2026-08-22) | — | `pong <now>` | `now` = robot clock `[ms]`; maximally forgiving, like `ESTOP` — see §8.3, §9.8 |
-| `ID` | yes | `#id` | `id <drivetrain> <profile> <version>` | |
-| `VER` | yes | `#id` | `ver <version>` | |
-| `STATUS` | yes | `#id` | `status ready=1 active=0 connL=1 connR=1 otos=0 wedge=0 flags=<hex> tlm=off next=<n>` | `k=v`, order not guaranteed, unknown keys ignored |
-| `HELP` | yes | `#id` | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
-| `GET` | yes | `[name] #id` | `get name value` (one field) or one `get` line per field (bare `GET`) | unknown name → no `get` line, but still acked (§8.1) |
+| `ID` | **no** (2026-08-27) | — | `id <drivetrain> <profile> <version> <name>` | `name` is the wire's authoritative board identity, MANDATORY — see §6.4; maximally forgiving, like `PING` |
+| `VER` | **no** (2026-08-27) | — | `ver <version>` | maximally forgiving, like `PING` |
+| `STATUS` | **no** (2026-08-27) | — | `status ready=1 active=0 connL=1 connR=1 otos=0 wedge=0 flags=<hex> tlm=off next=<n> done=<n> reason=<tok>` | `k=v`, order not guaranteed, unknown keys ignored; `done=`/`reason=` are NEW 2026-08-27 (§8.7) and read fresh off the Adapter at format time |
+| `HELP` | **no** (2026-08-27) | — | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
+| `GET` | yes | `[name] #id` | `get name value` (one field) or one `get` line per field (bare `GET`) | **unknown name → `err 1 #<id>` alongside the ack (2026-08-27)** — symmetric with `SET`; was a silent no-`get`-line answer through 2026-08-26, see §9.11 |
 | `SET` | yes | `name value #id` | — (accepted: none; rejected: `err <code> #<id>`) | an in-order `ack` **is** the acceptance; a value that fails to PARSE is a decode failure (§8.9), not a rejection |
 | `TLM` | yes | `mode #id` | — | `OFF`/`POSE`/`FULL`/`NOW`/`AUTO`/`BUFFER` decoded; an unrecognized mode token is a decode failure (§8.9); the adapter's own `Result` never surfaces on the wire |
 | `WHEELS_X` | yes | `left right cruise timeout #id` | — | per-wheel commanded DISTANCE, bounded by encoder travel + `timeout` (motion-api.md §3.1); `kUnknown` on `DiffDriveAdapter` (§5) |
@@ -710,6 +782,30 @@ concrete `onRun()` does not need to pre-sanitize its own output; the
 handler treats it as untrusted content regardless, the same way it treats
 every other free-form string it ever formats onto the wire.
 
+### 6.4 `ID`'s fourth field — `name` is board identity, `profile` is not
+
+**Added 2026-08-27.** `ID`'s reply is `id <drivetrain> <profile>
+<version> <name>`. Fields 0-2 are unchanged, so the extension is strictly
+additive and a parser reading three fields is unaffected — but **`name`
+is MANDATORY, not optional.**
+
+`profile` is *build provenance*: it is baked into the hex at deploy time.
+It is not identity, and treating it as identity has already failed in the
+field — a fleet-wide incident had every robot on the playfield reporting
+the same profile, because that was the profile in the image they were all
+flashed from. `name` is sourced from the board itself
+(`microbit_friendly_name()`), which makes it the wire's only
+authoritative answer to "which robot am I talking to."
+
+**Why mandatory rather than optional:** a host cannot treat a field as
+authoritative identity if the wire says it might be absent. It would have
+to fall back to `profile` exactly when `name` is missing — reproducing the
+original incident, more rarely and much harder to spot. An optional
+identity field is worse than none, because it looks like a guarantee.
+
+`Identity.name` was already plumbed for `HELLO`'s banner before this
+change; `execId()` simply did not read it.
+
 ---
 
 ## 7. Configuration — the library stores none
@@ -726,6 +822,10 @@ What that means concretely:
   no storage. Which names are valid is entirely the adapter's business, and an
   unknown SET name is just `err 1 #<id>` coming back from the adapter,
   layered on top of the ack every in-order `SET` gets regardless (§8.2).
+  **As of 2026-08-27 `GET` behaves the same way** — an unknown GET name
+  also produces `err 1 #<id>` alongside its ack. Through 2026-08-26 it
+  produced *nothing* beyond the ack, an asymmetry with `SET` that this
+  file documented without ever justifying; see §9.11.
 - **Each library carries only the configuration it needs, as its own type.**
   DiffDrive already has this: `DifferentialDrive::Config` plus the fluent
   setters, holding gains, limits, and the cycle period. `DiffDriveAdapter`
@@ -763,9 +863,26 @@ consecutive cycles" so an outcome would survive packet loss — but nothing in
 `ProtocolHandler` ever implemented it (§9.2, now historical), because doing
 so honestly needs a periodic entry point and a notion of time, which the
 handler deliberately does not have. Measured loss on the radio link this
-protocol targets is real (~5%, `.clasi/knowledge/` in the robot repo this
-library was extracted from) and nothing in this library protected against
-it. **The 3×-repeat idea is deleted, not deferred** — this section is its
+protocol targets is real and nothing in this library protected against
+it.
+
+**The "~5%" figure this paragraph carried through 2026-08-26 is
+withdrawn (2026-08-27).** It cited `.clasi/knowledge/` in the robot repo
+this library was extracted from, and no measurement since has come near
+it. Three instrumented runs on ch4 that day put per-line delivery at
+66.5% (n=200), 75.0% (n=240) and 83.3% (n=60) — 17-33% loss — against a
+wired control of 99.5% (n=200) on the same firmware and the same verbs,
+which is what establishes the loss as the RF path rather than this stack.
+
+**No replacement figure is stated, deliberately.** Those runs span 17
+points inside about two hours, so the link is not merely worse than the
+old number, it is *unstable*, and its true rate is uncharacterised.
+Substituting "~75%" would repeat the original mistake — quoting a point
+estimate from a small sample as a settled property of the link. What this
+design can honestly assume is a lossy, time-varying link an order of
+magnitude worse than the withdrawn figure. The scheme below works at
+those rates; its rationale simply should not lean on a number nobody has
+demonstrated. See §9.11. **The 3×-repeat idea is deleted, not deferred** — this section is its
 full replacement, not an addition alongside it.
 
 ### 8.1 The core idea — cumulative ack/nack over a mandatory sequence id
@@ -778,11 +895,27 @@ with no ring, no per-id storage, and no eviction policy — the entire
 receiver-side state is a single number.
 
 Handler state, in full (2026-08-22: `lastDone_` is GONE from this
-list — see §8.8; 2026-08-26: `gapOutstanding_` is GONE too — see §8.5):
+list — see §8.8; 2026-08-26: `gapOutstanding_` was removed — see §8.5;
+2026-08-27: it is BACK, scoped, as a reply predicate — see §8.3's
+reminder rule and §9.11):
 
 ```cpp
-uint32_t expectedNext_ = 1;   // next sequence id expected from the host
+uint32_t expectedNext_ = 1;       // next sequence id expected from the host
+bool     gapOutstanding_ = false; // a gap or decode-failure stall is open
 ```
+
+`gapOutstanding_` is set on a gap (the table's third row below) and on a
+decode-failure stall (§8.9), cleared when the missing id finally arrives
+in order, and cleared by `HELLO`. **It cannot be derived from
+`expectedNext_`**, which is why it has to be stored: `expectedNext_ = 5`
+alone cannot distinguish "clean, waiting for `#5` the host has not sent
+yet" from "stalled, `#6` was discarded, still waiting for `#5`."
+
+**Its scope is narrow, deliberately: it is a predicate on a REPLY.** Its
+only reader is §8.3's conditional reminder — whether an inbound
+*unsequenced* line's reply carries a trailing `nack`. It restores no
+periodic emission, no telemetry piggyback, and no beacon of any kind;
+§8.5's rule and its invariant are untouched.
 
 **Deliberately, there is no `tick()` and no clock anywhere in this list.**
 There is no periodic half to the scheme at all (2026-08-26, §8.5):
@@ -854,11 +987,48 @@ is gone.** `SET`/`WHEELS_V`/`STOP`/`RUN`(void) success now produces
 the `ack` alone cannot carry, so it is still emitted, **in addition to**
 the ack, not instead of it (§6.3).
 
-### 8.3 `ESTOP`, `HELLO`, and `PING` — the exemption set
+### 8.3 The unsequenced set — and the rule that decides membership
 
-**Sequenced:** `ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X
-MOVE_V GO_TO_R GO_TO_W STOP RUN`.
-**Unsequenced:** `ESTOP`, `HELLO`, and (as of 2026-08-22) `PING`.
+**Sequenced:** `GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R
+GO_TO_W STOP RUN`.
+**Unsequenced:** `ESTOP`, `HELLO`, (2026-08-22) `PING`, and (2026-08-27)
+`HELP`, `ID`, `VER`, `STATUS`.
+
+#### The rule
+
+Through 2026-08-26 this set was a list of three structural exceptions with
+no general principle behind it. It now has one, and the list follows from
+it rather than the other way round:
+
+> **A verb is sequenced iff its correctness depends on its position in
+> the stream** — either because executing it twice changes the robot, or
+> because answering it out of order yields a wrong answer.
+
+Sequencing a verb costs a mandatory id, a silent drop when the id is
+absent, and a stale re-ack that answers nothing when it is resent. That
+price buys delivery ordering, which is worth paying only where ordering
+is part of being correct.
+
+- **State-changing verbs** (`SET TLM STOP RUN WHEELS_* MOVE_* GO_TO_*`)
+  are sequenced on the first clause: executing one twice moves the robot
+  twice.
+- **`GET` is sequenced on the SECOND clause, and is NOT an exception to
+  the rule.** It is read-only, but it is order-dependent: a `GET` racing a
+  pending `SET` returns the pre-`SET` value with nothing marking it stale,
+  which is a silently wrong answer to a config question. The reordering
+  half of the rule covers it exactly. Do not document this as a
+  stakeholder-directed carve-out — it is the rule working, and the weaker
+  framing invites someone to relitigate it.
+- **`ID`/`VER`/`HELP` answer session constants** — identity, firmware
+  version, and a verb list generated from a compile-time table. Nothing in
+  the config plane can reach them (`onSet`'s value parameter is a `float`
+  and every settable field is a float member; `Identity`'s fields are
+  `const char*` and are not in that table), so no ordering can change the
+  answer.
+- **`STATUS` answers live physical state plus `next=`.** Physical state is
+  time-valued, not order-valued — it changes whether or not the host sends
+  anything — so ordering buys nothing. And see §8.7: sequencing it made
+  its own documented resync job impossible.
 
 The stakeholder's own framing was "every message must have an ID number" —
 `PING`'s own exemption is a LATER, explicit stakeholder direction
@@ -912,9 +1082,72 @@ unbootstrappable and unsafe without them:
   host still appending `#<id>` to `PING` out of habit from before this
   change keeps working unchanged.
 
-This exemption set is deliberately narrow — flagged here prominently so the
+#### Arity posture — forgiving, not strict, and this is load-bearing
+
+`HELP`/`ID`/`VER`/`STATUS` take **`PING`'s posture, not `HELLO`'s**: any
+line whose verb token is one of them answers, whatever follows it. `ID`,
+`ID #1`, `ID #99`, and `ID junk` are byte-identical.
+
+This is not cosmetic. Per §9.8 item 7 a malformed *unsequenced* verb gets
+**no reply at all** — there is no `ack` to anchor an `err` against. Strict
+zero-arity would therefore make `ID #1` wrong-arity and answer it with
+silence, trading "dropped as stale" for "dropped as malformed": the same
+symptom with a new cause, and it would break every host that still appends
+an id out of habit.
+
+#### The conditional reminder (2026-08-27)
+
+**Stakeholder direction, verbatim:** *"I don't actually mind if ID, VER,
+and help also return an ACK/NAK. What I mind is that they require an
+ACK/NAK … What I don't want is requiring IDs to have a sequence number, or
+for help to have a sequence number and just be able to issue those any
+time, but they can also trigger an ACK/NAK."*
+
+**Sequence gating and reply emission are separable, and only the first was
+ever objected to.** A verb can be issuable with no id and still carry a
+reliability line back. So:
+
+> When a gap or decode-failure stall is outstanding, `PING`, `HELP`, `ID`,
+> `VER`, and `STATUS` emit `nack <expectedNext_> <lastDone> <reason>`
+> AFTER their own reply. On a clean stream they emit nothing.
+
+A reminder, not a receipt — it fires only when something is wrong. It is
+the full three-field form (§6.1), read fresh off the Adapter at format
+time like every other `nack`; a two-field abbreviation would break any
+host parser written to the documented shape.
+
+**Excluded, and firmly:**
+
+- **`ESTOP`** — its reply is the bare word `estop`, no fields, ever, and
+  it must never queue behind an outbound reply. A panic stop does not
+  carry diagnostic freight; the safety rule wins.
+- **`HELLO`** — it sets `expectedNext_ = 1` and clears
+  `gapOutstanding_`, so nothing can be outstanding after it. A reminder
+  there would report on state it just erased.
+
+`STATUS` keeps the reminder even though `next=`/`done=`/`reason=` already
+say the same thing in its own payload. **Known and accepted redundancy:**
+"every unsequenced verb except `ESTOP` and `HELLO` carries the reminder"
+is a rule that fits in one's head, and "…except `STATUS`, which tells you
+the same thing a different way" is not.
+
+#### Probing a link — three verbs, three jobs, not interchangeable
+
+- **`PING`** — is it alive? Cheapest, shortest reply.
+- **`STATUS`** — alive, and where does the sequence stand? `next=`,
+  `done=`, `reason=`, `ready=` in one line. This is the diagnostic.
+- **`HELLO`** — start over. It **resets the sequence**.
+
+**`HELLO` is not a health check.** Firing it at a live session sets the
+robot's counter to 1 while the host's stands at N; the host's next command
+reads as a numeric gap, and since every already-acked id has been retired
+from the host's pending buffer there may be nothing left to resend — the
+robot wants `#1` forever. A probe that manufactures the wedge it was
+checking for. Use `HELLO` only where losing the sequence is the intent.
+
+This set is deliberately narrow — flagged here prominently so the
 stakeholder can find and overrule it easily: everything else in this
-library's scope is sequenced, with no other carve-outs.
+library's scope is sequenced, and the rule above is what decides it.
 
 ### 8.4 Malformed-line recovery under mandatory sequencing (historical — superseded by §8.9)
 
@@ -971,10 +1204,27 @@ heard the robot's state anyway) and cost the wire an unsolicited ack
 several times a second, forever. **Deleted, not moved:** no periodic,
 beacon, or telemetry-carried `ack`/`nack` of any kind exists any more.
 
-The rule is now one sentence: **an `ack`/`nack` line is emitted only in
-direct response to an inbound sequenced line** — the three rows of
-§8.1's table plus §8.9's decode-failure path — and nothing else in the
-handler ever emits one. `emitTelemetry()` emits `thdr`/`t` frames only.
+**The invariant, which is what actually does the work:** every emission
+originates in `feed()`, and the handler holds no clock and no periodic
+entry point. Periodicity is therefore *structurally impossible*, not
+merely prohibited — checkable by reading the call graph rather than by
+trusting a rule. It is stated first because it is stronger than the
+sentence that follows, and because it is what makes §8.1's
+`gapOutstanding_` safe to hold: a predicate on a reply cannot become a
+beacon when nothing but inbound bytes can reach an emitter.
+
+The rule itself is one sentence: **an `ack`/`nack` line is emitted only
+in direct response to an inbound line** — the three rows of §8.1's table,
+§8.9's decode-failure path, and (2026-08-27) §8.3's conditional reminder
+on an unsequenced verb — and nothing else in the handler ever emits one.
+`emitTelemetry()` emits `thdr`/`t` frames only.
+
+**Widened 2026-08-27 from "an inbound *sequenced* line" to "an inbound
+line."** Through 2026-08-26 this section was read as forbidding any
+reliability line from an unsequenced verb. It never said that: the
+objection recorded above is to *periodicity*, and a line replying to an
+inbound unsequenced verb is still a reply, not a beacon. An idle
+connection stays exactly as silent as it already was. See §8.3.
 
 Loss recovery is host-driven, which §8.9 already required the host to
 be capable of anyway (the host must own its give-up/retry path — this
@@ -987,15 +1237,31 @@ library has no clock and structurally cannot own it):
   (§8.1). A gap still stalls the stream on purpose; it re-nacks per
   inbound line now, not per telemetry frame.
 - A host that goes quiet after its last command and wants confirmation
-  **polls**: any sequenced verb produces a fresh `ack` carrying
-  `lastDone`/`reason`, and `STATUS` additionally reports
-  `next=<expectedNext_>` (§8.7).
+  reads **`STATUS`**, unsequenced as of 2026-08-27, which reports
+  `next=`, `done=` and `reason=` in its own payload (§8.7) — no ack
+  needed, no sequence id consumed, and it answers while the stream is
+  stalled.
+- **A host with a lost command and nothing further to send probes by
+  RESENDING ITS OLDEST STILL-PENDING COMMAND**, not by putting a fresh
+  sequenced line on the wire to shake a `nack` loose (stakeholder
+  decision, 2026-08-27). §8.1's middle row is built for exactly this: if
+  the command did arrive, it re-acks without re-executing; if it was the
+  lost one, the stream advances. The rejected alternative consumed a
+  sequence id per probe and, on a stalled stream, was itself just one
+  more line the robot discarded. This closes a hazard the change would
+  otherwise have opened: a host's only automatic retransmit trigger is a
+  `nack`, and a `nack` only ever answers a sequenced line — so
+  unsequencing `STATUS` without this would have left a quiet host sitting
+  on a lost command indefinitely, indistinguishable from a dead robot.
 
 The no-timer/no-clock property §8.1 insists on is untouched — now
 trivially, since there is no periodic half left to schedule. This
-deletion also removes `gapOutstanding_` from the handler state (§8.1):
+deletion also removed `gapOutstanding_` from the handler state (§8.1):
 its only reader was `emitTelemetry()`'s ack-vs-nack choice, and §8.1's
-table decides every reply from the inbound id alone.
+table decides every reply from the inbound id alone. **Partially reversed
+2026-08-27** — the flag is back, but as a predicate on a reply (§8.3's
+conditional reminder), never as the trigger for a periodic emission.
+Nothing about the deletion of the piggyback itself is undone.
 
 #### 8.5.1 The completion channel's own home — see §8.8
 
@@ -1025,15 +1291,38 @@ along with it.
 ### 8.7 Resync and wraparound
 
 `status` gains a **`next=<expectedNext_>`** key (§6) so a reconnecting host
-can resync its own tracking without forcing a full `HELLO` reset. As of
+can resync its own tracking without forcing a full `HELLO` reset.
+
+**This did not work through 2026-08-26, and the reason is worth stating
+plainly: `STATUS` was itself sequenced.** A host that has lost sequence
+tracking cannot choose an id for it. Guess low and it lands in §8.1's
+stale row — re-acked against `expectedNext_ - 1`, with no `status` line
+emitted at all. Guess high and it opens a gap, stalling the very stream
+it was sent to diagnose. The one verb whose documented purpose is
+recovering from desync was gated behind not being desynced. Unsequencing
+it (2026-08-27, §8.3) is what makes this section true rather than
+aspirational. As of
 2026-08-22 (§8.8), a `HELLO` reset no longer clears any completion state at
 all — `lastDone()`/`lastDoneReason()` live on the Adapter and are
 untouched by the handler's own reset — so the original motivation for this
 key ("useful because a HELLO reset also clears lastDone_") is narrower
 than it was, but `next=` remains useful on its own merits (resync without
-re-establishing the session). `status` still does **not** also report
-`lastDone`/its reason — flagged as a gap in §9.8, not a considered
-omission.
+re-establishing the session). **`status` now also reports `done=<lastDone>` and `reason=<tok>`
+(2026-08-27),** closing what §9.8 flagged as a gap rather than a
+considered omission. Both are read fresh off `Adapter::lastDone()`/
+`lastDoneReason()` at format time, never cached (§8.8), exactly as
+`replyAck()` reads them.
+
+This was a **prerequisite**, not a nicety. Since §8.5 deleted the
+telemetry piggyback, `(lastDone, reason)` only ever rides a direct
+reply — so a host awaiting a completion has to provoke one, and the host
+in this repo did so with a *sequenced* `STATUS`, purely to draw the `ack`
+that carries the pair. Unsequencing `STATUS` removes that `ack`. Landing
+these two keys FIRST is what keeps completion delivery working across the
+change; done in the other order it would have broken silently.
+
+Because `status` is `k=v` with unknown keys ignored (§6), both keys are
+additive and a host written before this change is unaffected.
 
 ### 8.8 `lastDone`/`lastDoneReason` move to the Adapter (2026-08-22)
 
@@ -1600,10 +1889,19 @@ than picked silently, per this project's own stated practice.
    `ack`/`nack` line.)
 
 6. **Is `STATUS`'s wrong-arity case still recoverable against an `err`
-   the way it implicitly was before?** `STATUS` is sequenced now, so a
-   malformed `STATUS` (extra fields) still gets `ack` + `err 2 #<id>` as
-   long as its id is in order (§8.4's item 3) — no special case needed,
-   unlike `HELLO`'s.
+   the way it implicitly was before?** *(Answer below is historical —
+   superseded 2026-08-27.)* `STATUS` is sequenced now, so a malformed
+   `STATUS` (extra fields) still gets `ack` + `err 2 #<id>` as long as
+   its id is in order (§8.4's item 3) — no special case needed, unlike
+   `HELLO`'s.
+
+   **Re-resolved 2026-08-27:** `STATUS` is unsequenced, so the question
+   dissolves rather than changing answer. It takes `PING`'s maximally
+   forgiving posture (§8.3), which means there IS no wrong-arity case
+   for it any more — `STATUS`, `STATUS 1 2 3` and `STATUS #9` are
+   byte-identical. Nothing needs to be recoverable against an `err`
+   because nothing is ever refused. The same applies to `HELP`, `ID` and
+   `VER`.
 
 7. **Does a malformed `HELLO` (wrong arity) get any reply at all?**
    **Resolved: no**, same as before this change — `HELLO` is outside the
@@ -1613,6 +1911,13 @@ than picked silently, per this project's own stated practice.
    grammar. A malformed `HELLO` increments `malformedCount()` and produces
    no reply, exactly like a sequenced verb whose id cannot be determined
    at all (§8.4 item 1/2).
+
+   **Scope widened 2026-08-27.** This item now governs four more verbs
+   (`HELP`/`ID`/`VER`/`STATUS`), and it is precisely why they take
+   `PING`'s forgiving posture rather than `HELLO`'s strict one: under the
+   strict posture, "no reply at all" would have swallowed `ID #1` — the
+   single most common thing a host or a human actually types — and traded
+   one silent drop for another. See §8.3's arity-posture rule.
 
 8. **Is `Result::kDuplicateId` (`ERR_DUPLICATE_ID`, code 11) still
    reachable?** **No — flagged, not removed.** §2.2 and §6.1 both call
@@ -1739,6 +2044,152 @@ in the same spirit as §9.8's own list for the pass before it:
    between them — a small, deliberate duplication (this is not a hot
    path) that keeps "what counts as decodable" defined in exactly one
    place per verb without a shared decoded-argument struct per verb.
+
+---
+
+### 9.11 The unsequenced-query change (2026-08-27)
+
+Settled with the firmware implementation across a working session; that
+side is landed and hardware-verified, and the wire behaviour below was
+captured over a wired link (chosen deliberately — at the radio's measured
+rates "the reminder was absent" and "the reminder was dropped" are the
+same observation).
+
+#### What started it
+
+A stakeholder session on a raw relay link:
+
+    HELP            -> (nothing)
+    ID              -> (nothing)
+    ID #1           -> ack 1 0 none / id diffdrive vevov 1.0.10 vevov
+    ID #1 (resent)  -> ack 1 0 none          <- ack, NO id line
+    ID #2           -> ack 2 0 none / id ...
+
+Read as one bug, this was **five**, and separating them is most of the
+value of this entry:
+
+1. A bare `HELP` parsed as `#0`, fell below `expectedNext_`, and was
+   silently dropped (§2.2) — the one verb whose job is orienting someone
+   who does not know the grammar.
+2. Query verbs were sequenced at all, so they were gated behind a counter
+   a human at a keyboard has no way to track.
+3. The stale-retransmit re-ack (§8.1's middle row) answers a *query* with
+   a bare `ack` and no payload. Correct for the machine case it was
+   designed for; it reads as "accepted, then answered nothing."
+4. `GET` with an unknown name did the same thing for an entirely
+   different reason (below).
+5. Most of the raw *disappearance* was the RF link, not the protocol at
+   all (§8.0).
+
+#### What was NOT changed, and why
+
+- **The stale re-ack stays** (§8.1's middle row). A resent `WHEELS_V`
+  whose ack was lost needs to hear "I have everything through here, stop
+  resending"; a nack would say the opposite, telling the host to resend
+  what it just sent — a resend loop on a lossy link, which is the exact
+  failure §8.1 exists to prevent. It would also make `nack <n>` ambiguous
+  between "I need n" and "I already have n" — two states demanding
+  opposite actions — since §8.9 already gave `nack` a second meaning.
+  Unsequencing the query verbs dissolves the human-facing half of the
+  complaint without touching the machine-facing guarantee.
+- **No reply cache.** Re-sending a cached payload on retransmit would
+  satisfy "I asked, I got an answer," but §8.1's whole claim is that the
+  receiver-side state is a single number — no ring, no per-id storage, no
+  eviction policy. Not worth trading away.
+- **Held in reserve, pre-agreed:** if `GET`'s stale case proves annoying
+  in practice, the fix is to re-execute a stale retransmit of a
+  *read-only* sequenced verb (harmless by definition, and it needs no
+  cache — you answer again rather than remembering the answer) rather than
+  to add one. §8.3's rule already supplies the per-verb read-only
+  property this would key off.
+
+#### `GET`'s unknown name
+
+`execGet()` set `errCode = 0` deliberately, citing §7 and §8.2, and
+discarded the `false` that `Adapter::onGet` already returns. So the
+handler *detected* the unknown name and declined to report it — while
+`SET`, on the same config plane, for the same class of typo, returned
+`err 1`. The asymmetry was documented in §6's table but never argued for.
+
+On a lossy link the silence is also ambiguous in the worst way: "ack, no
+`get` line" has two live explanations — wrong name, or the `get` line was
+eaten in flight — and the operator cannot tell them apart. The fix costs
+one short line, which is also the line most likely to survive.
+
+Worth recording how it was found: it appeared as line 8 of a conformance
+capture taken for an unrelated purpose, was read as normal, and was
+scrolled past. The failure mode is that it does not look like a failure.
+
+#### The reminder, and reading §8.5 too broadly
+
+The first version of this change removed the reliability line from the
+unsequenced verbs entirely, on the reading that §8.5's "reply-only" meant
+"sequenced-only." **It never said that.** The stakeholder's objection
+there was to *periodicity* — a beacon several times a second on an idle
+link — and a line replying to an inbound unsequenced verb is still a
+reply.
+
+The correction: **sequence gating and reply emission are separable, and
+only the first was ever objected to.** Verbatim: *"I don't actually mind
+if ID, VER, and help also return an ACK/NAK. What I mind is that they
+require an ACK/NAK."* Hence §8.3's conditional reminder — a `HELP` you can
+type any time, which still tells you your last command didn't land.
+
+Conditional rather than unconditional was chosen over always-appending an
+`ack`: the stakeholder's framing is a *reminder*, not a receipt, and on a
+link dropping a third of its lines a second line per query is a real cost.
+That choice is what requires `gapOutstanding_` back (§8.1) — a partial
+reversal of a deletion the stakeholder himself directed the day before,
+put to him explicitly in those terms and approved. Its scope is written
+into §8.1 and §8.5 precisely so that "we re-added `gapOutstanding_`" is
+not read later as licence to restore the barrage.
+
+#### The link, and three retractions
+
+The measurement work that ran alongside this is recorded because the
+*reasoning* is the reusable part.
+
+- **Draft 1: "ch4 degraded since this morning."**
+- **Draft 2 retracted the size.** The morning figure had been
+  characterised partly by counting beacon keepalives — an instrument
+  deleted along with the beacon. A link measured by beacon count is not
+  commensurable with one measured by reply rate.
+- **Draft 3 retracted the event.** The morning data never showed a
+  regression: 8/8 successes has an exact two-sided 95% interval of
+  [63.1%, 100%], and 6/6 of [54.1%, 100%] — eight in a row cannot
+  establish a rate above about 63%. The morning's own `STATUS` figure
+  (5/6 = 83.3%) is *numerically identical* to the best measurement taken
+  that evening (50/60 = 83.3%). Nothing had changed; small samples had
+  made a mediocre link look fine.
+
+Two mechanical candidates were eliminated: relay-unit identity (74.2% vs
+75.8%, n=120 each) and the beacon deletion — the latter tested **without
+a firmware flash**, by using `TLM POSE` to produce continuous robot
+transmission from the same radio (83.3% quiet vs 76.7% busy, p=0.361,
+point estimate against the hypothesis). Substituting a configuration
+change for a firmware change avoided leaving a beaconing build on a robot
+whose stakeholder had deliberately removed the beacon.
+
+Three methodological rules earned here, worth keeping:
+
+1. **Interleave, always.** Delivery drifted 17 points inside two hours, so
+   sequential A/B on this link is worthless. The length experiment's
+   result survived only because its arms were round-robin interleaved
+   against a common drifting channel — that design choice did more work
+   than its p-value did.
+2. **A static cause cannot produce a time-varying failure.** That, not the
+   1.6-point agreement between two relay units, is what rules out relay
+   identity, antenna, and placement in one stroke. The clustering argument
+   would have sent the next reader off to test the two units that never
+   came up.
+3. **Do not replace one unsupported number with another.** §8.0's "~5%" is
+   withdrawn rather than restated as "~75%": three runs spanning 17 points
+   do not establish a rate either.
+
+The open question is no longer "what broke ch4" but **"why has ch4
+apparently always been around 75%, and why did we believe otherwise?"** —
+with the drift itself as the phenomenon to characterise, since a period
+would be the strongest available clue to what is duty-cycling.
 
 ---
 

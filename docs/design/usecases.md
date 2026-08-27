@@ -252,7 +252,11 @@ the consolidated cross-reference index.
 - **Main flow:**
   1. Host sends `HELLO` (no id, no fields).
   2. Robot resets `expectedNext_ = 1` and emits its banner
-     (`device NEZHA2 robot <name> <serial>`) — `protocol#8.3`.
+     (`DEVICE:NEZHA2:robot:<name>:<serial>`) — `protocol#8.3`. The
+     banner is colon-delimited because it belongs to the separately
+     specified device-announcement protocol
+     (`microbit-radio-relay/docs/announce.md`), not to the v6 line
+     grammar — `protocol#2.4`.
   3. Robot's `lastDone()`/`lastDoneReason()` (Adapter-owned) are **not**
      reset by this — a reconnect does not erase what the robot already
      completed — `protocol#8.8`.
@@ -263,24 +267,46 @@ the consolidated cross-reference index.
     kind, `malformedCount()` increments; there is no `ack` to anchor an
     `err` against for an unsequenced verb — `protocol#9.10` item 7.
   - A host suspecting desync can instead read `STATUS`'s `next=` field
-    to resync tracking without a full reset — `protocol#8.7`.
+    to resync tracking without a full reset — `protocol#8.7`. **This only
+    became possible on 2026-08-27**, when `STATUS` was unsequenced: while
+    it was sequenced, a host that had lost its counter could not choose an
+    id for it, and either got a stale re-ack with no `status` line or
+    opened a gap and stalled the stream it was diagnosing.
+  - **`HELLO` is not a liveness probe.** It resets `expectedNext_`, so
+    firing it at a live session desyncs it: the robot's counter goes to 1
+    while the host's stands at N, and since acked ids have already been
+    retired from the host's pending buffer there may be nothing left to
+    resend — the robot waits for `#1` indefinitely. Use `PING` for
+    liveness and `STATUS` for diagnosis — `protocol#8.3`.
 
-## UC-010 — Confirm liveness while the stream is stalled (`PING`)
+## UC-010 — Query the robot while the stream is stalled (the unsequenced set)
 
 - **Actor:** Host session / developer diagnosing a stuck link
 - **Preconditions:** The sequence is stalled on a numeric gap or a
   decode-failure NAK (UC-007/UC-008 in progress).
 - **Main flow:**
-  1. Host sends `PING` (no id required, though a trailing `#<id>` from
-     an old-style caller is tolerated) — `protocol#8.3`, `protocol#9.10`
-     item 2.
-  2. Robot replies `pong <now>` regardless of the stalled sequence —
-     liveness must not be gated behind a missing id.
-- **Postconditions:** Host confirms the link and robot are alive even
-  though ordinary sequenced commands are not currently progressing.
-- **Error flows:** None — `PING` is maximally forgiving of trailing
-  content, matching `ESTOP`'s posture, specifically so it cannot itself
-  be refused over a syntax nit — `protocol#8.3`.
+  1. Host sends any of `PING`, `HELP`, `ID`, `VER`, `STATUS` — no id
+     required, and a trailing `#<id>` from an old-style caller is
+     tolerated — `protocol#8.3`, `protocol#9.10` item 2, `protocol#9.11`.
+  2. Robot answers each on its merits regardless of the stalled sequence
+     (`pong <now>`, the verb list, the identity line, the version, the
+     status line). A query gated behind a missing id cannot diagnose the
+     very link that id went missing on.
+  3. Because a stall IS outstanding, each of those replies is followed by
+     a reminder line, `nack <expectedNext_> <lastDone> <reason>` — "your
+     last command didn't land, and here is the id I still need"
+     (`protocol#8.3`, 2026-08-27). On a clean stream no such line is
+     emitted.
+- **Postconditions:** Host confirms the robot is alive, learns what the
+  sequence is waiting for, and can read `STATUS`'s `next=`/`done=`/
+  `reason=` — all without consuming a sequence id or perturbing the
+  stalled stream.
+- **Error flows:** None. All five are maximally forgiving of trailing
+  content, matching `ESTOP`'s posture, specifically so they cannot be
+  refused over a syntax nit — `protocol#8.3`. Note `ESTOP` and `HELLO`
+  are deliberately excluded from the reminder: `ESTOP` replies the bare
+  word `estop` and never queues behind anything, and `HELLO` resets the
+  state a reminder would report on.
 
 ## UC-011 — Develop and test host code with no hardware attached
 
