@@ -25,9 +25,9 @@
     "_tag_note": "Tag 53, assigned to vevov 2026-08-19 and registered with the AprilCam daemon the same day (owner=vevov, z=11.8cm), taking id 53 over from the previous owner=calibration registration. tag_offset_z=118.0 mm is OPERATOR-CONFIRMED. tag_offset_x/y are 0.0 = IDENTITY = UNMEASURED, not a measurement that came out zero: with identity offsets the camera reports the RAW TAG position, not vevov's centre of rotation, so any world_xy read for this robot is off by however far the tag sits from centre (tovez's is -41.0 mm). Measure with the three-reading in-place-rotation fit described in tovez.json's vision._tag_note, then update BOTH this block and the daemon registration. camera_distance_scale is tovez's value, not measured on vevov."
   },
   "geometry": {
-    "trackwidth": 114.2,
+    "trackwidth": 128.0,
     "otos_untrusted": true,
-    "rotational_slip": 1.0,
+    "rotational_slip": 0.995,
     "rotation_gain_pos": 1.0096,
     "rotation_offset": 0.0,
     "rotation_gain_neg": 1.0146,
@@ -37,8 +37,14 @@
       "y": 0.0
     },
     "_odometry_chip_upside_down": false,
-    "_provenance": "VEVOV-MEASURED 2026-08-19 (pxt-nezha-diffdrive bench session): trackwidth 114.2 mm is the stakeholder's tape measurement (geometric). rotation_gain_pos/neg are physical/odometry rotation ratios from AprilCam-heading vs radio-odometry +-360 deg in-place pivots (CCW believed 360.11 -> physical 363.58; CW believed 360.84 -> physical 366.12, one sample each; offsets set 0 -- a single measurement per direction cannot separate gain from offset). Effective (scrub-corrected) single trackwidth = 114.2/1.0121 = 112.8 mm, baked into the pxt-nezha-diffdrive firmware. Other geometry fields (rotational_slip, drive_axle_offset) remain unmeasured on vevov.",
-    "_uncalibrated": false
+    "_provenance": "VEVOV-MEASURED 2026-08-28, after the stakeholder rebuilt the chassis (front caster removed, drive wheels moved forward, smaller wheels fitted). Artifact: pxt-nezha-diffdrive captures/vevov-wheel-scale-20260828.md. travel_calib: four camera-truthed raw legs (100/100/90/90 cm) gave scale 0.897-0.904 against the firmware's belief; anchored on the stakeholder's TAPE (90.4 cm for a commanded 100 cm) -> 0.7878*0.904 = 0.7122 mm/deg, implying an 81.6 mm wheel where the old bake assumed 90.3 mm. trackwidth 128.0 is the stakeholder's CALIPER measurement (geometric, never 'corrected'). rotational_slip 0.995: a four-size pivot sweep (40/70/100/130 mm, 16 pivots, |resid| <= 0.86 deg) fitted |d_theta| = 0.8055 deg/mm * d + 6.08 deg; dividing the slope by the 0.904 travel scale gives an effective track of 128.6 mm, which matches the 128.0 caliper to 0.5% -- so this chassis has essentially NO wheel scrub, and the ~0.80 the raw numbers implied was a 10% wheel error and a 12% track error stacking. NOTE the fit also carries a +6.08 deg FIXED per-pivot term that is NOT scrub and is deliberately not folded into rotational_slip (gopiv shows the same shape at +10.2 deg); folding it in would fit one pivot size and mis-turn every other.",
+    "_uncalibrated": false,
+    "firmware_bake": {
+      "travel_calib": 0.7122,
+      "trackwidth": 128.0,
+      "rotational_slip": 0.995,
+      "_note": "Opt-in: make_deploy.py's _inject_geometry() bakes exactly these into motion_engine.h in the per-robot scratch copy. Robots without this block keep the firmware defaults, which is why adding it here does not touch tovez/gopiv/togov/zetuv."
+    }
   },
   "motors": {
     "left_port": 2,
