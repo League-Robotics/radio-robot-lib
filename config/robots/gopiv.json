@@ -24,9 +24,9 @@
     "_tag_id_note": "2026-08-27, stakeholder: this robot physically carries tag 54. Corrected from 100. The 100 in this file did not match the marker actually mounted on the robot -- a stale config value, not a renumbering. Anything that resolved gopiv by tag 100 (an aprilcam mobile-tag registration in particular) must be re-registered against 54, or it will report the wrong robot's centre."
   },
   "geometry": {
-    "trackwidth": 128,
+    "trackwidth": 114.8,
     "otos_untrusted": true,
-    "rotational_slip": 1.0,
+    "rotational_slip": 0.9633,
     "rotation_gain_pos": 1.0,
     "rotation_offset": 0.0,
     "rotation_gain_neg": 1.0,
@@ -35,7 +35,9 @@
       "x": 0.0,
       "y": 0.0
     },
-    "_odometry_chip_upside_down": false
+    "_odometry_chip_upside_down": false,
+    "_geometry_note": "2026-08-27, camera-truthed on the main playfield, gopiv on firmware 0.20260827.2. trackwidth 114.8 mm is the STAKEHOLDER'S CALIPER measurement and is never corrected to make a turn land -- motion_engine.h is explicit that it is the one independently verifiable number in the geometry, and that all rotational scrub belongs in rotational_slip, since effectiveTrackWidth() = trackWidth / rotationalSlip. Was 128, which matched nothing. rotational_slip 0.9633 = 114.8 / 119.2, where 119.2 mm is the camera-measured EFFECTIVE track. METHOD, and why the first two attempts were wrong: effective track was derived from the SLOPE of a pivot sweep (4 sizes x 3 reps x both directions, 40/70/100/130 mm per wheel), fitting d_theta = 0.9616 deg/mm * d + 10.19 deg. Deriving it from any SINGLE pivot size instead gives a different answer every time -- 90 mm/wheel implied 107.4 mm and 47 mm/wheel implied 88.1 mm -- because a +10.2 deg FIXED per-pivot term (overshoot/coast, not scrub) is otherwise absorbed into the scale. That constant must NOT be folded into rotational_slip: slip is a scale, and baking the offset into it fits one pivot size and mis-turns every other. CLAUDE.md warns about exactly this shape -- a constant per-pivot offset does not cancel the way a scale error does. The 10.2 deg term is UNEXPLAINED and uncorrected; rotation_gain_*/rotation_offset_* below are where it would belong, but see the next note. INDEPENDENT CORROBORATION: the pxt-nezha-diffdrive firmware carries its own baked defaults, motion_engine.h trackWidth_ = 114.2f and rotationalSlip_ = 0.952f, i.e. an effective track of 119.96 mm. The camera measurement here is 119.2 mm -- 0.6% apart, arrived at with no knowledge of those constants.",
+    "_not_read_by_pxt_firmware_note": "2026-08-27: NOTHING in this geometry block reaches the pxt-nezha-diffdrive firmware. tools/make_deploy.py injects only the radio channel, kProfile, kVersion and the boot banner; test.ts never calls _setGeometry(); and grep finds no reader for rotation_gain_* or rotation_offset_* anywhere in that repo's src/. The robot runs motion_engine.h's baked trackWidth_/rotationalSlip_ instead. So editing this file changes host-side tooling and nothing on the robot. rotational_slip IS reachable at runtime -- it is a wire-settable config field (SET rotational_slip) -- but that is RAM-only and does not survive a reset. Changing what the robot ships with means editing motion_engine.h and reflashing."
   },
   "motors": {
     "travel_calib_left": 0.70486,
