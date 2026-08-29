@@ -27,7 +27,7 @@
   "geometry": {
     "trackwidth": 128.0,
     "otos_untrusted": true,
-    "rotational_slip": 0.995,
+    "rotational_slip": 0.987,
     "rotation_gain_pos": 1.0096,
     "rotation_offset": 0.0,
     "rotation_gain_neg": 1.0146,
@@ -40,11 +40,15 @@
     "_provenance": "VEVOV-MEASURED 2026-08-28, after the stakeholder rebuilt the chassis (front caster removed, drive wheels moved forward, smaller wheels fitted). Artifact: pxt-nezha-diffdrive captures/vevov-wheel-scale-20260828.md. travel_calib: four camera-truthed raw legs (100/100/90/90 cm) gave scale 0.897-0.904 against the firmware's belief; anchored on the stakeholder's TAPE (90.4 cm for a commanded 100 cm) -> 0.7878*0.904 = 0.7122 mm/deg, implying an 81.6 mm wheel where the old bake assumed 90.3 mm. trackwidth 128.0 is the stakeholder's CALIPER measurement (geometric, never 'corrected'). rotational_slip 0.995: a four-size pivot sweep (40/70/100/130 mm, 16 pivots, |resid| <= 0.86 deg) fitted |d_theta| = 0.8055 deg/mm * d + 6.08 deg; dividing the slope by the 0.904 travel scale gives an effective track of 128.6 mm, which matches the 128.0 caliper to 0.5% -- so this chassis has essentially NO wheel scrub, and the ~0.80 the raw numbers implied was a 10% wheel error and a 12% track error stacking. NOTE the fit also carries a +6.08 deg FIXED per-pivot term that is NOT scrub and is deliberately not folded into rotational_slip (gopiv shows the same shape at +10.2 deg); folding it in would fit one pivot size and mis-turn every other.",
     "_uncalibrated": false,
     "firmware_bake": {
-      "travel_calib": 0.7122,
+      "travel_calib": 0.70066,
       "trackwidth": 128.0,
-      "rotational_slip": 0.995,
-      "_note": "Opt-in: make_deploy.py's _inject_geometry() bakes exactly these into motion_engine.h in the per-robot scratch copy. Robots without this block keep the firmware defaults, which is why adding it here does not touch tovez/gopiv/togov/zetuv."
-    }
+      "rotational_slip": 0.987,
+      "pivot_overrun_mm": 2.2,
+      "_pivot_overrun_provenance": "VEVOV-MEASURED 2026-08-29 (pxt-nezha-diffdrive captures/vevov-square-20260829/runC.json, runC2.json; reports/vevov-tour-C-firmware-and-telemetry-20260829.md S4): thirteen MOVE_X pivots of 3-90 deg on the playfield, firmware 0.20260829.1 (speed floor 70 mm/s), all landed a CONSTANT +1.3..+2.7 deg (mean ~2.0) past their command in the robot's OWN encoders, camera agreeing to ~1 deg -- +3.2 -> +5.1, -2.6 -> -4.4, +87.3 -> +89.2. Constant, not proportional, so it is a per-wheel end-of-move distance: 2 deg * (128 mm / 2) = 2.2 mm. Subtracted from every rotation target by MotionEngine::pivotOverrunMm_. Mechanism UNVERIFIED (one kernel tick at the 70 mm/s floor is 2.3 mm); re-measure if the speed floor changes.",
+      "_note": "Opt-in: make_deploy.py's _inject_geometry() bakes exactly these into motion_engine.h in the per-robot scratch copy. Robots without this block keep the firmware defaults, which is why adding it here does not touch tovez/gopiv/togov/zetuv.",
+      "_provenance": "REGRESSION-DERIVED 2026-08-28 (supersedes the same day's earlier single-leg values travel_calib 0.7122, rotational_slip 0.995). Artifacts: pxt-nezha-diffdrive captures/regressions-20260828/ and docs/vevov-regressions-20260828.md. DISTANCE: 39 trials, 10-200 cm every 5 cm, 67 straight legs, camera-truthed -> measured = 0.98379*commanded - 0.097 cm, i.e. PURE SCALE -1.62% with a 1 mm intercept across a 20x range, so there is no per-move overshoot term. travel_calib 0.7122 * 0.98379 = 0.70066. TURN: 89 turns, 10-720 deg both directions -> camera error -2.426%/deg +1.49 (CCW), +2.355%/deg -1.63 (CW); antisymmetric to 3%, so drivetrain rather than a world-frame bias. COUPLING, and the reason rotational_slip is NOT set to the full -2.43%: rotation is driven by wheel ARC, which scales with travel_calib, so the -1.62% common part belongs to travel_calib and only the -0.81% residual is rotation-only scrub. rotational_slip 0.995/1.0081 = 0.987. motion_engine.h warns explicitly against correcting this twice. NOT folded in: a fixed per-turn overshoot the encoder also sees (+2.0 deg mean below 90 deg, +0.6 deg above 200) -- it does not scale with angle, so baking it into a scale constant would fit one turn size and mis-turn every other. The camera error crosses zero near 125 deg, which is why 30/90/720 deg spot checks previously disagreed: all three were correct."
+    },
+    "_otos_note": "OTOS reads 4.54% SHORT of camera truth over the same distance sweep (0.95462*commanded + 0.563 cm) and the error GROWS with distance (~2.5% at 10 cm to ~4.4% at 200 cm), so it is NOT a linear-scalar miscalibration. UNEXPLAINED and deliberately NOT corrected here -- do not use the OTOS for absolute distance until this is understood. Its lever arm IS measured and applied (see armX/armY in test.ts)."
   },
   "motors": {
     "left_port": 2,
