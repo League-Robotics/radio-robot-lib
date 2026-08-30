@@ -9,7 +9,9 @@
   },
   "connection": {
     "device_announcement_name": "zetuv",
-    "radio_channel": 7,
+    "radio_channel": 27,
+    "radio_group": 21,
+    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
     "wifi_ip": "192.168.4.12",
     "serial_last_6": "8a10f5",
     "_i2c_addresses": {}

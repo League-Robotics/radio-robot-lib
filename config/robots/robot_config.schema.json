@@ -76,7 +76,19 @@
           "type": "string"
         },
         "radio_channel": {
-          "type": "integer"
+          "type": "integer",
+          "description": "CODAL frequency band the robot's radio is set to (uBit.radio.setFrequencyBand). Stored, not derived at boot: make_deploy injects it into the build. Assigned from the board's five-letter name per pxt-nezha-diffdrive docs/radio-addressing.md, which yields odd values 25..73.",
+          "minimum": 0,
+          "maximum": 83
+        },
+        "radio_group": {
+          "type": "integer",
+          "description": "CODAL radio group the robot listens/transmits on (uBit.radio.setGroup). Paired with radio_channel; both are stored here and injected at deploy time. The name-derived assignment yields 1..9 and 11..126, skipping 10 so a hand-dialled relay '!C <ch>' (which forces group 10) can never collide.",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "_radio_note": {
+          "type": "string"
         },
         "wifi_ip": {
           "type": "string"

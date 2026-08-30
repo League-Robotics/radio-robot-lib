@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "_provenance": "zeguz, created 2026-08-28 SOLELY as an OTOS diagnostic target. zeguz is the bench rig whose OTOS was last demonstrated good; it is being flashed with pxt-nezha-diffdrive firmware to answer one question -- does OUR OTOS driver work against a KNOWN-GOOD sensor? RUN:probe permanently bricks vevov and tovez (3 reproductions 2026-08-28), and we cannot tell a driver defect from a dead sensor without a working reference. NOTHING here is a measurement: no geometry, vision or calibration value below has been measured on zeguz, and none may be read as if it had. There is deliberately NO geometry.firmware_bake block, so the build keeps motion_engine.h's defaults.",
+  "identity": {
+    "robot_name": "zeguz",
+    "uid": "zeguz",
+    "hardware_model": "DFRobot Nezha",
+    "common_name": "otos-bench-rig"
+  },
+  "connection": {
+    "device_announcement_name": "zeguz",
+    "radio_channel": 25,
+    "radio_group": 19,
+    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
+    "wifi_ip": "",
+    "serial_last_6": "0cfd6c",
+    "_i2c_addresses": {}
+  },
+  "vision": { "robot_tag_id": 0, "_tag_note": "UNASSIGNED -- zeguz is a bench rig, not a field robot." },
+  "geometry": {
+    "trackwidth": 114.2,
+    "rotational_slip": 0.952,
+    "_provenance": "UNMEASURED placeholders matching motion_engine.h's defaults. zeguz is not driven; these exist only so the file validates."
+  }
+}

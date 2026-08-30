@@ -9,7 +9,8 @@
   "connection": {
     "device_announcement_name": "gopiv",
     "serial_last_6": "407711",
-    "radio_channel": 5,
+    "radio_channel": 47,
+    "radio_group": 60,
     "wifi_ip": "192.168.4.10",
     "_i2c_addresses": {}
   },

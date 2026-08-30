@@ -8,7 +8,9 @@
   },
   "connection": {
     "device_announcement_name": "tovez",
-    "radio_channel": 3,
+    "radio_channel": 55,
+    "radio_group": 108,
+    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
     "wifi_ip": "192.168.4.11",
     "serial_last_6": "f137c0",
     "_i2c_addresses": {}

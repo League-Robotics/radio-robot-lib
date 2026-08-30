@@ -9,7 +9,9 @@
   },
   "connection": {
     "device_announcement_name": "togov",
-    "radio_channel": 6,
+    "radio_channel": 37,
+    "radio_group": 109,
+    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
     "serial_last_6": "ade9b4",
     "_i2c_addresses": {}
   },

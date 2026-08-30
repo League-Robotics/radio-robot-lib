@@ -9,7 +9,9 @@
   },
   "connection": {
     "device_announcement_name": "vevov",
-    "radio_channel": 4,
+    "radio_channel": 37,
+    "radio_group": 43,
+    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
     "wifi_ip": "",
     "_wifi_note": "Empty on purpose -- the documented 'no WiFi module' state (wifi_setup.py treats a falsy wifi_ip as nothing to do). tovez's 192.168.4.11 was NOT copied, because two robots cannot hold one address. Fill in vevov's own if it gets a WiFi module.",
     "serial_last_6": "6fb8dc",
