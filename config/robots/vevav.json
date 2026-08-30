@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "_provenance": "Created 2026-08-30 by pxt-nezha-diffdrive session (stakeholder direction: flash vevav with diffdrive firmware; it was running MicroPython on farm node magni until then). Radio pair derived from the name per docs/radio-addressing.md: base5('vevav') = 1046 -> channel 67, group 43. No geometry/calibration measured yet -- no geometry.firmware_bake block, so firmware defaults apply (see vevov.json's _note). UID from the magni node daemon: 99063602000528202e78ea8f7143163f000000006e052820; nRF DEVICEID not yet read from silicon. Capture: pxt-nezha-diffdrive captures/fleet-reflash-20260830.md.",
+  "identity": {
+    "robot_name": "vevav",
+    "uid": "vevav",
+    "hardware_model": "BBC micro:bit v2 (chassis unknown -- bench board on the mbdeploy farm, node magni)",
+    "common_name": "classroom-bot"
+  },
+  "connection": {
+    "device_announcement_name": "vevav",
+    "radio_channel": 67,
+    "radio_group": 43,
+    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
+    "_i2c_addresses": {}
+  }
+}
