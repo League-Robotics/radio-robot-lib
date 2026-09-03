@@ -71,3 +71,10 @@ Source: `/Volumes/Proj/proj/RobotProjects/AprilTags/config/aprilcam-old`
   `devices.json`, which belongs in `config/`.
 - No secrets were copied; env secrets stay in each project's own
   dotconfig/SOPS-managed `config/` tree.
+
+## mat/ — playfield mats (native to this repo)
+
+`mat/mattools.py` — grid/px/playfield conversions, feature lookup, tag-free
+relocation (see `mat/bb-obstacle/README.md`). Per-mat directories hold
+`mat.png` (deskewed, 8 px/cm), `mat.json`, `features.json`, `frames/`.
+Currently `mat/bb-obstacle` (Botball obstacle mat, built from camera 3).

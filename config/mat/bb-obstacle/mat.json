@@ -1,0 +1,78 @@
+{
+ "name": "bb-obstacle",
+ "display_name": "Botball obstacle mat (KIPR)",
+ "grid": {
+  "unit": "inch",
+  "square_size": 1.0,
+  "number_axis": {
+   "symbol": "u",
+   "min": -8,
+   "max": 37,
+   "note": "increases toward playfield west"
+  },
+  "letter_axis": {
+   "symbol": "v",
+   "letters": "ABCDEFGHIJKLMNOPQRSTUV",
+   "note": "A=0 ... V=21, increases toward playfield north"
+  },
+  "label_convention": "Label like N15 names the square whose centre is (u=15, v=index('N')=13); square boundaries lie at half-integers."
+ },
+ "tags": {
+  "family": "apriltag-36h11",
+  "placement": "tag centre on the NW corner (playfield frame) of the labelled square, i.e. at (u+0.5, v+0.5)",
+  "list": [
+   {
+    "id": 14,
+    "label": "A-8",
+    "u": -7.5,
+    "v": 0.5
+   },
+   {
+    "id": 12,
+    "label": "V0",
+    "u": 0.5,
+    "v": 21.5
+   },
+   {
+    "id": 15,
+    "label": "A37",
+    "u": 37.5,
+    "v": 0.5
+   },
+   {
+    "id": 16,
+    "label": "N15",
+    "u": 15.5,
+    "v": 13.5
+   },
+   {
+    "id": 10,
+    "label": "U36",
+    "u": 36.5,
+    "v": 20.5
+   }
+  ]
+ },
+ "image": {
+  "file": "mat.png",
+  "px_per_cm": 8.0,
+  "width": 965,
+  "height": 478,
+  "axes": "x right = mat -u direction (toward playfield east), y down = mat -v direction (toward playfield south)",
+  "grid": {
+   "u_at_px0": 37.9693,
+   "v_at_px0": 21.8872,
+   "cm_per_u": 2.5696,
+   "cm_per_v": 2.5955,
+   "formula": "u = u_at_px0 - x/(px_per_cm*cm_per_u);  v = v_at_px0 - y/(px_per_cm*cm_per_v)"
+  }
+ },
+ "pose": {
+  "x_cm": -60.019,
+  "y_cm": 29.649,
+  "theta_deg": 0.9155,
+  "formula": "playfield = R(theta) @ [x/px_per_cm, -y/px_per_cm] + [x_cm, y_cm]  (template pixel (0,0) is at (x_cm,y_cm))",
+  "method": "apriltag fit 2026-09-03",
+  "camera": "arducam-ov9782-usb-camera"
+ }
+}
