@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "_provenance": "Created 2026-08-30 by pxt-nezha-diffdrive session (stakeholder direction: tigez replaces vevav on the playfield; flash tigez with the latest diffdrive firmware). Radio pair derived from the name per make_deploy's derive_radio_from_name(): base5('tigez') = 2815 -> channel 55, group 114. NOTE tigez shares channel 55 with tovez (group 108) -- by design, the map has 25 channels and group disambiguates. No geometry/calibration measured yet -- firmware defaults apply (see vevov.json's _note). UID from the 192.168.1.150 node daemon: 99063602000528203b43773cab0210ea000000006e052820; nRF DEVICEID not yet read from silicon -- verify post-flash via the boot announcement. Capture: pxt-nezha-diffdrive captures/fleet-reflash-20260830.md. CALIBRATED 2026-08-30 late: see pxt-nezha-diffdrive captures/tigez-cal-20260830/ (cal.jsonl) and reports/tigez-calibration-20260830.md.",
+  "identity": {
+    "robot_name": "tigez",
+    "uid": "tigez",
+    "hardware_model": "BBC micro:bit v2 (diffdrive chassis, replacing vevav on the playfield)",
+    "common_name": "classroom-bot"
+  },
+  "connection": {
+    "device_announcement_name": "tigez",
+    "radio_channel": 55,
+    "radio_group": 114,
+    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
+    "_i2c_addresses": {}
+  },
+  "vision": {
+    "robot_tag_id": 57,
+    "tag_family": "apriltag",
+    "tag_mount_x_cm": -0.67,
+    "tag_mount_y_cm": -0.02,
+    "tag_mount_yaw_deg": -89.65,
+    "tag_mount_z_cm": 11.7,
+    "_note": "MEASURED tigez 2026-08-30 (9-pose circle solve rms 0.18 cm) and CORRECTED 2026-08-31: the tag plates are REMOVABLE (top = robot front, bottom = back) and the 08-30 solve measured a mounting that sat ~90 deg off; +91.15 was that mounting's value, not the tag's. With the plate on correctly, -89.65 makes aprilcam report robot heading (verified: yaw reads true heading +-1 deg; 180-deg pivot wobble 0.50 cm, fieldtour6 session). The ~-90 all fleet tags carry cancels aprilcam's yaw convention (tag x-axis / paper-right), not a physical rotation. aprilcam registrations are IN-MEMORY PER-SESSION by design -- re-register at every session start, then probe-fit the heading offset with a ~12 cm drive before the first real leg (pxt-nezha-diffdrive reports/tigez-field-square-20260831.md)."
+  },
+  "geometry": {
+    "travel_calib_mm_per_deg": 0.78623,
+    "travel_calib_left": 0.78642,
+    "travel_calib_right": 0.78603,
+    "wheel_diameter_mm": 90.1,
+    "trackwidth_mm": 114.4,
+    "trackwidth_sd_mm": 4.4,
+    "rotation_gain_at_baked_defaults": 1.038,
+    "rotation_offset_deg": -0.83,
+    "rotational_slip_fw_0_20260829_2": 0.992,
+    "_note": "MEASURED tigez 2026-08-30 on the playfield, camera-truthed: 80 cm run gave 800.9 mm camera vs 10184/10189 encoder tenth-degrees (L/R matched 0.05%); trackwidth from 8-pivot sweep (45..180 both directions); slip 0.992 trimmed live on fw 0.20260829.2 (gain 1.042 -> 0.986). Offset -0.83 deg/turn NOT folded into slip per the double-correction rule.",
+    "firmware_bake": {
+      "travel_calib": 0.78623,
+      "trackwidth": 114.4,
+      "rotational_slip": 0.9617,
+      "pivot_overrun_mm": 5.5,
+      "_note": "MEASURED tigez 2026-09-03 on the playfield, camera-truthed, tests/playfield/turn_calibration.py, reports/tigez-turn-cal-20260903/: baseline (slip 0.952, overrun 0) over-rotated a flat +4.4 deg per pivot at 60 mm/s and +2.7 at the default cruise (~185 mm/s); overrun 5.5 mm + slip 0.96 (b_eff 119.0 mm at the 114.2 firmware default) centred the default-cruise sweep: 36 pivots of +-90/107/180, per-angle mean +0.8/+1.6/0.0 deg (06-confirm). slip here is 0.96 x 114.4/114.2 so b_eff is unchanged with the caliper trackwidth baked. Residual is speed dependent (end-of-pivot overrun grows with cruise): at 60 mm/s these values under-rotate 90s by ~2 deg. travel_calib from the 2026-08-30 80 cm run."
+    }
+  }
+}
