@@ -39,7 +39,23 @@
     "_odometry_chip_upside_down": false,
     "_trackwidth_note": "trackwidth is the CALIPER-MEASURED wheel separation (stakeholder, 128 mm). Do NOT bend it to make turns land -- it is the one independently verifiable number in this file. Scrub correction belongs in calibration.rotational_slip; main.cpp derives an effective track = trackwidth / rotational_slip and hands THAT to Drive/Odometry/plannerLimits.",
     "_rotational_slip_note": "2026-08-09 REVISION, 0.9117 -> 0.9371 (stakeholder directive, out of process). Re-measured against the protocol-v5 MOVE angle-stop path (rogo turn, which stops on |encoder heading change|) over the getez radio relay, overhead AprilTag truth, 13 valid turns: +/-90, +/-180, +/-360 at 45/90/150 deg/s across two field positions 25 cm apart. EVERY turn OVER-rotated, 1.8-3.8%, and the error stayed a constant PERCENTAGE across magnitude, direction, speed and position -- so it is geometry, not a slip-rate effect (a 3.3x speed range moved it not at all). Effective track measured 136.59 +/- 0.58 mm against the 140.40 mm that 0.9117 implies; 128 / 136.59 = 0.9371. READ THE DISAGREEMENT WITH THE 2026-07-29 FIGURE BELOW BEFORE TRUSTING EITHER: that run measured the LEGACY open-loop turn path with host-side compensation and concluded 100.2% / 140.4 mm; this one measures the firmware's own encoder ANGLE stop and concludes 97.2% / 136.6 mm. Both are recorded deliberately; neither has been shown to supersede the other for the other path, and nobody has yet re-run the 07-29 protocol to see whether the robot itself changed. PRIOR: 2026-07-29, camera-measured on the playfield. Scrub: the ratio of ACTUAL rotation to what ideal differential kinematics (omega = (vR-vL)/b) predict -- a skid-steer robot drags its wheels sideways through a turn and under-rotates. 180 deg in-place turns vs overhead AprilTag truth, 3 W->N->E / 3 E->N->W: 180.3 deg actual (sd 1.9), 100.2%. Equivalent to an effective track of 140.4 mm against the measured 128. Domain {0} u [0.5, 1.0] (config.proto); 0 is the uncalibrated sentinel meaning apply no correction. Consumed at BOOT (gen_boot_config.py -> boot_config.cpp -> main.cpp kEffectiveTrack); a runtime CONFIG rotSlip patch acks ERR_UNIMPLEMENTED, so changing it needs a reflash.",
-    "_rotation_calibration_note": "2026-07-29, camera-measured, robot untethered. Turn response is affine: actual = gain*commanded + offset, fitted over 48 shuffled in-place turns (15/30/45/90/135/180 deg, both directions, omega 2.5/4.5/6.5/8.0 rad/s). The SAME law holds at every rate -- accuracy does not degrade with speed, so this is geometry/stiction, not a dynamics artifact. The ~-6 deg offset is why small turns were so bad: a 15 deg command landed at 9. Inverting it (commanded = (desired - offset)/gain) and re-running 47 trials gave a residual of mean +0.64 deg, sd 2.13, max 6.5 -- verified at 8.0 rad/s as well as 2.5. SIGN MAPPING, confirm before trusting: these were measured in the camera frame, where POSITIVE commanded omega DECREASES yaw. _pos here = positive commanded omega (clockwise in camera), _neg = negative. NOT YET CONSUMED BY FIRMWARE: rotation_gain_pos/neg and rotation_offset/neg exist in msg::DrivetrainConfig but have no reader and no emitter in gen_boot_config.py -- dead data, exactly as rotational_slip was before this session. Compensation is currently applied host-side (scratchpad turn_verify.py) because the robot is on battery and cannot be reflashed; wire it up next time it is on the bench."
+    "_rotation_calibration_note": "2026-07-29, camera-measured, robot untethered. Turn response is affine: actual = gain*commanded + offset, fitted over 48 shuffled in-place turns (15/30/45/90/135/180 deg, both directions, omega 2.5/4.5/6.5/8.0 rad/s). The SAME law holds at every rate -- accuracy does not degrade with speed, so this is geometry/stiction, not a dynamics artifact. The ~-6 deg offset is why small turns were so bad: a 15 deg command landed at 9. Inverting it (commanded = (desired - offset)/gain) and re-running 47 trials gave a residual of mean +0.64 deg, sd 2.13, max 6.5 -- verified at 8.0 rad/s as well as 2.5. SIGN MAPPING, confirm before trusting: these were measured in the camera frame, where POSITIVE commanded omega DECREASES yaw. _pos here = positive commanded omega (clockwise in camera), _neg = negative. NOT YET CONSUMED BY FIRMWARE: rotation_gain_pos/neg and rotation_offset/neg exist in msg::DrivetrainConfig but have no reader and no emitter in gen_boot_config.py -- dead data, exactly as rotational_slip was before this session. Compensation is currently applied host-side (scratchpad turn_verify.py) because the robot is on battery and cannot be reflashed; wire it up next time it is on the bench.",
+    "firmware_bake": {
+      "motors": {
+        "left_port": 2,
+        "fwd_sign_left": -1,
+        "right_port": 1,
+        "fwd_sign_right": 1
+      },
+      "_motors_provenance": "TOVEZ-MEASURED 2026-09-04 (pxt-nezha-diffdrive captures/bench-acceptance-029-20260904d/heading-probe.log, probe-arc.log): flashed with the pxt extension's tracked default (vevov wiring, left{1,-1}/right{2,+1}) a MOVE_X +50 moved the tag 4.87 cm toward the robot's REAR (tag arrow = front) while every pivot turned the commanded way -- swap+invert, i.e. this block, which is what this file's own motors.left_port/right_port/fwd_sign_* had said since August. make_deploy.py _inject_motors() bakes it into shims.cpp's Rig; the pxt convention is fwdSign multiplies both duty and encoder.",
+      "rotational_slip": 1.01,
+      "_rotational_slip_provenance": "TOVEZ-MEASURED 2026-09-04 (captures/bench-acceptance-029-20260904d/g1-run.log): camera/odometry rotation ratio 1.061 +- 0.010 over 12 alternating 90 deg pivots with the firmware default trackWidth_ 114.2 / rotationalSlip_ 0.952 (effective 120.0 mm); slip 1.01 on 114.2 (effective 113.1 mm) restores agreement. Consistent with this file's rotation_gain_pos 1.061. trackwidth left at the firmware default 114.2 deliberately -- only the effective track is measured.",
+      "lag_s": 0.1,
+      "_lag_provenance": "TOVEZ-MEASURED 2026-09-04 (captures/bench-acceptance-029-20260904d/lag-measure.log): first-order rise lag left 0.115 s / right 0.146 s from four WHEELS_V 200 200 step responses; the shaper's predictive arrival wants a smaller value (0.13 centres cruise-100 pivots, under-shoots cruise-70 pivots by 5.9 mm/wheel; 0.095 used for the straight/arc/square gates) -- 0.10 is the compromise baked.",
+      "stop_distance_mm": 0.0,
+      "_stop_distance_provenance": "TOVEZ-MEASURED 2026-09-04 (captures/bench-acceptance-029-20260904d/pivot-gates-gain2.log Phase A): ten floor-cruise (70 mm/s) pivots with lag 0.13 all UNDER-shoot (mean -5.9 mm/wheel); no positive speed-independent coast exists on this drivetrain.",
+      "_note": "Opt-in: pxt-nezha-diffdrive tools/make_deploy.py bakes exactly these keys into the per-robot scratch copy (_inject_geometry / _inject_motors). Added 2026-09-04 by the pxt-nezha-diffdrive sprint 029 ticket 007 acceptance session; stakeholder to confirm."
+    }
   },
   "motors": {
     "left_port": 2,
@@ -67,9 +83,9 @@
     "duty_per_speed_left": 0.001182,
     "duty_per_speed_right": 0.001182,
     "crawl_pulse": 0.0,
-    "wheel_gain_left_accel": 0.800,
+    "wheel_gain_left_accel": 0.8,
     "wheel_intercept_left_accel": 0.0,
-    "wheel_gain_left_decel": 0.800,
+    "wheel_gain_left_decel": 0.8,
     "wheel_intercept_left_decel": 0.0,
     "wheel_gain_right_accel": 0.9567,
     "wheel_intercept_right_accel": 0.0,
@@ -147,7 +163,7 @@
   "otos": {
     "offset_x": -47.7,
     "offset_y": 3.5,
-    "offset_yaw": -0.0770,
+    "offset_yaw": -0.077,
     "linear_scale": 1.0,
     "angular_scale": 0.9908,
     "_ekf_r_otos_theta": 0.01,
