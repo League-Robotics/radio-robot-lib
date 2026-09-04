@@ -38,8 +38,9 @@
       "travel_calib": 0.78623,
       "trackwidth": 114.4,
       "rotational_slip": 0.9617,
-      "pivot_overrun_mm": 5.5,
-      "_note": "MEASURED tigez 2026-09-03 on the playfield, camera-truthed, tests/playfield/turn_calibration.py, reports/tigez-turn-cal-20260903/: baseline (slip 0.952, overrun 0) over-rotated a flat +4.4 deg per pivot at 60 mm/s and +2.7 at the default cruise (~185 mm/s); overrun 5.5 mm + slip 0.96 (b_eff 119.0 mm at the 114.2 firmware default) centred the default-cruise sweep: 36 pivots of +-90/107/180, per-angle mean +0.8/+1.6/0.0 deg (06-confirm). slip here is 0.96 x 114.4/114.2 so b_eff is unchanged with the caliper trackwidth baked. Residual is speed dependent (end-of-pivot overrun grows with cruise): at 60 mm/s these values under-rotate 90s by ~2 deg. travel_calib from the 2026-08-30 80 cm run."
+      "_note": "MEASURED tigez 2026-09-03 on the playfield, camera-truthed, tests/playfield/turn_calibration.py, reports/tigez-turn-cal-20260903/: baseline (slip 0.952, overrun 0) over-rotated a flat +4.4 deg per pivot at 60 mm/s and +2.7 at the default cruise (~185 mm/s); overrun 5.5 mm + slip 0.96 (b_eff 119.0 mm at the 114.2 firmware default) centred the default-cruise sweep: 36 pivots of +-90/107/180, per-angle mean +0.8/+1.6/0.0 deg (06-confirm). slip here is 0.96 x 114.4/114.2 so b_eff is unchanged with the caliper trackwidth baked. Residual is speed dependent (end-of-pivot overrun grows with cruise): at 60 mm/s these values under-rotate 90s by ~2 deg. travel_calib from the 2026-08-30 80 cm run.",
+      "stop_distance_mm": 0.0,
+      "_stop_distance_provenance": "UNVERIFIED on the sprint-029 engine, set 2026-09-04 by pxt-nezha-diffdrive when tigez was reflashed onto it. The previous key here was pivot_overrun_mm 5.5 -- the PRE-029 engine's post-target coast, measured camera-truthed (see the notes above) and superseded: 029's predictive arrival removes that coast by design (docs/design/motion-profile-unification.md S6.3), and tovez measured stop_distance 0 on it (captures/bench-acceptance-029-20260904d, pivot-gates Phase A). Baking the old coast into the new engine would under-rotate by about that much. Re-measure per design S10.2: lag_s first (WHEELS_V step, TLM FULL), then 10 floor-cruise pivots by camera for stop_distance_mm. lag_s is absent here on purpose until measured."
     }
   }
 }
