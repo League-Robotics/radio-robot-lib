@@ -1,0 +1,178 @@
+{
+ "name": "secondary-playfield",
+ "display_name": "Secondary playfield (white welding table with black cross)",
+ "size_cm": [
+  110,
+  70
+ ],
+ "frame": "origin at the field centre; x east (camera image right), y north (camera image top); the aprilcam world frame for this playfield",
+ "image": {
+  "file": "playfield.png",
+  "px_per_cm": 8.0,
+  "width": 880,
+  "height": 560,
+  "axes": "x right = east, y down = south; template px (x,y) <-> cm: x_cm=(x-440)/8, y_cm=(280-y)/8"
+ },
+ "source": {
+  "camera": "hd-usb-camera",
+  "captured": "2026-09-04",
+  "raw_frame": "frames/hd-usb-camera-2026-09-04.png",
+  "raw_size": [
+   1920,
+   1080
+  ],
+  "method": "raw frame undistorted with the plumb-line lens model (see `lens`), then a homography from the FOUR CORNER ArUco markers at (+-55, +-35) assumed exact, warped to 8 px/cm. Edge-middle markers are deliberately not used: they carry 1-3 cm placement error.",
+  "aprilcam_calibration": {
+   "matched_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "reprojection_error_cm": 0.493,
+   "camera_matrix": [
+    [
+     1853.2201814386524,
+     0.0,
+     959.5
+    ],
+    [
+     0.0,
+     1853.2201814386524,
+     539.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "dist_coeffs": [
+    -0.2979304123772595,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "caveat": "fx and k1 lie on an unresolved ridge (9 coplanar points); valid only as a pair. The plumb-line check below says the lens is nearly rectilinear, so this k1 mostly absorbed marker placement error."
+  },
+  "corner_markers_used": [
+   0,
+   1,
+   2,
+   3
+  ]
+ },
+ "lens": {
+  "f_px": 1853.0,
+  "k1": -0.12,
+  "method": "plumb-line: k1 that maximises straightness of the field's drawn lines in the raw frame at fixed f (2026-09-04); uncorrected straightness 0.635 px rms, corrected 0.612 px -- effectively rectilinear"
+ },
+ "cross_reference_cm": {
+  "_note": "tag-free deskew anchors, measured on playfield.png by `fieldtools.py features` (playfield cm)",
+  "centre": [
+   0.83,
+   1.07
+  ],
+  "caps": {
+   "top": [
+    0.72,
+    25.95
+   ],
+   "bottom": [
+    0.94,
+    -24.24
+   ],
+   "left": [
+    -37.99,
+    1.26
+   ],
+   "right": [
+    40.83,
+    0.89
+   ]
+  }
+ },
+ "aprilcam_definition": {
+  "file": "~/.config/aprilcam/playfields/secondary-playfield.json",
+  "aruco_tags": [
+   {
+    "id": 2,
+    "x": -55,
+    "y": 35,
+    "cardinal": "northwest"
+   },
+   {
+    "id": 0,
+    "x": 55,
+    "y": 35,
+    "cardinal": "northeast"
+   },
+   {
+    "id": 3,
+    "x": -55,
+    "y": -35,
+    "cardinal": "southwest"
+   },
+   {
+    "id": 1,
+    "x": 55,
+    "y": -35,
+    "cardinal": "southeast"
+   },
+   {
+    "id": 4,
+    "x": 0,
+    "y": 35,
+    "cardinal": "north"
+   },
+   {
+    "id": 5,
+    "x": 0,
+    "y": -35,
+    "cardinal": "south"
+   },
+   {
+    "id": 6,
+    "x": 55,
+    "y": 0,
+    "cardinal": "east"
+   },
+   {
+    "id": 7,
+    "x": -55,
+    "y": 0,
+    "cardinal": "west"
+   }
+  ],
+  "april_tags": [
+   {
+    "id": 15,
+    "x": 0,
+    "y": 0,
+    "note": "temporary centre tag"
+   }
+  ]
+ },
+ "last_homography": [
+  [
+   0.06932345631776494,
+   -0.0016359242608079115,
+   -60.60297531510312
+  ],
+  [
+   0.0002481179423570968,
+   -0.07029990961476948,
+   38.119988427048725
+  ],
+  [
+   -3.535834878601993e-05,
+   -8.69284782174023e-05,
+   1.0
+  ]
+ ]
+}
