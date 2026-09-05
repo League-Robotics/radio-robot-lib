@@ -20,11 +20,13 @@
   "vision": {
     "robot_tag_id": 53,
     "camera_distance_scale": 1.0022,
-    "tag_offset_x": 0.0,
-    "tag_offset_y": 0.0,
-    "tag_offset_z": 118.0,
-    "tag_offset_yaw": 0.0,
-    "_tag_note": "Tag 53, assigned to vevov 2026-08-19 and registered with the AprilCam daemon the same day (owner=vevov, z=11.8cm), taking id 53 over from the previous owner=calibration registration. tag_offset_z=118.0 mm is OPERATOR-CONFIRMED. tag_offset_x/y are 0.0 = IDENTITY = UNMEASURED, not a measurement that came out zero: with identity offsets the camera reports the RAW TAG position, not vevov's centre of rotation, so any world_xy read for this robot is off by however far the tag sits from centre (tovez's is -41.0 mm). Measure with the three-reading in-place-rotation fit described in tovez.json's vision._tag_note, then update BOTH this block and the daemon registration. camera_distance_scale is tovez's value, not measured on vevov."
+    "tag_offset_x": -27.87,
+    "tag_offset_y": 0.34,
+    "tag_offset_z": 112.0,
+    "tag_offset_yaw": -91.17,
+    "_tag_note": "Tag 53, assigned to vevov 2026-08-19 and registered with the AprilCam daemon the same day (owner=vevov, z=11.8cm), taking id 53 over from the previous owner=calibration registration. tag_offset_z=118.0 mm is OPERATOR-CONFIRMED. tag_offset_x/y are 0.0 = IDENTITY = UNMEASURED, not a measurement that came out zero: with identity offsets the camera reports the RAW TAG position, not vevov's centre of rotation, so any world_xy read for this robot is off by however far the tag sits from centre (tovez's is -41.0 mm). Measure with the three-reading in-place-rotation fit described in tovez.json's vision._tag_note, then update BOTH this block and the daemon registration. camera_distance_scale is tovez's value, not measured on vevov.",
+    "_units_note": "tag_offset_x/y/z are MILLIMETRES, the tag relative to the CENTRE OF ROTATION in the robot frame (x forward, y left). tag_offset_yaw is DEGREES and is the FULL mount yaw: -90 (AprilCam's fixed front-edge-to-hat convention, see pxt-nezha-diffdrive .claude/rules/tag-yaw-is-the-front-edge-not-the-hat.md) plus the physical plate residual. Feed it to the daemon as mount_yaw_rad; do NOT add the 90 again in your own code. Nothing read tag_offset_yaw as of 2026-09-05, so this fixes the convention: it matches tigez's previous non-schema tag_mount_yaw_deg -89.65, which was -90 + 0.35 residual.",
+    "_provenance": "VEVOV-MEASURED 2026-09-05 by pxt-nezha-diffdrive tests/calibration/mount.py on the SECONDARY playfield (110x70, camera hd-usb-camera): 9 rest poses over 8 +-90 pivots, rms 4.8 mm, verification drift 0.42 cm/pivot; solved AFTER the stakeholder remounted the tag plate, which had been on backwards. Heights are the stakeholder's tape measurements the same day. Artifact: reports/pf2-recal-20260905/04-mount-vevov-replate/mount.json. Residual -1.17 deg from a 300 mm probe."
   },
   "geometry": {
     "trackwidth": 128.0,
