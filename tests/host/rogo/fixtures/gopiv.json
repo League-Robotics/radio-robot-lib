@@ -19,7 +19,7 @@
     "camera_distance_scale": 1.0,
     "tag_offset_x": 0,
     "tag_offset_y": 0.0,
-    "tag_offset_z": 120.0,
+    "tag_offset_z": 122.0,
     "tag_offset_yaw": 0.0,
     "_note": "gopiv is a BENCH TEST RIG (one motor, no wheels, never on the playfield); no physical AprilTag is mounted. robot_tag_id inherited from the template for schema completeness only."
   },

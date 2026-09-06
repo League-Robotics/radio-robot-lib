@@ -60,6 +60,10 @@ Source: `/Volumes/Proj/proj/RobotProjects/AprilTags/config/aprilcam-old`
 
 - `main-playfield.json`, `secondary-playfield.json` ← `~/.config/aprilcam/playfields/`
 - `tags.json` ← `~/.local/share/aprilcam/`
+- `mounts-registry.json` ← `~/.local/share/aprilcam/mounts/registry.json`
+  — the AUTHORITATIVE mobile-tag mount registry (what `aprilcam tags mount`
+  reads and writes). `tags.json` above is a stale 2026-08-19 file that the
+  daemon no longer uses; do not restore it expecting current mounts.
 
 ## Restore notes
 
