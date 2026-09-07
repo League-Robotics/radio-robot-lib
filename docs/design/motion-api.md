@@ -183,16 +183,22 @@ mapping onto `drive(velocity, twist, lease)`.
 
 Travel `distance` along the path while the heading changes by `rotation`. At the
 end the heading has changed by exactly `rotation`, and the position has moved
-along whatever curve carried it there.
+along the constant-radius arc R = distance / rotation that carried it there.
 
-**How the two combine depends on how big the rotation is**, and the thresholds
-are measured, not chosen. Recovered from `navigator.cpp:237-240` at `88dd9ad8^`:
+**The two always combine into ONE blended segment.** Every `(distance,
+rotation)` pair is a driveable arc: |R| below half the track width just means
+the inner wheel runs backwards, R = 0 is a spot pivot, and a rotation beyond a
+full turn goes round more than once. There is no angle threshold on `move_x`.
 
-| condition | behaviour |
-|---|---|
-| \|rotation\| `>=` **50°** (`turn_first_angle`, 0.8726646 rad) | stop, pivot to the new heading, then travel |
-| \|rotation\| `<` 50° | one blended segment — steer it out with curvature alone |
-| \|bearing\| `>` **90°** (`behind_angle`, π/2) | no finite-radius tangent arc reaches the target; pivot |
+HISTORY (pxt-nezha-diffdrive, 2026-09-07, `reports/move-x-arc-space-20260906.md`):
+this section used to carry a table recovered from `navigator.cpp:237-240` at
+`88dd9ad8^` — pivot first at |rotation| >= 50° (`turn_first_angle`), and pivot
+when |bearing| > 90° (`behind_angle`). Both rows are go-to-a-POINT heuristics
+(the second is stated on bearing, which `move_x` does not have), and applying
+the first to `move_x` replaced the requested arc with pivot-then-straight, a
+different figure ending somewhere else (a 360° arc drove as a straight line,
+MEASURED gopiv 2026-09-01). The 50° rule lives on in §3.5's `go_to`, where the
+arc-vs-pivot-then-chord choice is a real policy question.
 
 Two rules that are not obvious and were learned the hard way:
 
