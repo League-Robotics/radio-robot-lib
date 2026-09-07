@@ -12,7 +12,9 @@
     "radio_channel": 55,
     "radio_group": 114,
     "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
-    "_i2c_addresses": {}
+    "_i2c_addresses": {},
+    "v6_radio_link": true,
+    "_v6_radio_link_note": "2026-09-06: tigez has NO WiFi module (no wifi_ip), so the v6 radio link over the relay is its only untethered carrier. pxt-nezha-diffdrive's make_deploy.py reads this key (_read_robot_radio_link) and boots the radio link in test.ts; without it the build defaults to OFF and a tigez placed on the field is unreachable -- MEASURED that day: firmware 1.20260906.7 built without it answered nothing to HELLO/PING/ID/STATUS through the relay on 55/114 while the camera showed it live on the field."
   },
   "vision": {
     "robot_tag_id": 57,
