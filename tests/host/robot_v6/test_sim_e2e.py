@@ -79,6 +79,21 @@ def test_estop_reaches_the_real_sim_and_is_answered(sim_transport):
     assert "estop" in replies
 
 
+def test_funcs_on_an_empty_registry_is_the_ack_alone(sim_transport):
+    """FUNCS over real bytes on a real pipe. The sim links the REAL
+    ProtocolHandler against FakeMotionAdapter, which registers nothing --
+    so the wire-correct answer is the ack with no `funcs` lines before
+    it, the empty-allowlist shape docs/design/protocol.md §6.5 specifies
+    (and the same answer DiffDriveAdapter gives on hardware)."""
+    _read_until(sim_transport, lambda ls: len(ls) >= 1)  # consume the banner
+
+    replies = []
+    session = Session(sim_transport, on_reply=replies.append)
+    seq_id = session.send("FUNCS")
+    assert session.wait_for_ack(seq_id, timeout=3.0), "the sim never acked FUNCS"
+    assert not [r for r in replies if r.verb == "funcs"]
+
+
 def test_sim_shuts_down_cleanly_on_stdin_eof(sim_binary):
     transport = StdioTransport([str(sim_binary), "--stdio", "--period", "10"])
     try:

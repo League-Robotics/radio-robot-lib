@@ -111,7 +111,7 @@ OUT status ready=1 active=0 connL=1 connR=1 otos=1 wedge=0 flags=d8 tlm=pose nex
 # table for real dispatch.
 IN HELP #1
 OUT ack 1 0 none
-OUT help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN
+OUT help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP FUNCS RUN
 
 # ---- Grammar rules that are easy to miss ----
 
@@ -182,7 +182,7 @@ SETUP lastdone 0
 SETUP lastdonereason 0
 IN HELP #1
 OUT ack 1 0 none
-OUT help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN
+OUT help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP FUNCS RUN
 
 # ---- Error-code coverage: every REACHABLE code Result can produce has
 # at least one wire vector. Code 11 (ERR_DUPLICATE_ID) no longer exists
@@ -436,6 +436,51 @@ OUT err 2 #1
 # there is no id to sequence-check against either -- no reply of any
 # kind, unaffected by this change.
 IN RUN
+OUT NONE
+
+# ---- FUNCS: enumerating the RUN registry (2026-09-07,
+# docs/design/protocol.md §6.5). One `funcs <name> [<signature>]` line
+# per registered function, emitted after the ack; the ack is what
+# terminates the listing, which is why FUNCS is sequenced. The mock's
+# registry is EMPTY unless a block sets it, so the first vector below
+# is the empty-allowlist case every unset block would also produce.
+# `-` in a runentry SETUP means "no signature declared" (the fixture's
+# tokenizer has no empty token, same as the wire grammar). ----
+
+SETUP runentrycount 0
+IN FUNCS #1
+OUT ack 1 0 none
+
+SETUP runentry 0 add int,int->int
+SETUP runentry 1 blink int->void
+SETUP runentry 2 ping ->int
+SETUP runentrycount 3
+IN FUNCS #1
+OUT ack 1 0 none
+OUT funcs add int,int->int
+OUT funcs blink int->void
+OUT funcs ping ->int
+
+# No signature declared: the field is OMITTED entirely rather than
+# emitted as an empty token, which this grammar cannot spell.
+SETUP runentry 0 blink -
+SETUP runentrycount 1
+IN FUNCS #1
+OUT ack 1 0 none
+OUT funcs blink
+
+# FUNCS shares decodeNoFields with ID/VER/STATUS/HELP, so a stray data
+# field is a structural decode failure: NACK, sequence held.
+SETUP runentry 0 blink -
+SETUP runentrycount 1
+IN FUNCS x #1
+OUT nack 1 0 none
+OUT err 2 #1
+
+# Sequenced, so a missing id is malformed -- silence, not a listing.
+# (Contrast HELP/ID/VER/STATUS, which the spec moved OFF the sequence
+# on 2026-08-27 precisely because each answers in one line.)
+IN FUNCS
 OUT NONE
 
 # ---- TLM HDR: header recovery request (docs/design/protocol.md §10.5,

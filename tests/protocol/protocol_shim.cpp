@@ -195,6 +195,25 @@ void phSetRunResultText(void* handle, const char* text) {
   static_cast<Handle*>(handle)->adapter.runResultText = text;
 }
 
+// ---- the mock's RUN REGISTRY (what FUNCS enumerates) ---------------------
+// `name`/`signature` must outlive their use, same borrowed-pointer
+// contract as phSetRunResultText above. Pass "" as `signature` to
+// declare none. Setting an entry does NOT itself change the count --
+// call phSetRunEntryCount() once the entries are in place, so a test
+// reads in the same order the mock does.
+void phSetRunEntry(void* handle, unsigned int index, const char* name,
+                   const char* signature) {
+  MockAdapter& adapter = static_cast<Handle*>(handle)->adapter;
+  if (index >= MockAdapter::kMaxRunEntries) return;
+  adapter.runNames[index] = name;
+  adapter.runSignatures[index] = signature;
+}
+void phSetRunEntryCount(void* handle, unsigned int count) {
+  MockAdapter& adapter = static_cast<Handle*>(handle)->adapter;
+  adapter.numRuns =
+      count > MockAdapter::kMaxRunEntries ? MockAdapter::kMaxRunEntries : count;
+}
+
 // ---- MockAdapter call-log readback ---------------------------------------
 
 int phWheelsCalls(void* handle) {

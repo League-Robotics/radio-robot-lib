@@ -263,7 +263,7 @@ class ProtocolHandler {
     ExecuteFn execute;
   };
 
-  static const VerbEntry kCommandTable[18];
+  static const VerbEntry kCommandTable[19];
 
   // Field-token storage cap for one line, verb-exclusive (id excluded --
   // see dispatch()'s own comment for where the id is resolved). Every
@@ -361,6 +361,8 @@ class ProtocolHandler {
                   uint8_t& errCode);
   void execHelp(char** fields, size_t fieldCount, uint32_t id,
                uint8_t& errCode);
+  void execFuncs(char** fields, size_t fieldCount, uint32_t id,
+                uint8_t& errCode);
 
   bool decodeGet(char** fields, size_t fieldCount);
   void execGet(char** fields, size_t fieldCount, uint32_t id,

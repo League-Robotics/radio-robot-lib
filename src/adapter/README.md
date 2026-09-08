@@ -25,6 +25,9 @@ of the others and hold the one thing neither of them is allowed to know
   these five verbs correctly, but `DiffDriveAdapter` itself cannot give
   them real effect. `kUnknown`, not `kUnimplemented`, matching the same
   posture `RUN`'s own empty registration table already takes (see below).
+- **`FUNCS`** → no lines at all, just the ack. `runCount()` is 0 here,
+  which is the wire-visible form of the same empty allowlist `onRun()`
+  reports one name at a time.
 - **`STOP [now]`** → `neutral()`, immediate regardless of the `now`
   flag (there is no ramp to choose between). No queue **on this adapter**
   (see below) — a property of `DiffDriveAdapter` having no planner, not a

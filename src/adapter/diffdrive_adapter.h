@@ -193,6 +193,15 @@ class DiffDriveAdapter : public Adapter {
               char* result, size_t resultCapacity,
               bool& hasResult) override;
 
+  // ...and the same empty allowlist seen from the FUNCS side: a zero
+  // count, so FUNCS emits no lines at all. That is not a stub either --
+  // it is the wire-visible form of "this adapter registers nothing,"
+  // exactly consistent with onRun() above answering every name with
+  // ERR_UNKNOWN.
+  size_t runCount() const override { return 0; }
+  const char* runName(size_t /*index*/) const override { return ""; }
+  const char* runSignature(size_t /*index*/) const override { return ""; }
+
   // ---- telemetry projection (NOT part of Protocol::Adapter — the app
   // driving the loop calls this once per frame it wants to emit, then
   // hands the result straight to ProtocolHandler::emitTelemetry()). The

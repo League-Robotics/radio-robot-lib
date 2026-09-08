@@ -59,6 +59,20 @@ class MockAdapter : public Protocol::Adapter {
   float fieldValues[kMaxFields] = {1.5f, -2.25f, 0.0f, 100.0f};
   size_t numFields = kMaxFields;
 
+  // A settable RUN REGISTRY -- what FUNCS enumerates, entirely separate
+  // from onRun()'s own canned outcome above (a test can list names here
+  // without registering any behaviour, because FUNCS only ever reads
+  // the table; it never invokes anything). Both arrays hold BORROWED
+  // pointers, the same outlive-the-call contract as fieldNames and
+  // runResultText. numRuns defaults to 0 -- the empty allowlist -- so
+  // every existing test's FUNCS answer is silence unless it opts in.
+  static constexpr size_t kMaxRunEntries = 8;
+  const char* runNames[kMaxRunEntries] = {};
+  // "" means "no signature declared for this entry", which omits the
+  // field from that entry's wire line entirely.
+  const char* runSignatures[kMaxRunEntries] = {};
+  size_t numRuns = 0;
+
   // A single extra name/value pair a test can point at an ARBITRARY
   // field name (e.g. spec S7.1's own "wheel_control.pid_kp" example),
   // checked before the fixed table above. nullptr (the default) means
@@ -248,6 +262,15 @@ class MockAdapter : public Protocol::Adapter {
       std::snprintf(result, resultCapacity, "%s", runResultText);
     }
     return runResult;
+  }
+  size_t runCount() const override { return numRuns; }
+  const char* runName(size_t index) const override {
+    if (index >= numRuns || runNames[index] == nullptr) return "";
+    return runNames[index];
+  }
+  const char* runSignature(size_t index) const override {
+    if (index >= numRuns || runSignatures[index] == nullptr) return "";
+    return runSignatures[index];
   }
   Protocol::Result onTlm(Protocol::TlmMode mode) override {
     ++tlmCalls;

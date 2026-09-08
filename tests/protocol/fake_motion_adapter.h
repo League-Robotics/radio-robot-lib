@@ -321,6 +321,9 @@ class FakeMotionAdapter : public Adapter {
     hasResult = false;
     return Result::kUnknown;
   }
+  size_t runCount() const override { return 0; }
+  const char* runName(size_t /*index*/) const override { return ""; }
+  const char* runSignature(size_t /*index*/) const override { return ""; }
 
   // ---- the step()-driven progress loop -- NO timer, NO clock. One
   // call, one tick, always; the harness decides the pace entirely. ----

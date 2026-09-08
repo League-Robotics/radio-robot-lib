@@ -25,7 +25,7 @@ header for the full resolution history of what changed and why.
 ## Scope
 
 In: `HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X
-MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN`, and their replies, plus `debug`
+MOVE_V GO_TO_R GO_TO_W STOP ESTOP FUNCS RUN`, and their replies, plus `debug`
 (robot-to-host only, no inbound wire form). No kernel, no motors, no
 config storage, no transport -- bytes in via `feed()`, bytes out via
 `Sink`. `SEED`/`CAL` are deliberately out of scope; they need

@@ -69,7 +69,12 @@ Full per-verb table (arity, sequenced/unsequenced, reply shape) is
 `protocol#6`; do not duplicate it here. Load-bearing summary:
 
 - **Sequenced** (require `#id`): `GET SET TLM WHEELS_X WHEELS_V MOVE_X
-  MOVE_V GO_TO_R GO_TO_W STOP RUN`.
+  MOVE_V GO_TO_R GO_TO_W STOP FUNCS RUN`. `FUNCS` (`protocol#6.5`, added
+  2026-09-07) enumerates the adapter's `RUN` registry, one
+  `funcs <name> [<signature>]` line per registered function; it is
+  sequenced despite being a pure query because its reply is
+  variable-length and the ack is what terminates it, the same way bare
+  `GET`'s dump ends.
 - **Unsequenced** (never carry an id, maximally forgiving of trailing
   content): `HELLO` (resets the sequence), `ESTOP` (panic stop, always
   executes and always replies `estop`), `PING` (liveness, answers even

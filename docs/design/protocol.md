@@ -593,7 +593,7 @@ the transport reply a sequenced verb always gets.
 | `ID` | **no** (2026-08-27) | — | `id <drivetrain> <profile> <version> <name>` | `name` is the wire's authoritative board identity, MANDATORY — see §6.4; maximally forgiving, like `PING` |
 | `VER` | **no** (2026-08-27) | — | `ver <version>` | maximally forgiving, like `PING` |
 | `STATUS` | **no** (2026-08-27) | — | `status ready=1 active=0 connL=1 connR=1 otos=0 wedge=0 flags=<hex> tlm=off next=<n> done=<n> reason=<tok>` | `k=v`, order not guaranteed, unknown keys ignored; `done=`/`reason=` are NEW 2026-08-27 (§8.7) and read fresh off the Adapter at format time |
-| `HELP` | **no** (2026-08-27) | — | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP RUN` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
+| `HELP` | **no** (2026-08-27) | — | `help HELLO PING ID VER STATUS HELP GET SET TLM WHEELS_X WHEELS_V MOVE_X MOVE_V GO_TO_R GO_TO_W STOP ESTOP FUNCS RUN` | rest-of-line; generated from the same table `dispatch()` uses, so it cannot drift |
 | `GET` | yes | `[name] #id` | `get name value` (one field) or one `get` line per field (bare `GET`) | **unknown name → `err 1 #<id>` alongside the ack (2026-08-27)** — symmetric with `SET`; was a silent no-`get`-line answer through 2026-08-26, see §9.11 |
 | `SET` | yes | `name value #id` | — (accepted: none; rejected: `err <code> #<id>`) | an in-order `ack` **is** the acceptance; a value that fails to PARSE is a decode failure (§8.9), not a rejection |
 | `TLM` | yes | `mode #id` | — | `OFF`/`POSE`/`FULL`/`NOW`/`AUTO`/`BUFFER` decoded; an unrecognized mode token is a decode failure (§8.9); the adapter's own `Result` never surfaces on the wire |
@@ -605,6 +605,7 @@ the transport reply a sequenced verb always gets.
 | `GO_TO_W` | yes | `x y speed arrive timeout #id` | — | drive to a world-frame point (motion-api.md §3.6); `kUnknown` on `DiffDriveAdapter` |
 | `STOP` | yes | `[now] #id` | — (accepted: none; rejected: `err <code> #<id>`) | the optional `now` token (motion-api.md §3.7/§9.1) sits safely before the id since the id is self-marking; see §5.1 |
 | `ESTOP` | **no** | — | `estop` | never sequenced, never nacked, maximally forgiving; see §5.1/§8.3 |
+| `FUNCS` | yes | — | one `funcs <name> [<signature>]` line per registered function | enumerates the adapter's `RUN` registry; zero lines is a valid answer — see §6.5 |
 | `RUN` | yes | `function [arg...] #id` | `ret <value> #<id>` (accepted, function returned a value) / — (accepted, void) / `err <code> #<id>` (rejected) | invocation by name; see §6.3 |
 | — | — | — | `debug <text>` | robot-to-host ONLY, no inbound wire form; see §6.2 |
 | — | — | — | `ack <n> <lastDone> <reason>` / `nack <n> <lastDone> <reason>` | transport layer; the `<reason>` token is NEW 2026-08-22 — see §8.8 |
@@ -634,6 +635,7 @@ pair carried by every `ack`/`nack` is the completion channel.
 | `err <code> #<id>` | application: a command's *content* was rejected — either a MERITS rejection (arrived intact, the adapter's own `Result` refused it, §4) or the "content" half of a decode failure (§8.9). Field order: the id is always the LAST token, matching every other line in this grammar (§8.6). |
 | `estop` | `ESTOP` only — confirms the stop executed (§8.3) |
 | `ret <value> #<id>` | `RUN` only (§6.3) — the invoked function returned a value, emitted IN ADDITION to the `ack` |
+| `funcs <name> [<signature>]` | `FUNCS` only (§6.5) — one line per registered function, emitted IN ADDITION to the `ack`; zero lines when the registry is empty |
 
 **A command is never "just" accepted or "just" rejected in isolation** —
 but which TRANSPORT reply it gets now depends on which of two kinds of
@@ -729,7 +731,10 @@ adapter registers is invocable by name from the wire by anything that can
 talk to the robot, including any other host on a shared radio channel.
 Treat the table as an explicit allowlist, not an implementation detail —
 a function should be registered because it is meant to be remotely
-callable, not because it happened to be convenient to expose.
+callable, not because it happened to be convenient to expose. **`FUNCS`
+(§6.5) makes that table discoverable**, which sharpens this rather than
+softening it: registering a name now *publishes* it to everything that
+can hear the channel, rather than merely making it guessable.
 
 **Replies** — `ret` is a lowercase reply verb, always carrying the
 (now-mandatory) id:
@@ -805,6 +810,91 @@ identity field is worse than none, because it looks like a guarantee.
 
 `Identity.name` was already plumbed for `HELLO`'s banner before this
 change; `execId()` simply did not read it.
+
+### 6.5 `FUNCS` — enumerating the `RUN` registry
+
+**Added 2026-09-07 (stakeholder-directed).** Wire shape: **`FUNCS #id`**,
+no data fields. Reply: **one `funcs <name> [<signature>]` line per
+registered function**, emitted in addition to the ack every sequenced
+verb gets.
+
+```
+FUNCS #7
+funcs add int,int->int
+funcs blink int->void
+funcs ping ->int
+ack 7 0 none
+```
+
+§6.3 gave `RUN` a registration table and called it the security
+boundary, then left it opaque: a host could only discover a callable
+name by guessing it and reading the `ERR_UNKNOWN`. `FUNCS` closes that
+— it is to `RUN` what `HELP` is to the verb table.
+
+**The handler still holds no function table.** `FUNCS` walks the
+Adapter's own `runCount()` / `runName(i)` / `runSignature(i)`, exactly
+the way a bare `GET` walks `fieldCount()` / `fieldName(i)` (§7). It
+*discloses* the adapter's registration table; it does not keep one, and
+the §6.3 division of responsibility is unchanged.
+
+**One line per function, not one rest-of-line reply.** `HELP`'s single
+`help A B C …` line was the obvious alternative and is wrong here for
+two reasons. `HELP` lists a table that is fixed at compile time and
+known to fit; a registration table's size is the concrete adapter's
+business, and one that outgrew the 240-byte line cap (§3.1) would be
+*silently truncated* — a host would read a short allowlist as the whole
+allowlist, which is the one failure mode an allowlist must never have.
+And a rest-of-line reply has nowhere to put a per-function signature
+without inventing an intra-field encoding the grammar does not have.
+
+**The ack is the terminator, which is why `FUNCS` is sequenced.** A
+variable number of reply lines needs some way for the host to know it
+has them all, and this grammar already has exactly one such mechanism
+in use: bare `GET`'s dump, which ends when the `ack` for that id
+arrives. `FUNCS` reuses it rather than inventing a sentinel line or a
+count prefix. That is a deliberate departure from the other pure
+queries — `HELP`/`ID`/`VER`/`STATUS` went unsequenced on 2026-08-27
+(§8.3) precisely because each answers in exactly one line and so needs
+no terminator. `FUNCS` does not have that property.
+
+The `funcs` lines themselves carry **no `#<id>`**, again following bare
+`GET`'s `get name value` rather than `RUN`'s `ret <value> #<id>`: the
+id-bearing line in this exchange is the ack that closes it.
+
+**An empty registry emits nothing at all — just the ack.** This is the
+wire-visible form of an empty allowlist, not an error and not an
+unimplemented stub. It is the correct and expected answer from any
+adapter that owns no callable surface, including this library's own
+`DiffDriveAdapter` (§5), whose `RUN` already answers every name with
+`ERR_UNKNOWN`. A host reads "nothing is callable here" from the absence
+of `funcs` lines between its command and its ack.
+
+**The signature is optional and its format is unspecified.** It is a
+single token — the grammar makes a space the field separator, so it can
+be no more than that — and `int,int->int` is a readable convention, not
+a contract. It is advisory text for a human or a tool; nothing in this
+protocol parses it, and a porter is free to emit a different convention
+or none. An adapter declaring no signature for an entry omits the field
+entirely (`funcs blink`), rather than emitting an empty token, which
+this grammar has no spelling for.
+
+**Registered names must be single tokens too**, for the harder reason
+that a name containing a space could never be *addressed* by `RUN` in
+the first place — the same expressiveness limit §6.3 already documents
+for `RUN`'s arguments.
+
+**Both strings are adapter-supplied free-form text and are sanitized,
+not trusted.** `'\n'`/`'\r'` are stripped and the line is truncated to
+fit the cap, exactly as `debug`'s text (§6.2) and `RUN`'s returned value
+(§6.3) are — an adapter cannot forge a second wire line through a
+registered name any more than it can through a return value. An entry
+whose name sanitizes down to nothing is skipped rather than emitted as
+a bare `funcs` line, since a nameless entry is not addressable.
+
+**Arity:** `FUNCS` takes no data fields. `FUNCS x #1` is a decode
+failure (§8.9) — `nack` plus `err 2`, sequence not advanced — the same
+answer `ID`/`VER`/`STATUS`/`HELP` give to a stray field, and it comes
+from sharing their `decodeNoFields`.
 
 ---
 
@@ -2190,6 +2280,33 @@ The open question is no longer "what broke ch4" but **"why has ch4
 apparently always been around 75%, and why did we believe otherwise?"** —
 with the drift itself as the phenomenon to characterise, since a period
 would be the strongest available clue to what is duty-cycling.
+
+### 9.12 `FUNCS` — the `RUN` registry becomes discoverable (2026-09-07)
+
+**Stakeholder-directed, out of process.** §6.3 shipped `RUN` with the
+registration table framed as "the security boundary… an explicit
+allowlist," and then gave the wire no way to read that allowlist. A host
+could only discover a callable name by guessing it and reading the
+`ERR_UNKNOWN`. `FUNCS` (§6.5) closes the gap, together with three new
+`Adapter` methods (`runCount`/`runName`/`runSignature`) that let a
+concrete adapter declare its registry the same way `fieldCount`/
+`fieldName` already let it declare its config surface.
+
+Four decisions, all settled before implementation:
+
+| question | decision | why |
+|---|---|---|
+| verb name | `FUNCS` / reply `funcs` | `LIST` was the stakeholder's own word but reads as "list *what?*" beside `HELP`, which also lists things. `FUNCS` names its subject. |
+| reply shape | one line per registered function | a rest-of-line `help`-style reply silently truncates past the 240-byte cap, which for an *allowlist* means a host reading a short list as the whole list; and it has nowhere to put a signature (§6.5) |
+| sequenced? | **yes** | a variable number of reply lines needs a terminator, and the ack is the one this grammar already uses for exactly that, in bare `GET`. This is why `FUNCS` does not join the four query verbs §9.11 moved off the sequence. |
+| scope | wire + handler + adapter seam | the registry itself stays each concrete adapter's business, unchanged from §6.3's division of responsibility — the handler gained a way to *walk* a table, not a table |
+
+The signature field is deliberately unspecified beyond "one token."
+Making it a parsed type language was considered and rejected: nothing in
+this protocol would consume it, every consumer of it is a human or a
+tool outside this contract, and a format the wire promises but never
+validates is a guarantee waiting to be wrong — the same reasoning §6.4
+used to make `ID`'s `name` mandatory rather than optional.
 
 ---
 

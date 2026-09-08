@@ -218,7 +218,7 @@ size_t sanitizeLineText(const char* text, char* out, size_t outCap) {
 
 }  // namespace
 
-const ProtocolHandler::VerbEntry ProtocolHandler::kCommandTable[18] = {
+const ProtocolHandler::VerbEntry ProtocolHandler::kCommandTable[19] = {
     {"HELLO", &ProtocolHandler::decodeAlwaysTrue, &ProtocolHandler::execNoop},
     {"PING", &ProtocolHandler::decodeAlwaysTrue, &ProtocolHandler::execNoop},
     {"ID", &ProtocolHandler::decodeNoFields, &ProtocolHandler::execId},
@@ -238,6 +238,7 @@ const ProtocolHandler::VerbEntry ProtocolHandler::kCommandTable[18] = {
     {"GO_TO_W", &ProtocolHandler::decodeGoToW, &ProtocolHandler::execGoToW},
     {"STOP", &ProtocolHandler::decodeStop, &ProtocolHandler::execStop},
     {"ESTOP", &ProtocolHandler::decodeAlwaysTrue, &ProtocolHandler::execNoop},
+    {"FUNCS", &ProtocolHandler::decodeNoFields, &ProtocolHandler::execFuncs},
     {"RUN", &ProtocolHandler::decodeRun, &ProtocolHandler::execRun},
 };
 
@@ -667,6 +668,63 @@ void ProtocolHandler::execHelp(char** fields, size_t fieldCount, uint32_t id,
   append("\n");
   buf[pos] = '\0';
   writeLine(buf);
+}
+
+// FUNCS -- enumerate the adapter's RUN registry, one line per entry
+// (docs/design/protocol.md's FUNCS section). Structurally this is bare
+// GET's own loop: walk an adapter-declared count, ask for each name,
+// write one informational line each. The handler holds no function
+// table here either -- FUNCS DISCLOSES the adapter's registration
+// table, it does not keep one.
+//
+// An empty registry writes NOTHING. That is the wire-visible shape of
+// an empty allowlist (this library's own DiffDriveAdapter), not an
+// error: the `ack` dispatch() already sent is the whole reply, and the
+// host reads "nothing is callable" from its absence. FUNCS therefore
+// never sets errCode.
+//
+// Both the name and the (optional) signature are adapter-supplied
+// free-form text, so both go through sanitizeLineText() before they
+// reach the sink -- the same forge-a-second-line defence execRun()
+// applies to onRun()'s result and sendDebug() applies to its text.
+void ProtocolHandler::execFuncs(char** fields, size_t fieldCount, uint32_t id,
+                                 uint8_t& errCode) {
+  (void)fields;
+  (void)fieldCount;
+  (void)id;
+  errCode = 0;
+
+  // Per-token budget: "funcs " + name + ' ' + signature + '\n' must fit
+  // kMaxLineBytes, so no single token can usefully exceed this. An
+  // ARRAY SIZE (content plus NUL), matching kMaxRunResultBytes'
+  // accounting.
+  constexpr size_t kTokenBytes = kMaxLineBytes - 7;  // "funcs " + '\n'
+  char name[kTokenBytes];
+  char signature[kTokenBytes];
+  // +1 for snprintf's own NUL beyond the kMaxLineBytes of wire content
+  // -- see execRun()'s note on the same accounting.
+  char buf[kMaxLineBytes + 1];
+
+  const size_t total = adapter_.runCount();
+  for (size_t i = 0; i < total; ++i) {
+    sanitizeLineText(adapter_.runName(i), name, sizeof(name));
+    if (name[0] == '\0') continue;  // an unnamed entry is not addressable
+    sanitizeLineText(adapter_.runSignature(i), signature, sizeof(signature));
+
+    // An empty signature omits the field entirely rather than leaving a
+    // dangling separator space -- the grammar has no empty token, the
+    // same rule sendDebug("") follows.
+    std::snprintf(buf, kMaxLineBytes, "funcs %s%s%s", name,
+                  signature[0] == '\0' ? "" : " ", signature);
+    // snprintf TRUNCATES; appending the terminator off the RESULTING
+    // length (never off the would-be length it returns) is what
+    // guarantees every emitted line still ends in '\n' even when the
+    // adapter's own strings overran the cap.
+    const size_t len = std::strlen(buf);
+    buf[len] = '\n';
+    buf[len + 1] = '\0';
+    writeLine(buf);
+  }
 }
 
 // ---- configuration: pure delegation, no storage here (spec §7) ----------

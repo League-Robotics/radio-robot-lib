@@ -325,6 +325,45 @@ class Adapter {
   virtual Result onRun(const char* name, const char* const* argv, size_t argc,
                        char* result, size_t resultCapacity,
                        bool& hasResult) = 0;
+
+  // ---- enumerating that same registry (protocol.md's FUNCS section) ----
+  //
+  // FUNCS walks these three exactly the way a bare GET walks
+  // fieldCount()/fieldName() above -- the handler formats one
+  // `funcs <name> [<signature>]` line per index and holds no table of
+  // its own, same as everywhere else in this seam.
+  //
+  // These make the registration table DISCOVERABLE, which sharpens
+  // rather than softens onRun()'s allowlist framing above: registering
+  // a name now publishes it to anything that can hear the channel, not
+  // merely make it guessable. An Adapter that owns no callable surface
+  // reports runCount() == 0 and answers FUNCS with no lines at all --
+  // the wire-visible form of an empty allowlist, and the correct
+  // answer, not a stub.
+  //
+  //   runCount()      -- how many names are registered. 0 is valid.
+  //   runName(i)      -- the registered name at index i, borrowed and
+  //                       valid only for the duration of the call. Must
+  //                       be a single token: a name containing a space
+  //                       could never be addressed by RUN in the first
+  //                       place, since space is the grammar's own field
+  //                       separator. Out-of-range i returns "".
+  //   runSignature(i) -- an OPTIONAL single-token description of that
+  //                       function's parameters and return, e.g.
+  //                       "int,int->int". Its format is deliberately
+  //                       unspecified -- it is advisory text for a
+  //                       human or a tool, never something the wire
+  //                       contract parses. Return "" to declare none,
+  //                       which omits the field from that entry's line
+  //                       entirely. Out-of-range i returns "".
+  //
+  // Both strings are treated as untrusted free-form text by the
+  // handler and sanitized ('\n'/'\r' stripped, truncated to fit the
+  // line cap) exactly like sendDebug()'s text and onRun()'s own result,
+  // so neither can forge a second wire line.
+  virtual size_t runCount() const = 0;
+  virtual const char* runName(size_t index) const = 0;
+  virtual const char* runSignature(size_t index) const = 0;
 };
 
 }  // namespace Protocol
