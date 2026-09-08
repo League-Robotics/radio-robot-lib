@@ -1,11 +1,27 @@
 name: Notify docs hub
+
+# Pings the League Robotics docs hub to refresh this subsystem's listing whenever the
+# repo's WIKI changes. Docs live in the wiki and are read there — the hub only links to
+# it, so this ping just refreshes the card's page count and "updated" date.
+#
+# `gollum` fires on any wiki page create/update (web edits and git pushes alike) and
+# runs this workflow from the default branch. This file lives in the code repo, not the
+# wiki.
+#
+# Requires two ORG-LEVEL secrets/variables (set once for the whole org by an admin):
+#   vars.DOCS_HUB_APP_ID             – the GitHub App's id
+#   secrets.DOCS_HUB_APP_PRIVATE_KEY – the GitHub App's private key
+# Copy this file to .github/workflows/notify-docs-hub.yml in your repo verbatim.
+
 on:
   gollum:
   workflow_dispatch:
+
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
+      # Mint a short-lived token scoped to the hub repo only.
       - name: Get app token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -14,6 +30,7 @@ jobs:
           private-key: ${{ secrets.DOCS_HUB_APP_PRIVATE_KEY }}
           owner: League-Robotics
           repositories: League-Robotics.github.io
+
       - name: Ping the hub to rebuild
         env:
           HUB_TOKEN: ${{ steps.app-token.outputs.token }}
