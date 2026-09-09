@@ -27,6 +27,12 @@ the stream); `status` gains `done=`/`reason=`; `ID` gains a mandatory
 predicate for a conditional "your last command didn't land" reminder that
 five unsequenced verbs carry when — and only when — the stream is
 stalled. §8.0's "~5%" loss premise is withdrawn as unsupported.
+2026-09-08 (§2.5): the announcement banner's `role` and `common_name`
+become **runtime-settable** in the NEZHA2 firmware, so fields 2 and 3
+are no longer compile-time constants a consumer may cache across a
+session; the same section records, measured, that that producer still
+emits the space form rather than §2.4's colon form — an open cross-repo
+decision, not a defect to fix unilaterally.
 
 ---
 
@@ -243,6 +249,80 @@ same value the device registry already holds, so it cross-checks against
 > announcing `DEVICE:`. The uppercase form is what is specified and what
 > is implemented here; the alternative is recorded so the choice is
 > visible rather than inherited.
+
+### 2.5 `role` and `common_name` are RUNTIME-SETTABLE in the NEZHA2 firmware (2026-09-08)
+
+**This changes what a consumer of the banner may assume.** Fields 2 and 3
+were compile-time constants in every producer until now; in
+`pxt-nezha-diffdrive` they are not any more.
+
+That firmware gained two setters (its sprint 037), reachable from a
+student's own TypeScript/JavaScript:
+
+```typescript
+diffDrive.setDeviceRole(role, commonName)   // banner fields 2 and 3
+diffDrive.setProfile(name)                  // ID's profile field, §6.4
+```
+
+Neither is in the MakeCode toolbox (`blockHidden`), matching that
+repo's convention for advanced/config calls. What a parser on this side
+needs to know:
+
+- **The values can change while a session is live.** There is no
+  late-call guard — the producer points its identity fields at owned
+  buffers that the banner's `snprintf` dereferences at emit time, so a
+  setter called after the first banner takes effect on the next one. A
+  discovery cache keyed on a robot's announced `role`/`common_name` can
+  therefore go stale without a reboot, which was impossible before.
+- **`device_name` and `serial` (fields 4 and 5) are unchanged and
+  remain unsettable.** They are read from silicon. They stay the
+  identity fields worth keying on — consistent with §6.4's finding that
+  `name` is board identity and `profile` is not.
+- **Whitespace cannot appear in fields 2 or 3.** The producer strips all
+  whitespace at the setter rather than rejecting the call, precisely so
+  a student value can never shift the positional field layout this
+  library's codec depends on. Over-length values are clipped into fixed
+  buffers, so the field count is invariant under any caller input.
+- **`role`/`common_name` are no longer evidence of firmware family.** A
+  robot announcing something other than `NEZHA2`/`robot` is now a
+  supported state, not a corrupt read. Code that treats an unexpected
+  `role` as a fault should treat it as an unknown device class instead.
+
+#### The producer still emits the SPACE form — now measured, still unresolved
+
+§2.4 records this library's move to the colon form as resolving the "two
+spellings of one format" defect. **It did not resolve it for the NEZHA2
+firmware, which still emits the space form.** MEASURED gopiv
+2026-09-08, `pxt-nezha-diffdrive`'s
+`captures/identity-setters-gopiv-20260908/session.log`:
+
+```
+device NEZHA2 robot gopiv 2175407711
+```
+
+Lowercase sentinel, space-delimited, `\n` — not
+`DEVICE:NEZHA2:robot:gopiv:2175407711`. The relay's own banner does
+follow the colon spec, so the two device classes remain on different
+grammars today, and the space form is pinned by tests in **both**
+repos (`tests/host/robot_v6/test_codec.py`, `test_sim_e2e.py`,
+`test_transport.py`, `tests/host/rogo/`,
+`tests/protocol/test_protocol_harness.py`,
+`test_protocol_adversarial.py` and `tools/sim/` here;
+`tests/host/test_wire_grammar.py` and the tool tests there).
+
+Changing the robot banner to colons is a breaking protocol change
+across two repos and every host tool. **Whether the spec or the
+implementation is wrong is a stakeholder decision that has not been
+made** — sprint 037 deliberately did not touch the grammar, and neither
+should anything else until that decision exists. Recorded here so the
+divergence is visible from the spec side rather than only from the
+implementation side.
+
+Note the interaction with the flag above: the space form's lowercase
+`device` sentinel *does* satisfy §2.1, so on a shared channel it does
+not inflate neighbours' `malformedCount()` the way `DEVICE:` does. That
+is an argument the lowercase-sentinel alternative already had; it is
+not on its own a reason to prefer the space delimiter.
 
 ---
 
