@@ -1,8 +1,34 @@
 ---
-status: pending
+status: withdrawn
 ---
 
 # `HELLO` banner: emit the specified colon announcement format
+
+> **WITHDRAWN 2026-09-08 — the premise is no longer true.**
+>
+> This issue rests on "`probe_type` (`devices.py:150-158`) accepts only
+> the colon form". **It accepts both, and has since 2026-08-27.**
+> `devices.py:150-196` branches on `DEVICE:` vs `device ` and returns
+> the identical five-field dict either way; its own comment records the
+> stale-role symptom this issue documents (vevov stuck as
+> `RADIOBRIDGE`) as the reason the parser was widened.
+>
+> So the discovery breakage described below is **already fixed**, and it
+> was fixed on the parser side — the option this issue's "Decision"
+> section rejected. Nothing downstream is broken today.
+>
+> The remaining proposal, moving the robot to colons, is now a change
+> with cost and no benefit: it would put the announcement back on the
+> separator v6 deliberately retired when it dropped v5
+> (`pxt-nezha-diffdrive` dfca4f8, 2026-08-23), and break the space form
+> pinned by tests in both repos. Note also that `announce.md`'s own
+> regex is `DEVICE:(RADIOBRIDGE|RADIORELAY):relay:...` — hardcoded to
+> relays, so it never matched a robot in any dialect and the "one
+> discovery parser finds both" rationale was never implemented there.
+>
+> MEASURED gopiv 2026-09-08, `pxt-nezha-diffdrive`
+> `captures/identity-setters-gopiv-20260908/session.log`. See
+> `docs/design/protocol.md` §2.4, corrected in the same pass.
 
 ## Description
 

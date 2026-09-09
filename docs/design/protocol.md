@@ -30,9 +30,10 @@ stalled. §8.0's "~5%" loss premise is withdrawn as unsupported.
 2026-09-08 (§2.5): the announcement banner's `role` and `common_name`
 become **runtime-settable** in the NEZHA2 firmware, so fields 2 and 3
 are no longer compile-time constants a consumer may cache across a
-session; the same section records, measured, that that producer still
-emits the space form rather than §2.4's colon form — an open cross-repo
-decision, not a defect to fix unilaterally.
+session. §2.4 is **corrected** in the same pass: the robot's space
+dialect and the relay's colon dialect are both correct, `probe_type`
+has accepted both since 2026-08-27, and the earlier "two spellings is
+the defect" claim is withdrawn.
 
 ---
 
@@ -193,27 +194,55 @@ id is either present, well-formed, and sequence-checked, or the line simply
 cannot be classified at all. See §8.4 for the replacement rule, and §8.3
 for `ESTOP`'s own (still exceptional, but differently exceptional) status.
 
-### 2.4 The `HELLO` banner is NOT this grammar (2026-08-27)
+### 2.4 The `HELLO` banner is NOT this grammar (2026-08-27, corrected 2026-09-08)
 
-**Stakeholder direction:** the banner carries colons because it belongs to
-a **separately specified protocol** — the device-announcement format in
-`microbit-radio-relay/docs/announce.md` — and not to the v6 line grammar
-described above.
+**The banner is an announcement line, not a v6 line.** It has no verb, no
+fields in the §2 sense, and never carries an id. It belongs to the
+device-announcement family described in
+`microbit-radio-relay/docs/announce.md`.
 
-    DEVICE:<role>:<common_name>:<device_name>:<serial>
+**There are two dialects of it, one per device class, and that is fine:**
 
-    DEVICE:NEZHA2:robot:vevov:1198504156        (a robot)
-    DEVICE:RADIOBRIDGE:relay:getez:1779042496   (a relay)
+    relay   DEVICE:RADIOBRIDGE:relay:getez:1779042496     colon, uppercase, \r\n
+    robot   device NEZHA2 robot vevov 1198504156          space, lowercase, \n
 
-Five fields, sentinel first, in the same order for both device classes.
-That is the whole point: **one discovery parser finds robots and relays
-alike.** Through 2026-08-26 this library emitted the same five fields
-space-delimited and lowercased (`device NEZHA2 robot vevov 1198504156`),
-which carried identical information and was silently unparseable by the
-tooling that consumes it — `probe_type` accepts only the colon form, so
-every robot probed came back with `role`, `common_name`, `device_name`
-and `serial` unset. Two spellings of one format is the defect; this
-resolves it toward the format that was specified first and elsewhere.
+Five fields in the same order either way — sentinel, `role`,
+`common_name`, `device_name`, `serial`. **The delimiter differs; the
+information does not.**
+
+The robot dialect is space-delimited because **v6 dropped `:` as a field
+separator when it retired v5** (`pxt-nezha-diffdrive` dfca4f8,
+2026-08-23) and the announcement line went with it. That is coherent, not
+sloppy: a robot speaks spaces everywhere, including here.
+
+`announce.md` is the **relay's** spec. Every example in it is a relay,
+and its only regex is
+`DEVICE:(RADIOBRIDGE|RADIORELAY):relay:([^:]+):([0-9A-Fa-f]+)` — hardcoded
+to `RADIOBRIDGE|RADIORELAY` and `:relay:`, so it cannot match a robot in
+any dialect. It never specified robot behaviour.
+
+> **CORRECTION (2026-09-08).** This section previously asserted that two
+> spellings of one format was "the defect" and that the fix was to move
+> the robot to the colon form. That was wrong on the facts. The consumer,
+> `mbdeploy`'s `probe_type` (`devices.py:150-196`), **accepts both
+> dialects and has since 2026-08-27** — it branches on `DEVICE:` vs
+> `device ` and returns the identical five-field dict either way. Its own
+> comment records the real history: only the colon dialect was accepted
+> *until* that date, which is why reflashed robots kept stale registry
+> roles (vevov stayed labelled `RADIOBRIDGE` for days), and the fix was
+> to widen the parser, not to change the robots.
+>
+> So nothing downstream is broken and nothing needs to converge.
+> **Do not "fix" the robot banner to colons.** Doing so would put the
+> announcement line back on a separator the v6 grammar deliberately
+> retired, and would break the space form that is pinned by tests in both
+> this repo and `pxt-nezha-diffdrive`, to no benefit — the one parser
+> that consumes either dialect already handles both.
+
+MEASURED gopiv 2026-09-08, `pxt-nezha-diffdrive`'s
+`captures/identity-setters-gopiv-20260908/session.log`: a live robot
+answers `HELLO` with `device NEZHA2 robot gopiv 2175407711` — the space
+dialect, as designed.
 
 The announced `<serial>` is the decimal `FICR.DEVICEID[1]`, which is the
 same value the device registry already holds, so it cross-checks against
@@ -288,41 +317,16 @@ needs to know:
   supported state, not a corrupt read. Code that treats an unexpected
   `role` as a fault should treat it as an unknown device class instead.
 
-#### The producer still emits the SPACE form — now measured, still unresolved
+The dialect is unchanged by any of this: the robot still announces in
+the space form (§2.4), and the setters change field *values*, never the
+delimiter or the field count.
 
-§2.4 records this library's move to the colon form as resolving the "two
-spellings of one format" defect. **It did not resolve it for the NEZHA2
-firmware, which still emits the space form.** MEASURED gopiv
-2026-09-08, `pxt-nezha-diffdrive`'s
-`captures/identity-setters-gopiv-20260908/session.log`:
-
-```
-device NEZHA2 robot gopiv 2175407711
-```
-
-Lowercase sentinel, space-delimited, `\n` — not
-`DEVICE:NEZHA2:robot:gopiv:2175407711`. The relay's own banner does
-follow the colon spec, so the two device classes remain on different
-grammars today, and the space form is pinned by tests in **both**
-repos (`tests/host/robot_v6/test_codec.py`, `test_sim_e2e.py`,
-`test_transport.py`, `tests/host/rogo/`,
-`tests/protocol/test_protocol_harness.py`,
-`test_protocol_adversarial.py` and `tools/sim/` here;
-`tests/host/test_wire_grammar.py` and the tool tests there).
-
-Changing the robot banner to colons is a breaking protocol change
-across two repos and every host tool. **Whether the spec or the
-implementation is wrong is a stakeholder decision that has not been
-made** — sprint 037 deliberately did not touch the grammar, and neither
-should anything else until that decision exists. Recorded here so the
-divergence is visible from the spec side rather than only from the
-implementation side.
-
-Note the interaction with the flag above: the space form's lowercase
-`device` sentinel *does* satisfy §2.1, so on a shared channel it does
-not inflate neighbours' `malformedCount()` the way `DEVICE:` does. That
-is an argument the lowercase-sentinel alternative already had; it is
-not on its own a reason to prefer the space delimiter.
+One incidental benefit worth recording against §2.4's flag: the robot
+dialect's lowercase `device` sentinel satisfies §2.1, so on a shared
+channel a robot's banner does **not** inflate every listening robot's
+`malformedCount()` the way an uppercase `DEVICE:` line does. The
+relay's colon dialect still does; that is a relay-side observation, not
+something the robot needs to change.
 
 ---
 
