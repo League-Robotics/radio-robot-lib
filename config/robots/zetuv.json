@@ -9,9 +9,9 @@
   },
   "connection": {
     "device_announcement_name": "zetuv",
-    "radio_channel": 27,
-    "radio_group": 21,
-    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
+    "radio_channel": 49,
+    "radio_group": 250,
+    "_radio_note": "Channel and group are derived from the board's name per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n % 73, group 15 + n % 241; adopted 2026-09-13). Change only to resolve a name collision.",
     "wifi_ip": "192.168.4.12",
     "serial_last_6": "8a10f5",
     "_i2c_addresses": {}

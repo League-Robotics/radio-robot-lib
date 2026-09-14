@@ -9,9 +9,9 @@
   },
   "connection": {
     "device_announcement_name": "zeguz",
-    "radio_channel": 25,
-    "radio_group": 19,
-    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
+    "radio_channel": 71,
+    "radio_group": 199,
+    "_radio_note": "Channel and group are derived from the board's name per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n % 73, group 15 + n % 241; adopted 2026-09-13). Change only to resolve a name collision.",
     "wifi_ip": "",
     "serial_last_6": "0cfd6c",
     "_i2c_addresses": {}

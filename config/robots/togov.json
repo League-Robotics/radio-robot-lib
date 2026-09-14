@@ -9,9 +9,9 @@
   },
   "connection": {
     "device_announcement_name": "togov",
-    "radio_channel": 37,
-    "radio_group": 109,
-    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
+    "radio_channel": 64,
+    "radio_group": 45,
+    "_radio_note": "Channel and group are derived from the board's name per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n % 73, group 15 + n % 241; adopted 2026-09-13). Change only to resolve a name collision.",
     "serial_last_6": "ade9b4",
     "_i2c_addresses": {}
   },
