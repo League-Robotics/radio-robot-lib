@@ -77,13 +77,13 @@
         },
         "radio_channel": {
           "type": "integer",
-          "description": "CODAL frequency band the robot's radio is set to (uBit.radio.setFrequencyBand). Stored, not derived at boot: make_deploy injects it into the build. Assigned from the board's five-letter name per radio-robot-lib docs/design/radio-addressing.md (channel = 11 + n % 73), which yields 11..83.",
+          "description": "CODAL frequency band the robot's radio is set to (uBit.radio.setFrequencyBand, 2400 + channel MHz). Stored here; make_deploy injects it into the build. Normally the board's name-derived channel per this repo's docs/design/radio-addressing.md, 11 + (n % 73), so 11..83. Any hardware-valid 0..83 value may be pinned by hand instead, e.g. to move one of two robots that share a channel.",
           "minimum": 0,
           "maximum": 83
         },
         "radio_group": {
           "type": "integer",
-          "description": "CODAL radio group the robot listens/transmits on (uBit.radio.setGroup). Paired with radio_channel; both are stored here and injected at deploy time. The name-derived assignment per docs/design/radio-addressing.md (group = 15 + n % 241) yields 15..255, never 0..14, so a hand-dialled relay '!C <ch>' (which forces group 10) can never collide.",
+          "description": "CODAL radio group the robot listens/transmits on (uBit.radio.setGroup). Paired with radio_channel; both are stored here and injected at deploy time. Normally the name-derived group per docs/design/radio-addressing.md, 15 + (n % 241), so 15..255, which stays clear of MakeCode's default group 0 and the group 10 a relay's '!C <ch>' forces.",
           "minimum": 0,
           "maximum": 255
         },
