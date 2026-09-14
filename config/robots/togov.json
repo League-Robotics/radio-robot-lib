@@ -11,7 +11,7 @@
     "device_announcement_name": "togov",
     "radio_channel": 64,
     "radio_group": 45,
-    "_radio_note": "Channel and group are derived from the board's name per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n % 73, group 15 + n % 241; adopted 2026-09-13). Change only to resolve a name collision.",
+    "_radio_note": "Channel and group are derived from the board's name per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n % 73, group 15 + n % 241; adopted 2026-09-13). Change only to resolve a name collision. Boxed/inactive as of 2026-09-14: reflash with the nezha-robot-template calibration release when reactivated; torture's registry pins the old pair until then.",
     "serial_last_6": "ade9b4",
     "_i2c_addresses": {}
   },

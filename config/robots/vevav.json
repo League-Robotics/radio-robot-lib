@@ -11,7 +11,7 @@
     "device_announcement_name": "vevav",
     "radio_channel": 67,
     "radio_group": 43,
-    "_radio_note": "Channel and group are derived from the name and probably should not be changed.",
+    "_radio_note": "Pair NOT migrated: the board named vevav is a RADIOBRIDGE relay on Eric's Mac, not a robot. Do not build make_deploy --robot vevav.",
     "_i2c_addresses": {}
   }
 }
