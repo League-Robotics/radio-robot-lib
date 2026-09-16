@@ -29,9 +29,9 @@
     "_provenance": "VEVOV-MEASURED 2026-09-05 by pxt-nezha-diffdrive tests/calibration/mount.py on the SECONDARY playfield (110x70, camera hd-usb-camera): 9 rest poses over 8 +-90 pivots, rms 4.8 mm, verification drift 0.42 cm/pivot; solved AFTER the stakeholder remounted the tag plate, which had been on backwards. Heights are the stakeholder's tape measurements the same day. Artifact: reports/pf2-recal-20260905/04-mount-vevov-replate/mount.json. Residual -1.17 deg from a 300 mm probe."
   },
   "geometry": {
-    "trackwidth": 128.0,
+    "trackwidth": 111.6,
     "otos_untrusted": true,
-    "rotational_slip": 0.987,
+    "rotational_slip": 0.96,
     "rotation_gain_pos": 1.0096,
     "rotation_offset": 0.0,
     "rotation_gain_neg": 1.0146,

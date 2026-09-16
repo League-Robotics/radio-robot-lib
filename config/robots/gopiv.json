@@ -28,9 +28,9 @@
     "_provenance": "GOPIV-MEASURED 2026-09-05 by pxt-nezha-diffdrive tests/calibration/mount.py on the SECONDARY playfield (110x70, camera hd-usb-camera): 9 rest poses over 8 +-90 pivots, rms 15.9 mm, verification drift 0.66 cm/pivot -- POOR: the implied centre walked ~7 cm across the eight pivots (gopiv translates while it pivots), which breaks the single-centre assumption the solve rests on. Treat x/y as provisional and re-solve once the walking is understood. Heights are the stakeholder's tape measurements the same day. Artifact: reports/pf2-recal-20260905/19-mount-gopiv/mount.json. Residual +4.24 deg from a 300 mm probe."
   },
   "geometry": {
-    "trackwidth": 114.8,
+    "trackwidth": 113.6,
     "otos_untrusted": true,
-    "rotational_slip": 0.9633,
+    "rotational_slip": 0.952,
     "rotation_gain_pos": 1.0,
     "rotation_offset": 0.0,
     "rotation_gain_neg": 1.0,
