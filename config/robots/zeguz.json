@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "robot_name": "zeguz",
+    "uid": "zeguz",
+    "hardware_model": "ELECFREAKS Cutebot Pro",
+    "common_name": "cutebot-pro",
+    "drivetrain_type": "diffdrive",
+    "_identity_note": "THE NAME ITSELF IS STAKEHOLDER-ASSERTED, NOT YET HARDWARE-CONFIRMED (pxt-nezha-diffdrive sprint 040 ticket 005, 2026-09-21). The stakeholder named this board's assignment 'zeguz on mangi' (docs/design/cutebot-pro-support.md Sec.8's opening note, pxt-nezha-diffdrive repo), while `mbdeploy list --remote` at 2026-09-21 22:29 advertised 'zetuv on magni' and no zeguz, with zetuv refusing a connect as busy (another session held its serial daemon) -- so the two names were never cross-checked against the same live board this session. Confirm with `HELLO` (identity comes from silicon, per this fleet's own identity-comes-from-hardware-not-config rule) before the first flash. If the board answers 'zetuv' rather than 'zeguz', this file must be renamed to config/robots/zetuv.json and its connection.radio_channel/radio_group recomputed for that name (11 + n%73 / 15 + n%241) rather than edited in place -- the values below are zeguz's, not zetuv's."
+  },
+  "connection": {
+    "device_announcement_name": "zeguz",
+    "radio_channel": 71,
+    "radio_group": 199,
+    "_radio_note": "Channel and group are derived from the board's name per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n % 73, group 15 + n % 241; adopted 2026-09-13), computed via pxt-nezha-diffdrive tools/make_deploy.py's derive_radio_from_name('zeguz') -> (71, 199) -- matching pxt-nezha-diffdrive .claude/rules/playfield-testing.md's own 73-channel table row for zeguz. NOT YET VERIFIED against a live board's own `id`/STATUS reply (see identity._identity_note above on the name mismatch this session could not resolve) -- confirm after the name is confirmed by HELLO.",
+    "_i2c_addresses": {}
+  },
+  "geometry": {
+    "firmware_bake": {
+      "board": "cutebot-pro"
+    },
+    "_note": "UNMEASURED as of sprint 040 ticket 005 (pxt-nezha-diffdrive, 2026-09-21). Every geometry number a Nezha-fleet robot's firmware_bake normally carries here -- trackwidth, motors, lag_s, stop_distance_mm, rotational_slip, accel -- is Sprint 041's job: a caliper/bench bring-up against the physical Cutebot Pro, per docs/design/cutebot-pro-support.md Sec.8 (revision probe, encoder sign/resolution, travel_calib, rotational_slip, the 0x80 onboard-loop floor, the hybrid-actuation handoff probes). `firmware_bake.board` is the ONLY key this file sets; do not invent any of the others ahead of that measurement -- an invented number here would look identical to a measured one to every downstream reader."
+  }
+}
