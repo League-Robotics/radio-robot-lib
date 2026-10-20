@@ -1,0 +1,27 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "robot_name": "zetuv",
+    "uid": "312bde85",
+    "hardware_model": "ELECFREAKS Cutebot Pro",
+    "common_name": "cutebot-pro",
+    "drivetrain_type": "diffdrive",
+    "_identity_note": "HARDWARE-CONFIRMED 2026-10-19: this physical Cutebot Pro board answers HELLO with name=zetuv, serial=1468666101 (registry short uid 312bde85), tethered to host 'torture' on /dev/ttyACM0. It was tentatively assigned 'zeguz' during sprint 040 (never hardware-cross-checked); per that config's own instruction ('if the board answers zetuv, rename to config/robots/zetuv.json and recompute radio for that name'), this file supersedes config/robots/zeguz.json for this board. Identity comes from silicon, per this fleet's identity-comes-from-hardware-not-config rule."
+  },
+  "connection": {
+    "device_announcement_name": "zetuv",
+    "radio_channel": 49,
+    "radio_group": 250,
+    "_radio_note": "Derived from the board name 'zetuv' per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n%73, group 15 + n%241), computed via tools/make_deploy.py derive_radio_from_name('zetuv') -> (49, 250). CONFIRMED against the live board's own STATUS reply (channel=49 group=250) on 2026-10-19.",
+    "_i2c_addresses": {}
+  },
+  "geometry": {
+    "firmware_bake": {
+      "board": "cutebot-pro",
+      "travel_calib": 0.442,
+      "trackwidth": 91.0,
+      "_provenance": "ZETUV-MEASURED 2026-10-20 on the main playfield, fleet firmware (onboard_pid 0, pid_kp 4, twist_hold_gain 0) over zilch. travel_calib: mean of seven calwheels runs over the 90.2 cm track (0.4413-0.454 mm/deg; the straightest three 0.4413-0.4418); a calibrated MOVE_X 500 then measured 50.6 cm on camera. trackwidth: effective track from four centre pivots, encoder wheel travel vs camera rotation (86-94 mm). rotational_slip not yet measured (calturn)."
+    },
+    "_note": "travel_calib and trackwidth measured 2026-10-20 (see firmware_bake._provenance). Still unmeasured: rotational_slip, lag_s, stop_distance_mm."
+  }
+}
