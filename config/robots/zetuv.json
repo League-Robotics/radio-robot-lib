@@ -24,5 +24,14 @@
       "rotational_slip": 1.055
     },
     "_note": "travel_calib, trackwidth and rotational_slip measured 2026-10-20 (see firmware_bake._provenance). Still unmeasured: lag_s, stop_distance_mm."
+  },
+  "vision": {
+    "robot_tag_id": 58,
+    "tag_offset_x": 5.3,
+    "tag_offset_y": 0.0,
+    "tag_offset_z": 112.0,
+    "tag_offset_yaw": -89.15,
+    "_units_note": "Same conventions as gopiv.json: offsets in MILLIMETRES from the centre of rotation (x forward, y left); tag_offset_yaw is the FULL mount yaw in DEGREES.",
+    "_provenance": "ZETUV-MEASURED 2026-10-21 on the main playfield (arducam-ov9782): tag 58 is zetuv's long-term tag (Eric), height 112 mm (Eric). Yaw from a 10 cm forward move against the tag heading; x/y from two pivots (161.7 and -81.7 deg) solved for the centre of rotation: x 5.8/4.8 mm, y -1.0/+2.8 mm. y is recorded as 0 (on the centre line; the measured value is inside camera noise). Registered live with register_tag (mount_y 0.9 mm at the time)."
   }
 }
