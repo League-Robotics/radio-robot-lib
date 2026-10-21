@@ -20,8 +20,9 @@
       "board": "cutebot-pro",
       "travel_calib": 0.442,
       "trackwidth": 91.0,
-      "_provenance": "ZETUV-MEASURED 2026-10-20 on the main playfield, fleet firmware (onboard_pid 0, pid_kp 4, twist_hold_gain 0) over zilch. travel_calib: median of six calwheels runs over the 90.2 cm track (0.4413-0.454 mm/deg, mean 0.4444; the three straightest runs 0.4413-0.4418); a calibrated MOVE_X 500 then measured 50.6 cm on camera. trackwidth: effective track from four centre pivots, encoder wheel travel vs camera rotation (86-94 mm). rotational_slip not yet measured (calturn)."
+      "_provenance": "ZETUV-MEASURED 2026-10-20 on the main playfield, fleet firmware (onboard_pid 0, pid_kp 4, twist_hold_gain 0) over zilch. travel_calib: median of six calwheels runs over the 90.2 cm track (0.4413-0.454 mm/deg, mean 0.4444; the three straightest runs 0.4413-0.4418); a calibrated MOVE_X 500 then measured 50.6 cm on camera. trackwidth: effective track from four centre pivots, encoder wheel travel vs camera rotation (86-94 mm). rotational_slip 0.994: MOVE_X 0 +-1571 turns measured on camera (0.952 gave ~94 deg, 0.912 ~99, 0.994 gave 88.9-91.6 deg) at the right end of the field; turns elsewhere on the field were less consistent, so recheck with calturn.",
+      "rotational_slip": 0.994
     },
-    "_note": "travel_calib and trackwidth measured 2026-10-20 (see firmware_bake._provenance). Still unmeasured: rotational_slip, lag_s, stop_distance_mm."
+    "_note": "travel_calib, trackwidth and rotational_slip measured 2026-10-20 (see firmware_bake._provenance). Still unmeasured: lag_s, stop_distance_mm."
   }
 }
