@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """Mat tools: grid/px/playfield conversions, feature lookup, and tag-free relocation.
 
-    mattools.py <mat> locate <C9 | circle 5 | square green>     -> playfield cm
-    mattools.py <mat> px2grid X Y                                 -> template pixel -> grid label
+    mattools.py <mat> locate <SC9 | GB35 | circle 5 | square green>  -> playfield cm
+    mattools.py <mat> px2grid X Y                                 -> template pixel -> square + nearest crossing
+    mattools.py <mat> where X Y                                   -> playfield cm -> square + nearest crossing
     mattools.py <mat> relocate [--camera SLUG] [--frame FILE] [--write]
     mattools.py <mat> show [--frame FILE]                          -> overlay of features on a fresh frame
 
@@ -32,10 +33,17 @@ class Mat:
         g = self.grid; return (g["u_at_px0"] - x / (self.ppc * g["cm_per_u"]), g["v_at_px0"] - y / (self.ppc * g["cm_per_v"]))
     def uv_to_px(self, u, v):
         g = self.grid; return ((g["u_at_px0"] - u) * self.ppc * g["cm_per_u"], (g["v_at_px0"] - v) * self.ppc * g["cm_per_v"])
+    def _name(self, li, ui):
+        return f"{self.letters[li] if 0 <= li < len(self.letters) else '?'}{ui}"
     def label(self, u, v):
-        li = int(round(v)); return f"{self.letters[li] if 0 <= li < len(self.letters) else '?'}{int(round(u))}"
+        return "S" + self._name(int(round(v)), int(round(u)))
+    def g_label(self, u, v):
+        return "G" + self._name(int(math.floor(v)), int(math.floor(u)))
     def parse_label(self, s):
-        s = s.strip().upper(); return (float(s[1:]), float(self.letters.index(s[0])))
+        s = s.strip().upper(); kind, s = s[0], s[1:]
+        if kind not in "SG": raise ValueError(f"address needs an S (square) or G (grid crossing) prefix: {kind + s}")
+        u, v = float(s[1:]), float(self.letters.index(s[0]))
+        return (u + 0.5, v + 0.5) if kind == "G" else (u, v)
     # --- template pixel <-> playfield cm (via pose) ---
     def px_to_playfield(self, x, y):
         return self.R @ np.array([x / self.ppc, -y / self.ppc]) + self.t
@@ -109,12 +117,15 @@ def relocate(mat, frame, slug, verbose=True, use_ecc=True):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("mat"); sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("locate"); s.add_argument("what", nargs="+")
-    s = sub.add_parser("px2grid"); s.add_argument("x", type=float); s.add_argument("y", type=float)
+    for c in ("px2grid", "where"):
+        s = sub.add_parser(c); s.add_argument("x", type=float); s.add_argument("y", type=float)
     for c in ("relocate", "show"):
         s = sub.add_parser(c); s.add_argument("--camera", default="arducam-ov9782-usb-camera"); s.add_argument("--frame"); s.add_argument("--write", action="store_true"); s.add_argument("--out")
     a = ap.parse_args(); mat = Mat(a.mat)
     if a.cmd == "locate": print(json.dumps(mat.locate(" ".join(a.what)))); return
-    if a.cmd == "px2grid": u, v = mat.px_to_uv(a.x, a.y); print(mat.label(u, v), round(u, 2), round(v, 2)); return
+    if a.cmd in ("px2grid", "where"):
+        u, v = mat.px_to_uv(a.x, a.y) if a.cmd == "px2grid" else mat.playfield_to_uv(a.x, a.y)
+        print(json.dumps({"uv": [round(u, 2), round(v, 2)], "square": mat.label(u, v), "nearest_crossing": mat.g_label(round(u - 0.5) + 0.5, round(v - 0.5) + 0.5)})); return
     if a.frame: frame = cv2.imread(a.frame)
     else:
         tmp = os.path.join(tempfile.gettempdir(), f"mat-{a.camera}.png"); capture(a.camera, tmp); frame = cv2.imread(tmp)

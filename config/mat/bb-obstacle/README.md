@@ -13,18 +13,22 @@
 - `build_features.py` — regenerates `features.json` from `mat.png`.
 
 ## Coordinates
-- **Grid** `u` = number axis (−8..37), `v` = letter axis (A=0..V=21). A label names a
-  square's centre; boundaries are at half-integers. One grid step ≈ 2.57 cm (u) /
-  2.60 cm (v) in playfield units — not exactly an inch.
+- **Grid** `u` = number axis (−8..37), `v` = letter axis (A=0..V=21). Squares are one inch.
+- **Addresses need a prefix**, because the printed labels sit between a line and a square:
+  - `S<letter><number>` = centre of that square: `SN15` = (u=15, v=13).
+  - `G<letter><number>` = grid-line crossing at that square's NW corner (+u, +v): `GN15` = (15.5, 13.5).
+- **Fiducials**: every mat carries two ArUco tags at `GB35` and `GU-8` (ids differ per mat; listed in `mat.json`).
 - **Template pixel** (x,y) in `mat.png`: `u = u_at_px0 − x/(px_per_cm·cm_per_u)`,
   `v = v_at_px0 − y/(px_per_cm·cm_per_v)`. x runs toward playfield east, y toward south.
+  `cm_per_v` is 2.561, not 2.54: the camera reads playfield y 0.8% long (measured on the printed inch ticks).
 - **Playfield cm** = `R(theta) · (x/px_per_cm, −y/px_per_cm) + (x_cm, y_cm)` using `pose`.
 
 ## Use (`../mattools.py`, run with the aprilcam venv python)
 ```
 mattools.py bb-obstacle locate circle 5        # -> playfield cm of circle 5
 mattools.py bb-obstacle locate square green    # -> corners, centre, opening in cm
-mattools.py bb-obstacle locate N15             # -> playfield cm of grid square N15
+mattools.py bb-obstacle locate SN15            # -> playfield cm of square N15 (GN15 = its crossing)
+mattools.py bb-obstacle where X Y              # -> playfield cm to square + nearest crossing
 mattools.py bb-obstacle relocate --write       # mat moved? re-find it, update pose
 mattools.py bb-obstacle show                   # overlay features on a live frame
 ```

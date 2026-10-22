@@ -15,39 +15,44 @@
    "letters": "ABCDEFGHIJKLMNOPQRSTUV",
    "note": "A=0 ... V=21, increases toward playfield north"
   },
-  "label_convention": "Label like N15 names the square whose centre is (u=15, v=index('N')=13); square boundaries lie at half-integers."
+  "note": "Squares are one inch (2.54 cm) both ways; cm_per_v is 2.561 because the camera reads playfield y 0.8% long.",
+  "addressing": {
+   "S": "S<letter><number> names a square by its centre: SN15 = (u=15, v=13).",
+   "G": "G<letter><number> names the grid-line crossing at the NW (playfield frame, +u +v) corner of that square: GN15 = (u=15.5, v=13.5).",
+   "bare": "A label without S or G is rejected; the mat prints labels between a line and a square, so the prefix is required."
+  }
  },
  "tags": {
   "family": "apriltag-36h11",
-  "placement": "tag centre on the NW corner (playfield frame) of the labelled square, i.e. at (u+0.5, v+0.5)",
+  "placement": "tag centre on the G crossing of the labelled square, i.e. at (u+0.5, v+0.5)",
   "list": [
    {
     "id": 14,
-    "label": "A-8",
+    "label": "GA-8",
     "u": -7.5,
     "v": 0.5
    },
    {
     "id": 12,
-    "label": "V0",
+    "label": "GV0",
     "u": 0.5,
     "v": 21.5
    },
    {
     "id": 15,
-    "label": "A37",
+    "label": "GA37",
     "u": 37.5,
     "v": 0.5
    },
    {
     "id": 16,
-    "label": "N15",
+    "label": "GN15",
     "u": 15.5,
     "v": 13.5
    },
    {
     "id": 10,
-    "label": "U36",
+    "label": "GU36",
     "u": 36.5,
     "v": 20.5
    }
@@ -60,19 +65,39 @@
   "height": 478,
   "axes": "x right = mat -u direction (toward playfield east), y down = mat -v direction (toward playfield south)",
   "grid": {
-   "u_at_px0": 37.9693,
-   "v_at_px0": 21.8872,
-   "cm_per_u": 2.5696,
-   "cm_per_v": 2.5955,
-   "formula": "u = u_at_px0 - x/(px_per_cm*cm_per_u);  v = v_at_px0 - y/(px_per_cm*cm_per_v)"
+   "u_at_px0": 37.9318,
+   "v_at_px0": 21.9926,
+   "cm_per_u": 2.5405,
+   "cm_per_v": 2.561,
+   "formula": "u = u_at_px0 - x/(px_per_cm*cm_per_u);  v = v_at_px0 - y/(px_per_cm*cm_per_v)",
+   "fit": "u: GB35 (aruco 5) and GU-8 (aruco 6) are 43 squares apart and measure 2.5405 cm/square (1 inch). v: printed inch ticks on the Start-box edge measure 2.561 cm in this camera (0.8% long), anchored on GU-8. 2026-10-21"
   }
  },
  "pose": {
-  "x_cm": -60.019,
-  "y_cm": 29.649,
-  "theta_deg": 0.9155,
+  "x_cm": 59.209,
+  "y_cm": -25.479,
+  "theta_deg": -179.8295,
   "formula": "playfield = R(theta) @ [x/px_per_cm, -y/px_per_cm] + [x_cm, y_cm]  (template pixel (0,0) is at (x_cm,y_cm))",
-  "method": "apriltag fit 2026-09-03",
-  "camera": "arducam-ov9782-usb-camera"
+  "method": "sift relocation",
+  "camera": "arducam-ov9782-usb-camera",
+  "when": "2026-10-21T14:08:15"
+ },
+ "fiducials": {
+  "note": "Every mat carries two ArUco tags at these two crossings; the tag ids differ per mat.",
+  "positions": [
+   {
+    "address": "GB35",
+    "u": 35.5,
+    "v": 1.5,
+    "id": 5
+   },
+   {
+    "address": "GU-8",
+    "u": -7.5,
+    "v": 20.5,
+    "id": 6
+   }
+  ],
+  "family": "aruco"
  }
 }

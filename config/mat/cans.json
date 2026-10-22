@@ -1,0 +1,15 @@
+{
+ "name": "cans",
+ "description": "Soda cans used as game pieces on the mats. Each carries one tag on top, centred on the can's axis.",
+ "height_mm": 122,
+ "diameter_mm": 66,
+ "tag_height_mm": 122,
+ "aprilcam_registration": "register_tag(family, number, mount_z=12.2) every session; registrations do not survive a daemon restart",
+ "tags": [
+  {"family": "apriltag", "number": 11},
+  {"family": "apriltag", "number": 13},
+  {"family": "apriltag", "number": 16},
+  {"family": "apriltag", "number": 64},
+  {"family": "apriltag", "number": 63}
+ ]
+}
