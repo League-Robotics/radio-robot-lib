@@ -20,8 +20,8 @@
       "board": "cutebot-pro",
       "travel_calib": 0.441,
       "trackwidth": 91.0,
-      "_provenance": "ZETUV-MEASURED 2026-10-20/21, fleet firmware with the Cutebot defaults (onboard_pid 0, pid_kp 2, pid_ki 15, pid_max 9000, pid_i_max 9000, pos_err_max 200, arrive_yaw 2) over zilch. travel_calib 0.441: mean of eleven calwheels runs over the 90.2 cm track with those gains (0.4396-0.4435 mm/deg, sd ~0.3 %). trackwidth 91: camera-measured centre pivots (86-94 mm). rotational_slip 1.055: tuned so camera-measured MOVE_X 90 deg turns average 90 (two 50 cm square laps close within 3 cm); calturn's continuous-spin result (0.976) disagrees by 8 % and is not used.",
-      "rotational_slip": 1.055
+      "_provenance": "ZETUV-MEASURED 2026-10-20/21, fleet firmware with the Cutebot defaults (onboard_pid 0, pid_kp 2, pid_ki 15, pid_max 9000, pid_i_max 9000, pos_err_max 200, arrive_yaw 2) over zilch. travel_calib 0.441: mean of eleven calwheels runs over the 90.2 cm track with those gains (0.4396-0.4435 mm/deg, sd ~0.3 %). trackwidth 91: camera-measured centre pivots (86-94 mm). rotational_slip 1.055: tuned so camera-measured MOVE_X 90 deg turns average 90 (two 50 cm square laps close within 3 cm); calturn's continuous-spin result (0.976) disagrees by 8 % and is not used. UPDATED 2026-10-24 with the paddle gripper fitted: rotational_slip 0.959 = calturn on the iron cross, left spin 0.9636, right 0.9552 (tw 9.1, wheel 0.4407 mm/deg, 32 gaps each). The old 1.055 (canbot forced 1.037) under-turned 90 deg pivots by 6-8 % on camera; calturn now agrees with the camera (slip 0.969 made CCW pivots exact). canbot adds +2.8 % to clockwise pivots, which still stop short.",
+      "rotational_slip": 0.959
     },
     "_note": "travel_calib, trackwidth and rotational_slip measured 2026-10-20 (see firmware_bake._provenance). Still unmeasured: lag_s, stop_distance_mm."
   },
