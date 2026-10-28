@@ -29,6 +29,10 @@
   {
    "family": "apriltag",
    "number": 60
+  },
+  {
+   "family": "apriltag",
+   "number": 59
   }
  ]
 }
