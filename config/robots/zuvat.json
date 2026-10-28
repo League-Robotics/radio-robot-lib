@@ -1,0 +1,224 @@
+{
+  "schema_version": 2,
+  "_provenance": "zuvat, created 2026-10-27 by copying vevov.json for the position-move hardware acceptance (pxt-nezha-diffdrive sprint 043). Only identity/connection carry zuvat's own facts. EVERY calibration value below, including geometry.firmware_bake, is vevov's, held as a placeholder: zuvat has two motors and no camera or OTOS, so nothing here has been measured on it. Do not read a zuvat measurement off this file until the section's own _provenance note is replaced.",
+  "identity": {
+    "robot_name": "zuvat",
+    "uid": "zuvat",
+    "hardware_model": "DFRobot Nezha",
+    "common_name": "bench-bot"
+  },
+  "connection": {
+    "device_announcement_name": "zuvat",
+    "radio_channel": 60,
+    "radio_group": 64,
+    "_radio_note": "Channel and group are derived from the board's name per radio-robot-lib docs/design/radio-addressing.md (channel 11 + n % 73, group 15 + n % 241; adopted 2026-09-13). Change only to resolve a name collision.",
+    "wifi_ip": "",
+    "_wifi_note": "Empty on purpose -- the documented 'no WiFi module' state (wifi_setup.py treats a falsy wifi_ip as nothing to do). tovez's 192.168.4.11 was NOT copied, because two robots cannot hold one address. Fill in vevov's own if it gets a WiFi module.",
+    "serial_last_6": "918799",
+    "_i2c_addresses": {},
+    "_serial_note": "mbdeploy registry serial 2708918799, uid 7d15097f, on nolanet node loki 2026-10-27"
+  },
+  "vision": {
+    "robot_tag_id": 0,
+    "camera_distance_scale": 1.0022,
+    "tag_offset_x": -27.87,
+    "tag_offset_y": 0.34,
+    "tag_offset_z": 112.0,
+    "tag_offset_yaw": -91.17,
+    "_tag_note": "Tag 53, assigned to vevov 2026-08-19 and registered with the AprilCam daemon the same day (owner=vevov, z=11.8cm), taking id 53 over from the previous owner=calibration registration. tag_offset_z=118.0 mm is OPERATOR-CONFIRMED. tag_offset_x/y are 0.0 = IDENTITY = UNMEASURED, not a measurement that came out zero: with identity offsets the camera reports the RAW TAG position, not vevov's centre of rotation, so any world_xy read for this robot is off by however far the tag sits from centre (tovez's is -41.0 mm). Measure with the three-reading in-place-rotation fit described in tovez.json's vision._tag_note, then update BOTH this block and the daemon registration. camera_distance_scale is tovez's value, not measured on vevov.",
+    "_units_note": "tag_offset_x/y/z are MILLIMETRES, the tag relative to the CENTRE OF ROTATION in the robot frame (x forward, y left). tag_offset_yaw is DEGREES and is the FULL mount yaw: -90 (AprilCam's fixed front-edge-to-hat convention, see pxt-nezha-diffdrive .claude/rules/tag-yaw-is-the-front-edge-not-the-hat.md) plus the physical plate residual. Feed it to the daemon as mount_yaw_rad; do NOT add the 90 again in your own code. Nothing read tag_offset_yaw as of 2026-09-05, so this fixes the convention: it matches tigez's previous non-schema tag_mount_yaw_deg -89.65, which was -90 + 0.35 residual.",
+    "_provenance": "PLACEHOLDER: zuvat carries no tag and has not been under a camera. Values are vevov's and mean nothing for zuvat."
+  },
+  "geometry": {
+    "trackwidth": 111.6,
+    "otos_untrusted": true,
+    "rotational_slip": 0.969,
+    "rotation_gain_pos": 1.0096,
+    "rotation_offset": 0.0,
+    "rotation_gain_neg": 1.0146,
+    "rotation_offset_neg": 0.0,
+    "_drive_axle_offset_mm": {
+      "x": 0.0,
+      "y": 0.0
+    },
+    "_odometry_chip_upside_down": false,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON ZUVAT. Copied from vevov.json 2026-10-27 so the sprint 043 build bakes the same geometry the robot was last flashed with (its 2026-10-06 firmware was a vevov-profile build). Replace after a calibration run.",
+    "_uncalibrated": true,
+    "firmware_bake": {
+      "travel_calib": 0.79324,
+      "trackwidth": 111.6,
+      "rotational_slip": 0.969,
+      "_pivot_overrun_provenance": "VEVOV-MEASURED 2026-08-29 (pxt-nezha-diffdrive captures/vevov-square-20260829/runC.json, runC2.json; reports/vevov-tour-C-firmware-and-telemetry-20260829.md S4): thirteen MOVE_X pivots of 3-90 deg on the playfield, firmware 0.20260829.1 (speed floor 70 mm/s), all landed a CONSTANT +1.3..+2.7 deg (mean ~2.0) past their command in the robot's OWN encoders, camera agreeing to ~1 deg -- +3.2 -> +5.1, -2.6 -> -4.4, +87.3 -> +89.2. Constant, not proportional, so it is a per-wheel end-of-move distance: 2 deg * (128 mm / 2) = 2.2 mm. Subtracted from every rotation target by MotionEngine::pivotOverrunMm_. Mechanism UNVERIFIED (one kernel tick at the 70 mm/s floor is 2.3 mm); re-measure if the speed floor changes.",
+      "_note": "Opt-in: make_deploy.py's _inject_geometry() bakes exactly these into motion_engine.h in the per-robot scratch copy. Robots without this block keep the firmware defaults, which is why adding it here does not touch tovez/gopiv/togov/zetuv.",
+      "_provenance": "PLACEHOLDER, vevov's bake copied 2026-10-27; see geometry._provenance.",
+      "stop_distance_mm": 0.3,
+      "decel": 1000.0,
+      "_kernel_defaults_provenance": "ZUVAT-MEASURED 2026-10-27, ENCODER truth, 600 mm kernel legs MOVE_X +-600 0 150 8000, position_mode 0, 4 legs per setting alternating direction (pxt-nezha-diffdrive captures/zuvat-position-2026-10-27/kdefaults/kd_summary.csv, notes.md section 'Ticket 007'): decel 1000 + stop_distance 0.3 vs the previous 400 / 0 took worst per-wheel error 4.35 -> 2.93 mm, mean L-wheel error +3.78 -> +2.05 mm, mean lateral 11.1 -> 5.8 mm (experiment a). The pair was measured jointly, not separately. v_floor stays 70 (50 gave no gain, experiment b2), pid_ki stays 6 (0 was worse on zuvat, experiments c150b/c250b), omega_floor stays 20 (experiments omega, omf20, om10); stop_distance_mm 0 below is the vevov-era value this replaces.",
+      "_stop_distance_provenance_superseded": "UNVERIFIED on the sprint-029 engine, set 2026-09-04 by pxt-nezha-diffdrive when vevov was reflashed onto it. The previous key here was pivot_overrun_mm 2.2 -- the PRE-029 engine's post-target coast, measured camera-truthed (see the notes above) and superseded: 029's predictive arrival removes that coast by design (docs/design/motion-profile-unification.md S6.3), and tovez measured stop_distance 0 on it (captures/bench-acceptance-029-20260904d, pivot-gates Phase A). Baking the old coast into the new engine would under-rotate by about that much. Re-measure per design S10.2: lag_s first (WHEELS_V step, TLM FULL), then 10 floor-cruise pivots by camera for stop_distance_mm. lag_s measured the same day (see _lag_provenance).",
+      "lag_s": 0.04,
+      "_lag_provenance": "VEVOV-MEASURED 2026-09-04 on the playfield, camera-truthed, firmware 1.20260904.4 (sprint 029 engine), pxt-nezha-diffdrive reports/turn-cal-029-20260904/. The wheel STEP-RESPONSE lag is 0.131 s (tests/playfield/lag_measure.py, 4 x WHEELS_V 200 trials, vl 0.125 / vr 0.136), the same as tovez's 0.13 -- but with lag 0.131 every pivot lands a constant ~4.5 deg SHORT (encoders agree; the arrival credit v*lag is taken at the 70 mm/s floor where the wheel only coasts ~4 mm), and the firmware refuses the negative stop_distance that would cancel it. Pivot offset is linear in lag: 0.20 -> -7.6 deg, 0.131 -> -4.5, 0.05 -> -1.1, 0.04 -> mean|err| 1.35 deg over 8 x 90/180 (run 09). 500 mm straights at 0.04: -0.2..-2.3 mm over 4 legs vs -7.9..+4.5 at 0.131 (run 12). So lag_s here is the value that centres BOTH pivots and straights on this engine, not the step-response constant; sprint 031 should reconcile the two (a negative stop_distance, or the floor-speed coast credited separately).",
+      "_provenance_20260905": "VEVOV-MEASURED 2026-09-05 on the SECONDARY playfield (110x70, camera hd-usb-camera), pxt-nezha-diffdrive reports/pf2-recal-20260905/. THE WHEELS WERE CHANGED: the 0.70066 bake assumed an 80.3 mm wheel; tests/calibration/distance.py over 12 camera-truthed legs (200/300/400 mm, out and back) fitted gain 1.13213, offset 2.2 mm, mean abs error 41.9 mm (05-distance-vevov/summary.json) -> travel_calib 0.70066*1.13213 = 0.79324, i.e. a 90.9 mm wheel, matching tigez's 0.78623/90.1 mm. rotational_slip 1.0: turn_calibration at the old travel_calib fitted pivot gain 1.1617 (lag 0) and 1.1659 (lag 0.04) over 14 camera-scored pivots (10-turns-vevov-lag*); a live SET rotational_slip 1.1487 then brought 4 pivots to mean abs 3.1 deg with residual gain 0.9854 (11-turns-vevov-slipcheck), so the pivot-nulling slip at the OLD wheels is 1.1487*0.9854 = 1.1319. Dividing out the travel correction (1.13213) gives 0.9998 -- i.e. b_eff = the 128.0 mm caliper trackwidth and essentially NO scrub, which is what this chassis's own 2026-08-28 note predicted. lag_s 0.04: the pivot OFFSET, not the gain, is what lag moves -- +6.43 deg at lag 0 vs -0.10 deg at lag 0.04 (same two runs), so 0.04 is the centred value. travel_calib and rotational_slip are CONFIRMED only in the derived sense above; they have NOT been flown together on a flashed build. Reflash, then re-run `calibrate.py turns --no-tlm` with no live SET to confirm (DESIGN.md step 5).",
+      "_provenance_20260905b": "rotational_slip 1.0 -> 1.1013, MEASURED after the 2026-09-05 reflash and CONFIRMED live: pxt-nezha-diffdrive reports/pf2-recal-20260905/13..15. The reflash validated travel_calib 0.79324 (distance gain 1.0175, mean abs error 1.53 mm over 12 legs -- down from 41.87) but pivots still ran 1.1013 over (8 pivots, offset 0.02 deg, so lag 0.04 is exactly centred). With travel now unity that residual is PURE TRACKWIDTH: b_eff = 128.0/1.1013 = 116.2 mm, i.e. the 128.0 mm caliper value is NOT this chassis's effective track -- the 2026-08-28 'no scrub' note does not survive the wheel change. Confirmed by SET rotational_slip 1.1013: 12 pivots at +-90/107/180 gave mean abs 1.18 deg with left/right balanced (-0.28 / +0.48) and 0.39 cm drift. trackwidth stays at the 128.0 caliper measurement and the slip carries the difference, per the project rule that a geometric measurement is never 'corrected'. travel_calib is LEFT at 0.79324: the post-flash fit suggests a further 1.0175 trim to 0.80712, but 1.53 mm mean abs error is already at the noise floor and the trim would force a coupled re-derivation of the slip. NOT YET FLASHED -- this value is live-SET only and is lost on reboot. Reflash when vevov is next on the farm, then re-run turns with no live SET.",
+      "_provenance_20260917": "SUPERSEDES trackwidth 128.0 / rotational_slip 1.1013 (b 116.2 mm). The 128.0 was an outside-to-outside span, not the track: Eric's caliper measurement is 111.6 mm, which this file's own geometry.trackwidth already carried, so the two disagreed. See geometry.calc_20260917 for the measurement that replaces both."
+    },
+    "_otos_note": "OTOS reads 4.54% SHORT of camera truth over the same distance sweep (0.95462*commanded + 0.563 cm) and the error GROWS with distance (~2.5% at 10 cm to ~4.4% at 200 cm), so it is NOT a linear-scalar miscalibration. UNEXPLAINED and deliberately NOT corrected here -- do not use the OTOS for absolute distance until this is understood. Its lever arm IS measured and applied (see armX/armY in test.ts).",
+    "calc_20260917": {
+      "_note": "removed: vevov's measurement, not zuvat's"
+    }
+  },
+  "motors": {
+    "left_port": 2,
+    "right_port": 1,
+    "travel_calib_left": 0.8102,
+    "travel_calib_right": 0.8102,
+    "fwd_sign_left": 1,
+    "fwd_sign_right": -1,
+    "output_deadband": 0.03,
+    "reversal_dwell": 100.0,
+    "vel_kp": 0.0016,
+    "vel_ki": 0.005,
+    "vel_kff": 0.0008,
+    "vel_i_max": 0.3,
+    "vel_kaw": 20.0,
+    "vel_filt_alpha": 0.3,
+    "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",
+    "_provenance": "VEVOV-MEASURED 2026-08-19 (pxt-nezha-diffdrive bench session): fwd signs from stakeholder-observed reversed drive under tovez defaults (left port2 +1, right port1 -1 in the pxt extension's convention: sign multiplies both commanded duty and encoder). travel_calib from a commanded-80cm run: odometry 798 mm vs tape 825 mm -> 0.7837*825/798 = 0.8102, combined-wheel value written to both sides (per-wheel split unmeasured). Confirming run after bake: odometry 798 mm vs tape 795 mm (0.38%). Velocity-PID gains below remain tovez placeholders (different firmware; not used by the pxt extension).",
+    "_uncalibrated": false
+  },
+  "drive": {
+    "duty_per_speed_left": 0.001182,
+    "duty_per_speed_right": 0.001182,
+    "crawl_pulse": 0.0,
+    "wheel_gain_left_accel": 0.8,
+    "wheel_intercept_left_accel": 0.0,
+    "wheel_gain_left_decel": 0.8,
+    "wheel_intercept_left_decel": 0.0,
+    "wheel_gain_right_accel": 0.9567,
+    "wheel_intercept_right_accel": 0.0,
+    "wheel_gain_right_decel": 0.9567,
+    "wheel_intercept_right_decel": 0.0,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "wheel_control": {
+    "v_min": 20.0,
+    "bias_max": 23.8,
+    "tau_adapt": 30.0,
+    "a_steady": 30.0,
+    "deficit_threshold": 0.0,
+    "deficit_window": 0.0,
+    "pid_kp": 0.0,
+    "pid_ki": 6.0,
+    "pid_i_max": 60.0,
+    "pid_kaff": 0.0,
+    "pid_max": 100.0,
+    "pos_err_max": 10.0,
+    "stall_speed": 15.0,
+    "stall_demand": 40.0,
+    "stall_window": 500.0,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "planner": {
+    "v_max": 400.0,
+    "omega_max": 3.0,
+    "control_period": 32.0,
+    "actuation_delay": 32.0,
+    "settle_rest_velocity": 10.0,
+    "settle_rest_omega": 0.16,
+    "settle_epsilon_linear": 4.0,
+    "settle_epsilon_angular": 0.035,
+    "heading_hold_gain": 1.0,
+    "decel_plan_fraction": 0.4,
+    "align_tol": 0.017453,
+    "align_max_nudges": 6,
+    "_plant_gain": 1370.0,
+    "_plant_tau": 0.23,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "planner_shaper": {
+    "a_max": 300.0,
+    "a_decel": 250.0,
+    "alpha_max": 6.0,
+    "alpha_decel": 5.0,
+    "jerk_max": 1500.0,
+    "yaw_jerk_max": 30.0,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "navigator": {
+    "speed": 150.0,
+    "max_wheel_step": 125.0,
+    "behind_angle": 1.5707963267948966,
+    "turn_first_angle": 0.8726646259971648,
+    "approach_radius": 0.0,
+    "approach_speed": 0.0,
+    "default_arrival_tolerance": 10.0,
+    "yaw_sign": 1.0,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "otos": {
+    "offset_x": -47.7,
+    "offset_y": 3.5,
+    "offset_yaw": -0.077,
+    "linear_scale": 1.0,
+    "angular_scale": 0.9908,
+    "_ekf_r_otos_theta": 0.01,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "estimator": {
+    "weight_heading_otos": 0.0,
+    "weight_omega_otos": 0.0,
+    "staleness": 60.0,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "wheels": {
+    "wheel_diameter_mm": 80.77,
+    "ticks_per_rev": 360,
+    "ticks_per_mm": 1.4187,
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  },
+  "encoders": {
+    "has_encoders": true,
+    "encoder_count": 2
+  },
+  "gripper": {
+    "has_gripper": false,
+    "gripper_offset_mm": null
+  },
+  "peripherals": {
+    "laser_port": 4
+  },
+  "_legacy_drive_limits": {
+    "motor_deadband": null,
+    "max_cmd": null,
+    "cmd_to_mm_per_s": null,
+    "max_drive_mm_s": null,
+    "max_turn_deg_s": null,
+    "min_drive_mm_s": null,
+    "crawl_threshold_mm_s": null,
+    "crawl_cmd": null
+  },
+  "perception": {
+    "color_sensor": {
+      "x": 48.0,
+      "y": 0.0
+    },
+    "line_array": {
+      "x": 96.0,
+      "channel_y": [
+        32.0,
+        8.0,
+        -8.0,
+        -32.0
+      ]
+    },
+    "_provenance": "PLACEHOLDER, NOT MEASURED ON VEVOV. Value copied verbatim from tovez.json 2026-08-19 at stakeholder direction, as a starting point to be overwritten with vevov's own numbers -- it is NOT a claim about this robot's drivetrain. See tovez.json's own notes in this section for the derivation and measurement history; not re-quoted here so this copy cannot drift out of sync with the source measurement.",
+    "_uncalibrated": true
+  }
+}
